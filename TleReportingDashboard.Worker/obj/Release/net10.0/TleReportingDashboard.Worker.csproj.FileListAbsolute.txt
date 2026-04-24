@@ -154,3 +154,4 @@ D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Worker\obj\Relea
 D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Worker\obj\Release\net10.0\compressed\o7k4cxtn0u-{0}-jsf39xodda-jsf39xodda.gz
 D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Worker\bin\Release\net10.0\Npgsql.dll
 D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Worker\bin\Release\net10.0\Microsoft.Bcl.Cryptography.dll
+D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Worker\obj\Release\net10.0\TleReportingDashboard.Worker.sourcelink.json

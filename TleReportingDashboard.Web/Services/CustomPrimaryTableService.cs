@@ -23,7 +23,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         // aligned without requiring a re-sort at the UI layer.
         await using var cmd = new SqlCommand(@"
             SELECT id, connection_id, table_name, alias,
-                   is_primary, is_default_primary, owner_field_id,
+                   is_primary, is_default_primary,
                    created_at, created_by_id, created_by_email
             FROM EMPOWER.RPT_custom_primary_tables
             WHERE connection_id = @c
@@ -40,7 +40,6 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
     public async Task<CustomPrimaryTableRecord> AddAsync(
         Guid connectionId, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
-        string? ownerFieldId,
         string? createdById, string? createdByEmail,
         CancellationToken ct = default)
     {
@@ -76,7 +75,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             var existingIdObj = await existingCmd.ExecuteScalarAsync(ct);
             if (existingIdObj is Guid existingId)
             {
-                await UpdateAsync(existingId, tableName, alias, isPrimary, isDefaultPrimary, ownerFieldId, ct);
+                await UpdateAsync(existingId, tableName, alias, isPrimary, isDefaultPrimary, ct);
                 return (await GetByIdAsync(existingId, ct))!;
             }
         }
@@ -109,21 +108,19 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
 
         var id = Guid.NewGuid();
         var createdAt = DateTime.UtcNow;
-        var normalizedOwner = string.IsNullOrWhiteSpace(ownerFieldId) ? null : ownerFieldId.Trim();
 
         await using var insert = new SqlCommand(@"
             INSERT INTO EMPOWER.RPT_custom_primary_tables
                 (id, connection_id, table_name, alias,
-                 is_primary, is_default_primary, owner_field_id,
+                 is_primary, is_default_primary,
                  created_at, created_by_id, created_by_email)
-            VALUES (@id, @c, @t, @a, @ip, @idp, @ofi, @ca, @cbi, @cbe);", conn);
+            VALUES (@id, @c, @t, @a, @ip, @idp, @ca, @cbi, @cbe);", conn);
         insert.Parameters.Add(new SqlParameter("@id", id));
         insert.Parameters.Add(new SqlParameter("@c", connectionId));
         insert.Parameters.Add(new SqlParameter("@t", tableName));
         insert.Parameters.Add(new SqlParameter("@a", alias));
         insert.Parameters.Add(new SqlParameter("@ip", isPrimary));
         insert.Parameters.Add(new SqlParameter("@idp", isDefaultPrimary));
-        insert.Parameters.Add(new SqlParameter("@ofi", (object?)normalizedOwner ?? DBNull.Value));
         insert.Parameters.Add(new SqlParameter("@ca", createdAt));
         insert.Parameters.Add(new SqlParameter("@cbi", (object?)createdById ?? DBNull.Value));
         insert.Parameters.Add(new SqlParameter("@cbe", (object?)createdByEmail ?? DBNull.Value));
@@ -137,7 +134,6 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             Alias = alias,
             IsPrimary = isPrimary,
             IsDefaultPrimary = isDefaultPrimary,
-            OwnerFieldId = normalizedOwner,
             CreatedAt = createdAt,
             CreatedById = createdById,
             CreatedByEmail = createdByEmail
@@ -147,7 +143,6 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
     public async Task UpdateAsync(
         Guid id, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
-        string? ownerFieldId,
         CancellationToken ct = default)
     {
         if (!PrimaryTableRef.TableRegex().IsMatch(tableName))
@@ -196,20 +191,16 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             }
         }
 
-        var normalizedOwner = string.IsNullOrWhiteSpace(ownerFieldId) ? null : ownerFieldId.Trim();
-
         await using var cmd = new SqlCommand(@"
             UPDATE EMPOWER.RPT_custom_primary_tables
                SET table_name = @t, alias = @a,
-                   is_primary = @ip, is_default_primary = @idp,
-                   owner_field_id = @ofi
+                   is_primary = @ip, is_default_primary = @idp
              WHERE id = @id;", conn);
         cmd.Parameters.Add(new SqlParameter("@id", id));
         cmd.Parameters.Add(new SqlParameter("@t", tableName));
         cmd.Parameters.Add(new SqlParameter("@a", normalizedAlias));
         cmd.Parameters.Add(new SqlParameter("@ip", isPrimary));
         cmd.Parameters.Add(new SqlParameter("@idp", isDefaultPrimary));
-        cmd.Parameters.Add(new SqlParameter("@ofi", (object?)normalizedOwner ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -233,10 +224,9 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         Alias = r.GetString(3),
         IsPrimary = !r.IsDBNull(4) && r.GetBoolean(4),
         IsDefaultPrimary = !r.IsDBNull(5) && r.GetBoolean(5),
-        OwnerFieldId = r.IsDBNull(6) ? null : r.GetString(6),
-        CreatedAt = r.GetDateTime(7),
-        CreatedById = r.IsDBNull(8) ? null : r.GetString(8),
-        CreatedByEmail = r.IsDBNull(9) ? null : r.GetString(9)
+        CreatedAt = r.GetDateTime(6),
+        CreatedById = r.IsDBNull(7) ? null : r.GetString(7),
+        CreatedByEmail = r.IsDBNull(8) ? null : r.GetString(8)
     };
 
     private async Task<CustomPrimaryTableRecord?> GetByIdAsync(Guid id, CancellationToken ct)
@@ -245,7 +235,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         await conn.OpenAsync(ct);
         await using var cmd = new SqlCommand(@"
             SELECT id, connection_id, table_name, alias,
-                   is_primary, is_default_primary, owner_field_id,
+                   is_primary, is_default_primary,
                    created_at, created_by_id, created_by_email
             FROM EMPOWER.RPT_custom_primary_tables
             WHERE id = @id;", conn);
@@ -271,5 +261,74 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         cmd.Parameters.Add(new SqlParameter("@c", connectionId));
         cmd.Parameters.Add(new SqlParameter("@excl", (object?)excludeId ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    // ── Role-scoped owner fields ───────────────────────────────────────────
+
+    public async Task<IReadOnlyDictionary<Guid, string>> GetRoleOwnerFieldsAsync(Guid primaryTableId, CancellationToken ct = default)
+    {
+        var map = new Dictionary<Guid, string>();
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(@"
+            SELECT role_id, owner_field_id
+              FROM EMPOWER.RPT_primary_table_role_owners
+             WHERE primary_table_id = @pid;", conn);
+        cmd.Parameters.Add(new SqlParameter("@pid", primaryTableId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            map[reader.GetGuid(0)] = reader.GetString(1);
+        }
+        return map;
+    }
+
+    public async Task SetRoleOwnerAsync(Guid primaryTableId, Guid roleId, string ownerFieldId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(ownerFieldId))
+            throw new ArgumentException("ownerFieldId is required — use ClearRoleOwnerAsync to remove a mapping.", nameof(ownerFieldId));
+
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(@"
+            MERGE EMPOWER.RPT_primary_table_role_owners AS t
+            USING (SELECT @pid AS primary_table_id, @rid AS role_id) AS s
+               ON t.primary_table_id = s.primary_table_id AND t.role_id = s.role_id
+            WHEN MATCHED THEN
+                UPDATE SET owner_field_id = @fid,
+                           updated_at     = SYSUTCDATETIME()
+            WHEN NOT MATCHED THEN
+                INSERT (primary_table_id, role_id, owner_field_id)
+                VALUES (@pid, @rid, @fid);", conn);
+        cmd.Parameters.Add(new SqlParameter("@pid", primaryTableId));
+        cmd.Parameters.Add(new SqlParameter("@rid", roleId));
+        cmd.Parameters.Add(new SqlParameter("@fid", ownerFieldId.Trim()));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task ClearRoleOwnerAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default)
+    {
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(@"
+            DELETE FROM EMPOWER.RPT_primary_table_role_owners
+             WHERE primary_table_id = @pid AND role_id = @rid;", conn);
+        cmd.Parameters.Add(new SqlParameter("@pid", primaryTableId));
+        cmd.Parameters.Add(new SqlParameter("@rid", roleId));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<string?> ResolveOwnerFieldForRoleAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default)
+    {
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(@"
+            SELECT owner_field_id
+              FROM EMPOWER.RPT_primary_table_role_owners
+             WHERE primary_table_id = @pid AND role_id = @rid;", conn);
+        cmd.Parameters.Add(new SqlParameter("@pid", primaryTableId));
+        cmd.Parameters.Add(new SqlParameter("@rid", roleId));
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result as string;
     }
 }

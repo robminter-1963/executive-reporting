@@ -1,6 +1,7 @@
 @inject ICustomPrimaryTableService TableAliasSvc
 @inject SchemaBuilderService TableBrowser
 @inject ISchemaService SchemaService
+@inject IRoleService RoleService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject AuthenticationStateProvider AuthStateProvider
@@ -197,6 +198,9 @@
     private async Task AddEntry()
     {
         if (ConnectionId is not Guid connId) return;
+        // New primary has no id yet, so role-scoped owner mappings can't be
+        // saved until after the first save. Dialog shows an info banner to
+        // that effect — the role-owners editor only renders in edit mode.
         var fields = await LoadFieldOptionsAsync(connId);
         var dlg = await DialogService.ShowAsync<TableAliasEditDialog>("Add Table Alias",
             new DialogParameters<TableAliasEditDialog>
@@ -206,7 +210,6 @@
                 { x => x.InitialAlias, null },
                 { x => x.InitialIsPrimary, false },
                 { x => x.InitialIsDefaultPrimary, false },
-                { x => x.InitialOwnerFieldId, null },
                 { x => x.AvailableTables, _dbTables },
                 { x => x.AvailableFields, fields },
                 { x => x.TakenAliases, BuildTakenAliases(excludeEntryId: null) }
@@ -218,7 +221,7 @@
         try
         {
             await TableAliasSvc.AddAsync(connId, edited.TableName, edited.Alias,
-                edited.IsPrimary, edited.IsDefaultPrimary, edited.OwnerFieldId,
+                edited.IsPrimary, edited.IsDefaultPrimary,
                 _userId, _userEmail);
             await LoadEntriesAsync();
             await NotifyChangedAsync();
@@ -234,6 +237,11 @@
     {
         if (ConnectionId is not Guid connId) return;
         var fields = await LoadFieldOptionsAsync(connId);
+        var roles = await LoadSelfScopedRolesAsync();
+        var initialRoleOwners = (await TableAliasSvc.GetRoleOwnerFieldsAsync(entry.Id))
+            .Select(kv => new TableAliasEditDialog.RoleOwnerRow(kv.Key, kv.Value))
+            .ToList();
+
         var dlg = await DialogService.ShowAsync<TableAliasEditDialog>("Edit Table Alias",
             new DialogParameters<TableAliasEditDialog>
             {
@@ -242,10 +250,15 @@
                 { x => x.InitialAlias, string.IsNullOrEmpty(entry.Alias) ? null : entry.Alias },
                 { x => x.InitialIsPrimary, entry.IsPrimary },
                 { x => x.InitialIsDefaultPrimary, entry.IsDefaultPrimary },
-                { x => x.InitialOwnerFieldId, entry.OwnerFieldId },
                 { x => x.AvailableTables, _dbTables },
                 { x => x.AvailableFields, fields },
-                { x => x.TakenAliases, BuildTakenAliases(excludeEntryId: entry.Id) }
+                { x => x.AvailableRoles, roles },
+                { x => x.InitialRoleOwners, initialRoleOwners },
+                { x => x.TakenAliases, BuildTakenAliases(excludeEntryId: entry.Id) },
+                { x => x.OnRoleOwnerSet, EventCallback.Factory.Create<(Guid RoleId, string OwnerFieldId)>(this,
+                    async tuple => await TableAliasSvc.SetRoleOwnerAsync(entry.Id, tuple.RoleId, tuple.OwnerFieldId)) },
+                { x => x.OnRoleOwnerCleared, EventCallback.Factory.Create<Guid>(this,
+                    async roleId => await TableAliasSvc.ClearRoleOwnerAsync(entry.Id, roleId)) }
             },
             new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
         var result = await dlg.Result;
@@ -254,7 +267,7 @@
         try
         {
             await TableAliasSvc.UpdateAsync(entry.Id, edited.TableName, edited.Alias,
-                edited.IsPrimary, edited.IsDefaultPrimary, edited.OwnerFieldId);
+                edited.IsPrimary, edited.IsDefaultPrimary);
             await LoadEntriesAsync();
             await NotifyChangedAsync();
             Snackbar.Add($"Updated to \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\".", Severity.Success);
@@ -267,7 +280,7 @@
 
     // Pull the schema-config fields tied to this connection and project
     // into the dialog's lightweight shape. Non-fatal on failure — the
-    // owner-field dropdown just shows only "— None —".
+    // owner-field dropdown just shows no options.
     private async Task<List<TableAliasEditDialog.FieldOption>> LoadFieldOptionsAsync(Guid connectionId)
     {
         try
@@ -281,6 +294,27 @@
         catch
         {
             return new List<TableAliasEditDialog.FieldOption>();
+        }
+    }
+
+    // Only self-scoped, active roles. 'all'-scoped roles ignore the
+    // role-owner map (their queries never consult it), and inactive roles
+    // shouldn't be pickable for new mappings. Administrator is always
+    // 'all' so it's naturally excluded.
+    private async Task<List<TableAliasEditDialog.RoleOption>> LoadSelfScopedRolesAsync()
+    {
+        try
+        {
+            var roles = await RoleService.GetAllAsync();
+            return roles
+                .Where(r => r.IsActive && r.ScopeRule == ScopeRules.Self)
+                .OrderBy(r => r.SortOrder)
+                .Select(r => new TableAliasEditDialog.RoleOption(r.Id, r.Name))
+                .ToList();
+        }
+        catch
+        {
+            return new List<TableAliasEditDialog.RoleOption>();
         }
     }
 

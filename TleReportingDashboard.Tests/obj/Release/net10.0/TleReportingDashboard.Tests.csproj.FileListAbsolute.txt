@@ -313,3 +313,4 @@ D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Tests\obj\Releas
 D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Tests\obj\Release\net10.0\ref\TleReportingDashboard.Tests.dll
 D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Tests\bin\Release\net10.0\Npgsql.dll
 D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Tests\bin\Release\net10.0\Microsoft.Bcl.Cryptography.dll
+D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Tests\obj\Release\net10.0\TleReportingDashboard.Tests.sourcelink.json

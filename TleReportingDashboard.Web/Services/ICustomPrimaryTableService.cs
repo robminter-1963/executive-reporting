@@ -15,7 +15,6 @@ public interface ICustomPrimaryTableService
     Task<CustomPrimaryTableRecord> AddAsync(
         Guid connectionId, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
-        string? ownerFieldId,
         string? createdById, string? createdByEmail,
         CancellationToken ct = default);
 
@@ -27,10 +26,22 @@ public interface ICustomPrimaryTableService
     Task UpdateAsync(
         Guid id, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
-        string? ownerFieldId,
         CancellationToken ct = default);
 
     Task DeleteAsync(Guid id, CancellationToken ct = default);
+
+    // ── Role-scoped owner fields ────────────────────────────────────────
+    // Each primary table can map specific roles to specific owner columns
+    // (Loan Officer → loan_officer_id; Processor → processor_id; etc.).
+    // A self-scoped query injects the column for the signed-in user's role.
+    // A role with no entry on the primary resolves to ForceNoMatch (the
+    // query returns zero rows) — no default fallback, explicit is safer.
+
+    Task<IReadOnlyDictionary<Guid, string>> GetRoleOwnerFieldsAsync(Guid primaryTableId, CancellationToken ct = default);
+    Task SetRoleOwnerAsync(Guid primaryTableId, Guid roleId, string ownerFieldId, CancellationToken ct = default);
+    Task ClearRoleOwnerAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default);
+    // Convenience for the resolver: returns null when no mapping exists.
+    Task<string?> ResolveOwnerFieldForRoleAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default);
 }
 
 public sealed class CustomPrimaryTableRecord
@@ -46,11 +57,6 @@ public sealed class CustomPrimaryTableRecord
     // Default pick for new reports on this connection. Exactly one row
     // per connection can carry this; enforced by filtered unique index.
     public bool IsDefaultPrimary { get; set; }
-    // SchemaConfig field id whose column identifies who "owns" a row in
-    // this primary table. Feeds the row-level-scoping predicate when a
-    // self-scoped role runs a report against this primary. NULL = no
-    // owner concept, self-scoped reports on this primary return zero rows.
-    public string? OwnerFieldId { get; set; }
     public DateTime CreatedAt { get; set; }
     public string? CreatedById { get; set; }
     public string? CreatedByEmail { get; set; }

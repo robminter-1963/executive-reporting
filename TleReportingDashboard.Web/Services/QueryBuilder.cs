@@ -272,6 +272,16 @@ public static class QueryBuilder
                 c => AddFilterFieldTable(c.FieldId));
         }
 
+        // Row-level scoping predicate may reference a field on a joined
+        // table (e.g. the primary is LN_MTGTERMS but the owner column is
+        // LOAN.loan_officer_id). Register the owner field's source table
+        // so JoinResolver pulls its join(s) into the chain — otherwise the
+        // WHERE references an unjoined table and SQL blows up.
+        if (request.Scoping?.OwnerFieldId is string ownerFieldIdForJoins)
+        {
+            AddFilterFieldTable(ownerFieldIdForJoins);
+        }
+
         var sb = new StringBuilder();
         var parameters = new List<System.Data.Common.DbParameter>();
 

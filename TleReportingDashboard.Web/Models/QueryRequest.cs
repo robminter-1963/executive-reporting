@@ -84,4 +84,10 @@ public sealed class QueryScopingInfo
     public string? OwnerFieldId { get; set; }
     public string? ExternalUserId { get; set; }
     public bool ForceNoMatch { get; set; }
+    // Human-readable explanation of why scoping resolved this way —
+    // surfaced in the "Show query" debug dialog so admins can see why a
+    // tile returned zero rows without chasing server logs. Only set by the
+    // resolver when a decision is interesting (typically alongside
+    // ForceNoMatch = true).
+    public string? Reason { get; set; }
 }

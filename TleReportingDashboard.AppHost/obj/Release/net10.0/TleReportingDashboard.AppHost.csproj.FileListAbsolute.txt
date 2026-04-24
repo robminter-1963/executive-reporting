@@ -100,3 +100,4 @@ D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.AppHost\obj\Rele
 D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.AppHost\obj\Release\net10.0\TleReportingDashboard.AppHost.pdb
 D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.AppHost\obj\Release\net10.0\TleReportingDashboard.AppHost.genruntimeconfig.cache
 D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.AppHost\obj\Release\net10.0\ref\TleReportingDashboard.AppHost.dll
+D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.AppHost\obj\Release\net10.0\TleReportingDashboard.AppHost.sourcelink.json

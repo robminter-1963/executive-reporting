@@ -502,8 +502,15 @@
                         _tableSortField = resolved.DefaultSortField;
                         _tableSortDirection = resolved.DefaultSortDirection;
                     }
+                    // Union template hidden list with the report's own, then
+                    // filter to the template's field set. Previous code used
+                    // `_hiddenColumns ?? resolved.HiddenColumns`, which let the
+                    // report's saved list clobber new template-level hides.
+                    var merged = (resolved.HiddenColumns ?? new List<string>())
+                        .Union(_hiddenColumns ?? new List<string>(), StringComparer.OrdinalIgnoreCase)
+                        .ToList();
                     _hiddenColumns = TleReportingDashboard.Web.Services.GridTemplateService
-                        .FilterHiddenToTemplate(fieldIds, _hiddenColumns ?? resolved.HiddenColumns);
+                        .FilterHiddenToTemplate(fieldIds, merged);
                 }
             }
             else if (!string.IsNullOrWhiteSpace(report.FieldIds))

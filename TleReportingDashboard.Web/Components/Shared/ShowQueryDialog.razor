@@ -10,6 +10,17 @@
     </TitleContent>
     <DialogContent>
         <MudStack Spacing="2" Style="min-width: 700px;">
+            @* Row-level-scoping banner. Warning color when scoping force-
+               matched to zero rows (admin has something to fix); info color
+               when scoping resolved successfully (useful to confirm the
+               predicate and owner column). *@
+            @if (!string.IsNullOrEmpty(ScopingNote))
+            {
+                <MudAlert Severity="@(ScopingForceNoMatch ? Severity.Warning : Severity.Info)" Dense Variant="Variant.Outlined">
+                    @ScopingNote
+                </MudAlert>
+            }
+
             @if (HasDetail)
             {
                 @* Two tabs when the caller passed a detail-view query too —
@@ -49,6 +60,12 @@
     // respects the active tab.
     [Parameter] public string? DetailSql { get; set; }
     [Parameter] public Dictionary<string, object?>? DetailParameters { get; set; }
+    // Row-level-scoping note from the resolver. When set, the dialog shows
+    // a banner above the SQL explaining why the predicate landed where it
+    // did — especially useful for the ForceNoMatch case where the query
+    // returned zero rows on purpose.
+    [Parameter] public string? ScopingNote { get; set; }
+    [Parameter] public bool ScopingForceNoMatch { get; set; }
 
     private int _activeIndex;
 

@@ -243,7 +243,9 @@
                                              style="width: @(tl.ColSpan * 60)px; height: @(tl.Height)px; position: relative; flex-shrink: 0;"
                                              @ondragover:preventDefault
                                              @ondragover="@(() => { if (_editMode && _dragSource >= 0 && idx != _dragSource) { _dropTarget = idx; } })"
-                                             @ondrop="@(() => OnTileDrop(idx))">
+                                             @ondrop="@(() => OnTileDrop(idx))"
+                                             @oncontextmenu="@(() => ShowTileQuery(tl))"
+                                             @oncontextmenu:preventDefault="true">
                                             <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; height: 100%; display: flex; flex-direction: column; overflow: hidden; box-shadow: 7px 7px 9px rgba(0,0,0,0.20), 5px 5px 7px rgba(0,0,0,0.14);">
                                                 @* Tile header — drag handle in edit mode; title is bold and per-tile alignable *@
                                                 @{
@@ -781,10 +783,15 @@
         if (report is null) return null;
 
         var fieldIds = new List<string>();
+        List<string>? templateHiddenColumns = null;
         if (report.GridTemplateId.HasValue)
         {
             var resolved = await GridTemplateService.ResolveTemplateAsync(report.GridTemplateId);
-            if (resolved is not null) fieldIds = resolved.FieldIds;
+            if (resolved is not null)
+            {
+                fieldIds = resolved.FieldIds;
+                templateHiddenColumns = resolved.HiddenColumns;
+            }
         }
         else if (!string.IsNullOrWhiteSpace(report.FieldIds))
         {
@@ -804,6 +811,7 @@
         // the Report Builder.
         var advancedFiltersEnabled = Config.GetValue<bool>("Features:AdvancedFilters", false);
 
+        List<string>? reportHiddenColumns = null;
         if (!string.IsNullOrWhiteSpace(report.ColumnState))
         {
             try
@@ -813,6 +821,8 @@
                 using var doc = System.Text.Json.JsonDocument.Parse(report.ColumnState);
                 if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
                     customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
+                if (doc.RootElement.TryGetProperty("HiddenColumns", out var hcEl))
+                    reportHiddenColumns = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcEl.GetRawText());
 
                 // Advanced (ad-hoc) filters tree. Same back-compat shape
                 // handling as the Report Builder: new saves emit an
@@ -1169,4 +1179,25 @@
     }
 
     private record TileLoadResult(QueryResponse Data, DashboardView.DashboardConfig? Config);
-}
+
+    // Right-click on any tile opens the SQL debug dialog. Unfiltered by
+    // role — any user can see what query produced their tile, which is
+    // what makes the "why am I seeing zero rows?" investigation tractable
+    // (reveals whether row-level scoping injected `1 = 0` or an `=` pred).
+    private async Task ShowTileQuery(MasterDashboardTile tile)
+    {
+        if (!_tileData.TryGetValue(tile.ReportId, out var result)
+            || string.IsNullOrEmpty(result.Data.Sql))
+        {
+            Snackbar.Add("This tile hasn't loaded yet — wait for the data to finish.", Severity.Info);
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            { "Sql", result.Data.Sql! },
+            { "Parameters", result.Data.Parameters },
+            { "ScopingNote", result.Data.ScopingNote },
+            { "ScopingForceNoMatch", result.Data.ScopingForceNoMatch }
+        };
+        var options = new DialogOp

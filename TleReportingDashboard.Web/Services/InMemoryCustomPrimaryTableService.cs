@@ -8,6 +8,8 @@ namespace TleReportingDashboard.Web.Services;
 public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableService
 {
     private readonly ConcurrentDictionary<Guid, CustomPrimaryTableRecord> _rows = new();
+    // Per-primary role → owner-field map. Keyed by primary table id.
+    private readonly ConcurrentDictionary<Guid, Dictionary<Guid, string>> _roleOwners = new();
 
     public Task<List<CustomPrimaryTableRecord>> GetByConnectionAsync(Guid connectionId, CancellationToken ct = default)
     {
@@ -24,7 +26,6 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
     public Task<CustomPrimaryTableRecord> AddAsync(
         Guid connectionId, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
-        string? ownerFieldId,
         string? createdById, string? createdByEmail,
         CancellationToken ct = default)
     {
@@ -47,7 +48,6 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             if (isDefaultPrimary) ClearDefaultsOnConnection(connectionId, existing.Id);
             existing.IsPrimary = isPrimary;
             existing.IsDefaultPrimary = isDefaultPrimary;
-            existing.OwnerFieldId = string.IsNullOrWhiteSpace(ownerFieldId) ? null : ownerFieldId.Trim();
             return Task.FromResult(existing);
         }
 
@@ -73,7 +73,6 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             Alias = alias,
             IsPrimary = isPrimary,
             IsDefaultPrimary = isDefaultPrimary,
-            OwnerFieldId = string.IsNullOrWhiteSpace(ownerFieldId) ? null : ownerFieldId.Trim(),
             CreatedAt = DateTime.UtcNow,
             CreatedById = createdById,
             CreatedByEmail = createdByEmail
@@ -85,7 +84,6 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
     public Task UpdateAsync(
         Guid id, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
-        string? ownerFieldId,
         CancellationToken ct = default)
     {
         if (!PrimaryTableRef.TableRegex().IsMatch(tableName))
@@ -117,7 +115,6 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             existing.Alias = normalizedAlias;
             existing.IsPrimary = isPrimary;
             existing.IsDefaultPrimary = isDefaultPrimary;
-            existing.OwnerFieldId = string.IsNullOrWhiteSpace(ownerFieldId) ? null : ownerFieldId.Trim();
         }
         return Task.CompletedTask;
     }
@@ -125,7 +122,53 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
     public Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         _rows.TryRemove(id, out _);
+        _roleOwners.TryRemove(id, out _);
         return Task.CompletedTask;
+    }
+
+    // ── Role-scoped owner fields (in-memory) ──────────────────────────────
+
+    public Task<IReadOnlyDictionary<Guid, string>> GetRoleOwnerFieldsAsync(Guid primaryTableId, CancellationToken ct = default)
+    {
+        // Return a copy so callers can't mutate our internal map.
+        var map = _roleOwners.TryGetValue(primaryTableId, out var existing)
+            ? new Dictionary<Guid, string>(existing)
+            : new Dictionary<Guid, string>();
+        return Task.FromResult<IReadOnlyDictionary<Guid, string>>(map);
+    }
+
+    public Task SetRoleOwnerAsync(Guid primaryTableId, Guid roleId, string ownerFieldId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(ownerFieldId))
+            throw new ArgumentException("ownerFieldId is required — use ClearRoleOwnerAsync to remove a mapping.", nameof(ownerFieldId));
+
+        var map = _roleOwners.GetOrAdd(primaryTableId, _ => new Dictionary<Guid, string>());
+        lock (map)
+        {
+            map[roleId] = ownerFieldId.Trim();
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task ClearRoleOwnerAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default)
+    {
+        if (_roleOwners.TryGetValue(primaryTableId, out var map))
+        {
+            lock (map) { map.Remove(roleId); }
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task<string?> ResolveOwnerFieldForRoleAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default)
+    {
+        if (_roleOwners.TryGetValue(primaryTableId, out var map))
+        {
+            lock (map)
+            {
+                return Task.FromResult(map.TryGetValue(roleId, out var v) ? v : null);
+            }
+        }
+        return Task.FromResult<string?>(null);
     }
 
     // Mirror of the filtered unique index on the DB side — clear every

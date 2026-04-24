@@ -139,7 +139,17 @@ public class QueryService : IQueryService
             Rows = rows,
             TotalCount = totalCount,
             IsTruncated = rows.Count >= request.PageSize,
-            ExecutionMs = stopwatch.ElapsedMilliseconds
+            ExecutionMs = stopwatch.ElapsedMilliseconds,
+            // Surfaced for the "Show query" debug dialog. Parameter values
+            // are ADO.NET DbParameter.Value objects — DBNull → null here
+            // so the dialog's simple-table rendering shows "<null>" rather
+            // than the DBNull sentinel.
+            Sql = sql,
+            Parameters = parameters.ToDictionary(
+                p => p.ParameterName,
+                p => p.Value is DBNull ? null : p.Value),
+            ScopingNote = request.Scoping?.Reason,
+            ScopingForceNoMatch = request.Scoping?.ForceNoMatch == true
         };
     }
 

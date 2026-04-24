@@ -279,7 +279,18 @@
                     if (doc.RootElement.TryGetProperty("ColumnWidths", out var cwEl))
                         _columnWidths = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, int>>(cwEl.GetRawText());
                     if (doc.RootElement.TryGetProperty("HiddenColumns", out var hcEl))
-                        _hiddenColumns = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcEl.GetRawText());
+                    {
+                        // Union the report's own hidden list with whatever the
+                        // template already contributed. Previous code overwrote,
+                        // which meant a field newly hidden at the template level
+                        // wasn't applied to reports that had been saved before
+                        // the template change — the stale per-report list won.
+                        var reportHidden = System.Text.Json.JsonSerializer
+                            .Deserialize<List<string>>(hcEl.GetRawText()) ?? new();
+                        _hiddenColumns = _hiddenColumns is null
+                            ? reportHidden
+                            : _hiddenColumns.Union(reportHidden, StringComparer.OrdinalIgnoreCase).ToList();
+                    }
                     if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
                         _customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
 

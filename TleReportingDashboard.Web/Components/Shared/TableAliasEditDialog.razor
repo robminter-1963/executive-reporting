@@ -47,24 +47,88 @@
                 New reports on this connection start with this primary. Only one row per connection can be the default — saving here will clear any prior default.
             </MudText>
 
-            @* Owner field — feeds the self-scope predicate. Users with a
-               role whose scope is "Only their own" get rows filtered to
-               ownerFieldColumn = their LOS/CRM login. Leave empty on
-               tables where no owner concept exists (reference / lookup
-               tables); self-scoped reports on those tables return nothing
-               by design. *@
-            <MudSelect T="string?" Value="_ownerFieldId" Dense
-                       ValueChanged="@(v => _ownerFieldId = v)"
-                       Label="Owner field (for row-level scoping)"
-                       Variant="Variant.Outlined" Margin="Margin.Dense"
-                       Clearable
-                       HelperText="Optional. Field whose column identifies the row's owner (e.g. loan_officer_id). Required for self-scoped roles to return rows from this primary.">
-                <MudSelectItem T="string?" Value="@((string?)null)">— None —</MudSelectItem>
-                @foreach (var f in AvailableFields)
+            @* Role-scoped owner fields — the column that identifies "who
+               owns a row" varies by role (Loan Officer → loan_officer_id,
+               Processor → processor_id, etc). Each row below maps one
+               self-scoped role to the owner field used for its queries.
+               A role with no row here → self-scoped users in that role see
+               zero rows on this primary. Admins bypass scoping entirely
+               regardless of what's configured here. *@
+            @if (IsNew)
+            {
+                <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+                    Save the primary first, then edit it to configure role-scoped owner fields.
+                </MudAlert>
+            }
+            else
+            {
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600; margin-top: 8px;">
+                    Role-scoped owner fields
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Map each self-scoped role to the field whose column identifies the row's owner. Roles without a mapping return zero rows for self-scoped users.
+                </MudText>
+
+                @if (_roleOwners.Count > 0)
                 {
-                    <MudSelectItem T="string?" Value="@f.Id">@f.Label <span style="color: #9AA0A6;">(@f.Id)</span></MudSelectItem>
+                    <MudTable Items="_roleOwners" Dense Class="pa-0" T="RoleOwnerRow">
+                        <HeaderContent>
+                            <MudTh>Role</MudTh>
+                            <MudTh>Owner field</MudTh>
+                            <MudTh Style="width: 60px;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate Context="row">
+                            <MudTd>@(AvailableRoles.FirstOrDefault(r => r.Id == row.RoleId)?.Name ?? row.RoleId.ToString())</MudTd>
+                            <MudTd>
+                                <MudSelect T="string" Value="@row.OwnerFieldId" Dense
+                                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                                           ValueChanged="@(v => UpdateRoleOwnerField(row, v))">
+                                    @foreach (var f in AvailableFields)
+                                    {
+                                        <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudTd>
+                            <MudTd Style="text-align: right;">
+                                <MudTooltip Text="Remove role mapping">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                   Color="Color.Error"
+                                                   OnClick="@(() => RemoveRoleOwner(row))" />
+                                </MudTooltip>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
                 }
-            </MudSelect>
+
+                @* Add-row form. Only offers roles not already mapped +
+                   roles with scope_rule = 'self' (an 'all' role would
+                   never consult this table, and Administrator is forced
+                   to 'all' on the server). *@
+                <MudStack Row AlignItems="AlignItems.End" Spacing="2" Wrap="Wrap.Wrap">
+                    <MudSelect T="Guid?" @bind-Value="_newRoleId" Label="Role"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Style="min-width: 180px;">
+                        @foreach (var r in AvailableRolesForAdd())
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)r.Id)">@r.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="string?" @bind-Value="_newFieldId" Label="Owner field"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Style="min-width: 220px;">
+                        @foreach (var f in AvailableFields)
+                        {
+                            <MudSelectItem T="string?" Value="@f.Id">@f.Label</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               Disabled="@(_newRoleId is null || string.IsNullOrEmpty(_newFieldId))"
+                               OnClick="AddRoleOwner">
+                        Add
+                    </MudButton>
+                </MudStack>
+            }
 
             @if (!string.IsNullOrEmpty(_validationError))
             {
@@ -87,7 +151,6 @@
     [Parameter] public string? InitialAlias { get; set; }
     [Parameter] public bool InitialIsPrimary { get; set; }
     [Parameter] public bool InitialIsDefaultPrimary { get; set; }
-    [Parameter] public string? InitialOwnerFieldId { get; set; }
     [Parameter] public bool IsNew { get; set; } = true;
 
     // DB-enumerated tables ("schema.table" strings). Caller (AdminTableAliasesTab)
@@ -104,16 +167,37 @@
     // what was already declared in the Schema Builder.
     [Parameter] public List<FieldOption> AvailableFields { get; set; } = new();
 
-    public record EditResult(string TableName, string? Alias, bool IsPrimary, bool IsDefaultPrimary, string? OwnerFieldId);
+    // Self-scoped roles the admin can map. Caller filters to roles with
+    // scope_rule = 'self' (other roles would never read the mapping).
+    [Parameter] public List<RoleOption> AvailableRoles { get; set; } = new();
+
+    // Initial role → owner field map for edit mode. New dialog gets an
+    // empty list. Changes are committed directly via OnRoleOwnerSet /
+    // OnRoleOwnerCleared callbacks so the admin sees persistence as soon
+    // as they add a row (matches the "companies" dialog pattern).
+    [Parameter] public List<RoleOwnerRow> InitialRoleOwners { get; set; } = new();
+    [Parameter] public EventCallback<(Guid RoleId, string OwnerFieldId)> OnRoleOwnerSet { get; set; }
+    [Parameter] public EventCallback<Guid> OnRoleOwnerCleared { get; set; }
+
+    public record EditResult(string TableName, string? Alias, bool IsPrimary, bool IsDefaultPrimary);
     public record FieldOption(string Id, string Label);
+    public record RoleOption(Guid Id, string Name);
+    public record RoleOwnerRow(Guid RoleId, string OwnerFieldId)
+    {
+        // Mutable field id so the dropdown can bind — the record wraps an
+        // initial value but callers mutate and we emit via callback.
+        public string OwnerFieldId { get; set; } = OwnerFieldId;
+    }
 
     private string? _tableName;
     private string? _alias;
     private bool _isPrimary;
     private bool _isDefaultPrimary;
-    private string? _ownerFieldId;
     private string? _validationError;
     private List<string> _effectiveTables = new();
+    private List<RoleOwnerRow> _roleOwners = new();
+    private Guid? _newRoleId;
+    private string? _newFieldId;
 
     private string TableHelperText =>
         _effectiveTables.Count == 0
@@ -128,7 +212,7 @@
         // a contradictory state (default-on + eligible-off).
         _isPrimary = InitialIsPrimary || InitialIsDefaultPrimary;
         _isDefaultPrimary = InitialIsDefaultPrimary;
-        _ownerFieldId = InitialOwnerFieldId;
+        _roleOwners = InitialRoleOwners.Select(r => new RoleOwnerRow(r.RoleId, r.OwnerFieldId)).ToList();
 
         // Copy the caller's list and ensure the current value is present so a
         // stale saved entry stays editable even if the underlying table is
@@ -185,9 +269,41 @@
             _tableName!.Trim(),
             string.IsNullOrWhiteSpace(_alias) ? null : _alias!.Trim(),
             isPrimary,
-            _isDefaultPrimary,
-            string.IsNullOrWhiteSpace(_ownerFieldId) ? null : _ownerFieldId!.Trim())));
+            _isDefaultPrimary)));
     }
 
     private void Cancel() => MudDialog.Cancel();
+
+    // ── Role-scoped owner field editors ───────────────────────────────────
+    // Each add/remove fires a callback so persistence happens without the
+    // admin having to hit Save. The main Save button still persists the
+    // primary's name/alias/flags.
+
+    private IEnumerable<RoleOption> AvailableRolesForAdd()
+    {
+        var taken = _roleOwners.Select(r => r.RoleId).ToHashSet();
+        return AvailableRoles.Where(r => !taken.Contains(r.Id));
+    }
+
+    private async Task AddRoleOwner()
+    {
+        if (_newRoleId is null || string.IsNullOrEmpty(_newFieldId)) return;
+        _roleOwners.Add(new RoleOwnerRow(_newRoleId.Value, _newFieldId!));
+        await OnRoleOwnerSet.InvokeAsync((_newRoleId.Value, _newFieldId!));
+        _newRoleId = null;
+        _newFieldId = null;
+    }
+
+    private async Task UpdateRoleOwnerField(RoleOwnerRow row, string newValue)
+    {
+        if (string.IsNullOrEmpty(newValue)) return;
+        row.OwnerFieldId = newValue;
+        await OnRoleOwnerSet.InvokeAsync((row.RoleId, newValue));
+    }
+
+    private async Task RemoveRoleOwner(RoleOwnerRow row)
+    {
+        _roleOwners.Remove(row);
+        await OnRoleOwnerCleared.InvokeAsync(row.RoleId);
+    }
 }

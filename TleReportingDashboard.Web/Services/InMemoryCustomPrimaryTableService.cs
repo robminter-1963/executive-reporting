@@ -24,6 +24,7 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
     public Task<CustomPrimaryTableRecord> AddAsync(
         Guid connectionId, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
+        string? ownerFieldId,
         string? createdById, string? createdByEmail,
         CancellationToken ct = default)
     {
@@ -46,6 +47,7 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             if (isDefaultPrimary) ClearDefaultsOnConnection(connectionId, existing.Id);
             existing.IsPrimary = isPrimary;
             existing.IsDefaultPrimary = isDefaultPrimary;
+            existing.OwnerFieldId = string.IsNullOrWhiteSpace(ownerFieldId) ? null : ownerFieldId.Trim();
             return Task.FromResult(existing);
         }
 
@@ -71,6 +73,7 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             Alias = alias,
             IsPrimary = isPrimary,
             IsDefaultPrimary = isDefaultPrimary,
+            OwnerFieldId = string.IsNullOrWhiteSpace(ownerFieldId) ? null : ownerFieldId.Trim(),
             CreatedAt = DateTime.UtcNow,
             CreatedById = createdById,
             CreatedByEmail = createdByEmail
@@ -82,6 +85,7 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
     public Task UpdateAsync(
         Guid id, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
+        string? ownerFieldId,
         CancellationToken ct = default)
     {
         if (!PrimaryTableRef.TableRegex().IsMatch(tableName))
@@ -113,6 +117,7 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             existing.Alias = normalizedAlias;
             existing.IsPrimary = isPrimary;
             existing.IsDefaultPrimary = isDefaultPrimary;
+            existing.OwnerFieldId = string.IsNullOrWhiteSpace(ownerFieldId) ? null : ownerFieldId.Trim();
         }
         return Task.CompletedTask;
     }

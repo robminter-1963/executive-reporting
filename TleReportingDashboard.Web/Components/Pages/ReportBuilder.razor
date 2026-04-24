@@ -2386,6 +2386,7 @@
                 SecondarySortField = detailSecondary,
                 SecondarySortDirection = detailSecondaryDir
             };
+            detailRequest.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _currentConfig.ConnectionId, _currentConfig.PrimaryTable);
             var (detailSql, detailParams) = QueryBuilder.BuildQuery(
                 detailRequest, fieldConfigs, joinConfigs, customFilters, lookups, dialect,
                 _currentConfig.PrimaryTable);
@@ -2443,4 +2444,15 @@
         return Task.CompletedTask;
     }
 
-    private static ReportBuilder? _staticInst
+    private static ReportBuilder? _staticInstance;
+    private static int _staticDrawerWidth = 240;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _staticInstance = this;
+            _drawerWidth = _staticDrawerWidth;
+        }
+    }
+}

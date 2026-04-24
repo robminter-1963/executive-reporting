@@ -1,0 +1,49 @@
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.AddCircle" />
+            <MudText Typo="Typo.h6">Add Report to Master Dashboard</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 400px;">
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                Select a report with "Show on Master Dashboard" enabled:
+            </MudText>
+            <MudList T="SavedReport" Dense>
+                @foreach (var report in Reports)
+                {
+                    var r = report;
+                    <MudListItem T="SavedReport" OnClick="() => Select(r)"
+                                  Style="@(_selected?.Id == r.Id ? "background: #E8F0FE;" : "cursor: pointer;")">
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small"
+                                     Color="@(_selected?.Id == r.Id ? Color.Primary : Color.Default)" />
+                            <MudText Typo="Typo.body2" Style="@(_selected?.Id == r.Id ? "font-weight: 600;" : "")">
+                                @r.Name
+                            </MudText>
+                        </MudStack>
+                    </MudListItem>
+                }
+            </MudList>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@(_selected is null)">
+            Add
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public List<SavedReport> Reports { get; set; } = new();
+
+    private SavedReport? _selected;
+
+    private void Select(SavedReport report) => _selected = report;
+    private void Cancel() => MudDialog?.Cancel();
+    private void Ok() => MudDialog?.Close(DialogResult.Ok(_selected!.Id));
+}

@@ -1,0 +1,479 @@
+@page "/viewer/{ReportId:guid}"
+@rendermode InteractiveServer
+@inject IReportService ReportService
+@inject ISharingService SharingService
+@inject IQueryService QueryService
+@inject IGridTemplateService GridTemplateService
+@inject IExportService ExportService
+@inject ISchemaService SchemaService
+@inject IAdminService AdminService
+@inject IUserManagementService UserManagement
+@inject IQueryScopeResolver ScopeResolver
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<PageTitle>@(_reportName ?? "Report") - Executive Reporting Suite</PageTitle>
+
+<MudMainContent Style="padding: 16px;">
+    @if (_isLoading && _queryData is null)
+    {
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+    }
+
+    <MudStack Spacing="3">
+        @* ── Top bar ── *@
+        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                               OnClick="NavigateBackToLibrary"
+                               title="Back to Report Library" />
+                <MudText Typo="Typo.h6" Style="font-weight: 600;">@(_reportName ?? "Report")</MudText>
+                @if (_appliedFilters.Any())
+                {
+                    <MudStack Row Spacing="1" Wrap="Wrap.Wrap">
+                        @foreach (var f in _appliedFilters)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info">
+                                @f
+                            </MudChip>
+                        }
+                    </MudStack>
+                }
+            </MudStack>
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                @if (_queryData is not null)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @_queryData.Rows.Count.ToString("N0") rows
+                        @if (_queryData.ExecutionMs > 0)
+                        {
+                            @($" · {_queryData.ExecutionMs}ms")
+                        }
+                    </MudText>
+                }
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Refresh" OnClick="RunReport"
+                           Disabled="_isLoading">
+                    Refresh
+                </MudButton>
+                <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
+                            Disabled="@(_queryData is null || !_queryData.Rows.Any())" />
+            </MudStack>
+        </MudStack>
+
+        @if (_isLoading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+
+        @if (_queryData is not null && _queryData.Rows.Any())
+        {
+            @* ── Tabs: Table / Chart / Dashboard ── *@
+            <MudTabs @bind-ActivePanelIndex="_activeTab" Elevation="0" Rounded ApplyEffectsToContainer>
+                <MudTabPanel Text="Table" Icon="@Icons.Material.Filled.TableChart">
+                    @* Live sort indicator — reflects whatever's currently
+                       applied via column-header clicks. Same pattern as the
+                       editor so the viewer stays consistent. *@
+                    @* Sort is locked in the viewer — columns are non-sortable
+                       and ReportGrid pre-sorts the data by the saved
+                       TableSort. We still render the read-only indicator so
+                       users can see what the data's ordered by. *@
+                    @if (_initialSortTuples is { Count: > 0 })
+                    {
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap" Class="mb-1">
+                            <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+                                Sort:
+                            </MudText>
+                            @for (var si = 0; si < _initialSortTuples.Count; si++)
+                            {
+                                var priority = si + 1;
+                                var step = _initialSortTuples[si];
+                                var label = GetFieldLabel(step.Field);
+                                var isDesc = string.Equals(step.Direction, "desc", StringComparison.OrdinalIgnoreCase);
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                         Icon="@(isDesc ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)">
+                                    @priority. @label
+                                </MudChip>
+                            }
+                        </MudStack>
+                    }
+                    <ReportGrid Data="_queryData" IsTruncated="@(_queryData.IsTruncated)"
+                                DefaultSortField="@_tableSortField"
+                                DefaultSortDirection="@_tableSortDirection"
+                                InitialColumnOrder="_columnOrder"
+                                InitialColumnWidths="_columnWidths"
+                                InitialHiddenColumns="_hiddenColumns"
+                                InitialSort="@_initialSortTuples"
+                                DisableUserSort="true"
+                                ReadOnly="true" />
+                </MudTabPanel>
+                <MudTabPanel Text="Chart" Icon="@Icons.Material.Filled.BarChart">
+                    <ChartBuilder Data="_queryData" AvailableColumns="_queryData.Columns" />
+                </MudTabPanel>
+                <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
+                    <DashboardView Data="_queryData" InitialConfig="_dashboardConfig"
+                                   TableSortField="@_tableSortField"
+                                   TableSortDirection="@_tableSortDirection"
+                                   ColumnWidths="_columnWidths"
+                                   ColumnOrder="_columnOrder"
+                                   ReportId="ReportId"
+                                   ReadOnly="true" />
+                </MudTabPanel>
+            </MudTabs>
+        }
+        else if (!_isLoading && _queryData is not null)
+        {
+            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                      Style="border: 1px dashed #DADCE0; min-height: 300px;">
+                <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" Color="Color.Default" />
+                <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                    No results found for this report.
+                </MudText>
+            </MudPaper>
+        }
+        else if (!_isLoading && _error is not null)
+        {
+            <MudAlert Severity="Severity.Error">@_error</MudAlert>
+        }
+    </MudStack>
+</MudMainContent>
+
+@code {
+    [Parameter] public Guid ReportId { get; set; }
+    [SupplyParameterFromQuery(Name = "tab")] public int? ReturnTab { get; set; }
+
+    // Phase 3 authorization: admins see every report, non-admins need a
+    // company grant matching the report's CompanyId. Same shape as the
+    // check in MasterDashboard and DetailViewer.
+    private async Task<bool> CanViewReportAsync(TleReportingDashboard.Web.Models.SavedReport report)
+    {
+        if (AdminService.IsAdmin(_userEmail)) return true;
+        if (string.IsNullOrEmpty(_userEmail)) return false;
+        var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
+        return access.Any(a => a.CompanyId == report.CompanyId);
+    }
+
+    private void NavigateBackToLibrary()
+    {
+        var url = ReturnTab.HasValue ? $"/reports?tab={ReturnTab.Value}" : "/reports";
+        Navigation.NavigateTo(url);
+    }
+
+    private string? _reportName;
+    private Guid? _connectionId;
+    private string? _primaryTable;
+    private bool _isLoading;
+    private int _activeTab;
+    private string? _error;
+    private QueryResponse? _queryData;
+    private DashboardView.DashboardConfig? _dashboardConfig;
+    private List<string> _appliedFilters = new();
+    private Dictionary<string, string> _fieldLabelsById = new(StringComparer.OrdinalIgnoreCase);
+    private string _userId = "anonymous";
+    private string _userEmail = string.Empty;
+    private string? _tableSortField;
+    private string? _tableSortDirection;
+    // Multi-column sort read from the report's ColumnState. Falls back to a
+    // one-element list built from the legacy single-field DefaultSort when
+    // TableSort is absent, so pre-multi-sort reports still seed their sort.
+    private List<(string Field, string Direction)>? _initialSortTuples;
+    private List<string>? _columnOrder;
+    private Dictionary<string, int>? _columnWidths;
+    private List<string>? _hiddenColumns;
+
+    // Stored report data for re-running
+    private List<string> _fieldIds = new();
+    private Dictionary<string, object?> _filters = new();
+    private List<string>? _customFilterIds;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _userId = authState.User.FindFirst("oid")?.Value
+                  ?? authState.User.Identity?.Name
+                  ?? "anonymous";
+        _userEmail = authState.User.FindFirst("preferred_username")?.Value ?? string.Empty;
+
+        // Build a FieldId → Label lookup so the filter chips can show human-
+        // readable names instead of raw ids like "loan_status".
+        try
+        {
+            var fields = await SchemaService.GetFieldConfigsAsync();
+            _fieldLabelsById = fields.ToDictionary(f => f.Id, f => f.Label, StringComparer.OrdinalIgnoreCase);
+        }
+        catch { /* non-fatal: fall back to raw ids */ }
+
+        await LoadAndRun();
+    }
+
+    private async Task LoadAndRun()
+    {
+        _isLoading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            // Phase 3 authorization: fetch the report directly, then check
+            // that the signed-in user has access to its company. Owner/share
+            // scoping is no longer the gate — company membership is.
+            var report = await ReportService.GetReportByIdAsync(ReportId);
+            if (report is null)
+            {
+                _error = "Report not found.";
+                return;
+            }
+            if (!await CanViewReportAsync(report))
+            {
+                _error = "You don't have access to this report.";
+                return;
+            }
+
+            _reportName = report.Name;
+            _connectionId = report.ConnectionId;
+            _primaryTable = report.PrimaryTable;
+
+            // Resolve linked template or parse fields from report
+            ResolvedTemplate? resolvedTemplate = null;
+            if (report.GridTemplateId.HasValue)
+            {
+                resolvedTemplate = await GridTemplateService.ResolveTemplateAsync(report.GridTemplateId);
+                if (resolvedTemplate is not null)
+                {
+                    _fieldIds = resolvedTemplate.FieldIds;
+                    _columnOrder = resolvedTemplate.ColumnOrder;
+                    _hiddenColumns = resolvedTemplate.HiddenColumns;
+                    _tableSortField ??= resolvedTemplate.DefaultSortField;
+                    _tableSortDirection ??= resolvedTemplate.DefaultSortDirection;
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(report.FieldIds))
+            {
+                _fieldIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(report.FieldIds) ?? new();
+            }
+
+            // Parse filters
+            if (!string.IsNullOrWhiteSpace(report.Filters))
+            {
+                _filters = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(report.Filters) ?? new();
+                BuildFilterChips();
+            }
+
+            // Parse dashboard config + table sort
+            if (!string.IsNullOrWhiteSpace(report.ColumnState))
+            {
+                try
+                {
+                    _dashboardConfig = System.Text.Json.JsonSerializer.Deserialize<DashboardView.DashboardConfig>(report.ColumnState,
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                    using var doc = System.Text.Json.JsonDocument.Parse(report.ColumnState);
+                    if (doc.RootElement.TryGetProperty("TableSortField", out var tsfEl))
+                        _tableSortField = tsfEl.GetString();
+                    if (doc.RootElement.TryGetProperty("TableSortDirection", out var tsdEl))
+                        _tableSortDirection = tsdEl.GetString();
+                    if (doc.RootElement.TryGetProperty("TableColumnOrder", out var coEl))
+                        _columnOrder = System.Text.Json.JsonSerializer.Deserialize<List<string>>(coEl.GetRawText());
+                    if (doc.RootElement.TryGetProperty("ColumnWidths", out var cwEl))
+                        _columnWidths = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, int>>(cwEl.GetRawText());
+                    if (doc.RootElement.TryGetProperty("HiddenColumns", out var hcEl))
+                        _hiddenColumns = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcEl.GetRawText());
+                    if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
+                        _customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
+
+                    // Multi-column sort (primary first). Wins over the legacy
+                    // single-field TableSortField/Direction when populated.
+                    if (doc.RootElement.TryGetProperty("TableSort", out var tsEl)
+                        && tsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        var list = new List<(string, string)>();
+                        foreach (var item in tsEl.EnumerateArray())
+                        {
+                            var f = item.TryGetProperty("Field", out var fEl) ? fEl.GetString() : null;
+                            var d = item.TryGetProperty("Direction", out var dEl) ? dEl.GetString() : "asc";
+                            if (!string.IsNullOrWhiteSpace(f))
+                                list.Add((f!, d ?? "asc"));
+                        }
+                        if (list.Count > 0) _initialSortTuples = list;
+                    }
+                }
+                catch { }
+            }
+
+            // Fallback: if no multi-sort saved, seed a one-element list from
+            // the legacy DefaultSort fields so the grid still applies it.
+            if (_initialSortTuples is null && !string.IsNullOrEmpty(_tableSortField))
+            {
+                _initialSortTuples = new List<(string, string)>
+                {
+                    (_tableSortField!, _tableSortDirection ?? "asc")
+                };
+            }
+
+            // Template-linked reports inherit ordering and default sort from the template
+            // (the report can't reorder columns independently). Per-report show/hide is kept
+            // but trimmed to fields that still exist in the template.
+            if (report.GridTemplateId.HasValue && resolvedTemplate is not null)
+            {
+                _columnOrder = resolvedTemplate.ColumnOrder is { Count: > 0 }
+                    ? new List<string>(resolvedTemplate.ColumnOrder)
+                    : new List<string>(_fieldIds);
+                if (string.IsNullOrEmpty(_tableSortField)
+                    && !string.IsNullOrEmpty(resolvedTemplate.DefaultSortField))
+                {
+                    _tableSortField = resolvedTemplate.DefaultSortField;
+                    _tableSortDirection = resolvedTemplate.DefaultSortDirection;
+                }
+                _hiddenColumns = TleReportingDashboard.Web.Services.GridTemplateService
+                    .FilterHiddenToTemplate(_fieldIds, _hiddenColumns);
+            }
+
+            if (!_fieldIds.Any())
+            {
+                _error = "Report has no fields configured.";
+                return;
+            }
+
+            await RunReport();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Snackbar.Add($"Failed to load report: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task RunReport()
+    {
+        if (!_fieldIds.Any()) return;
+
+        _isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            // Include extra group-by fields (legacy) + extra dimension fields.
+            var queryFieldIds = new List<string>(_fieldIds);
+            void AddIds(IEnumerable<string>? ids)
+            {
+                if (ids is null) return;
+                foreach (var extra in ids)
+                    if (!queryFieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                        queryFieldIds.Add(extra);
+            }
+            AddIds(_dashboardConfig?.ExtraGroupByFieldIds);
+            AddIds(_dashboardConfig?.ExtraDimensionFieldIds);
+
+            var request = new QueryRequest
+            {
+                FieldIds = queryFieldIds,
+                Filters = new Dictionary<string, object?>(_filters),
+                CustomFilterIds = _customFilterIds,
+                Page = 1,
+                PageSize = 50000,
+                ConnectionId = _connectionId,
+                PrimaryTable = _primaryTable
+            };
+            request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _connectionId, _primaryTable);
+            _queryData = await QueryService.ExecuteQueryAsync(request);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Query failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void BuildFilterChips()
+    {
+        _appliedFilters.Clear();
+        foreach (var kvp in _filters)
+        {
+            if (kvp.Value is null) continue;
+
+            // Strip date-range suffixes before looking up the field label, then
+            // re-append the human-readable "from" / "to" qualifier.
+            var rawKey = kvp.Key;
+            string suffix = string.Empty;
+            string fieldId = rawKey;
+            if (rawKey.EndsWith("_start"))
+            {
+                fieldId = rawKey[..^6];
+                suffix = " from";
+            }
+            else if (rawKey.EndsWith("_end"))
+            {
+                fieldId = rawKey[..^4];
+                suffix = " to";
+            }
+
+            var label = _fieldLabelsById.TryGetValue(fieldId, out var lbl) ? lbl : fieldId;
+            var key = label + suffix;
+
+            if (kvp.Value is System.Text.Json.JsonElement je)
+            {
+                if (je.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    var vals = je.EnumerateArray().Select(e => e.GetString()).Where(s => s is not null);
+                    _appliedFilters.Add($"{key}: {string.Join(", ", vals)}");
+                }
+                else
+                {
+                    _appliedFilters.Add($"{key}: {je}");
+                }
+            }
+            else
+            {
+                _appliedFilters.Add($"{key}: {kvp.Value}");
+            }
+        }
+    }
+
+    // Label lookup for the indicator strip; falls back to the raw field id
+    // when a field's been removed from the schema since save.
+    private string GetFieldLabel(string fieldId) =>
+        _fieldLabelsById.TryGetValue(fieldId, out var label) ? label : fieldId;
+
+    private async Task ExportExcel()
+    {
+        if (_queryData is null) return;
+        var bytes = ExportService.ExportToExcel(BuildExportData(_queryData), _reportName ?? "Report");
+        await JS.InvokeVoidAsync("downloadFile", $"{_reportName ?? "report"}.xlsx",
+            Convert.ToBase64String(bytes),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    }
+
+    private async Task ExportCsv()
+    {
+        if (_queryData is null) return;
+        var bytes = ExportService.ExportToCsv(BuildExportData(_queryData));
+        await JS.InvokeVoidAsync("downloadFile", $"{_reportName ?? "report"}.csv",
+            Convert.ToBase64String(bytes), "text/csv");
+    }
+
+    // Mirrors what the grid shows: drops columns hidden in the saved report so
+    // the export reflects visible fields only. Rows are left untouched — the
+    // export loop iterates Columns, so dropped fields never get emitted.
+    private QueryResponse BuildExportData(QueryResponse source)
+    {
+        if (_hiddenColumns is null || _hiddenColumns.Count == 0) return source;
+        var hidden = new HashSet<string>(_hiddenColumns, StringComparer.OrdinalIgnoreCase);
+        var visibleColumns = source.Columns.Where(c => !hidden.Contains(c.FieldId)).ToList();
+        if (visibleColumns.Count == source.Columns.Count) return source;
+        return new QueryResponse
+        {
+            Columns = visibleColumns,
+            Rows = source.Rows,
+            TotalCount = source.TotalCount
+        };
+    }
+}

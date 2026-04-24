@@ -1,0 +1,254 @@
+@page "/"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.WebUtilities
+@using TleReportingDashboard.Web.Services
+@inject ICompanyRegistry CompanyRegistry
+@inject IUserManagementService UserManagement
+@inject IAdminService AdminService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject ILogger<CompanyPicker> Logger
+
+<PageTitle>Companies - Executive Reporting Suite</PageTitle>
+
+@* Scope body overflow so the picker owns vertical scrolling when there are
+   many companies, rather than doubling up with the outer layout. *@
+<HeadContent>
+    <style>
+        html, body { overflow-y: auto !important; }
+    </style>
+</HeadContent>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="py-6">
+    @if (_loading)
+    {
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+    }
+    else if (_visible.Count == 0)
+    {
+        @* Two flavors of the empty state:
+            1. "Not registered"  — the email isn't in RPT_users at all. Firm
+               message: the site doesn't know them and access has to be
+               created from scratch by an admin.
+            2. "No access yet"   — they're registered but have no company
+               grants. Lighter message: access is a grant away.
+           Both surface the signed-in email so the user can quote it when
+           asking the admin for access. *@
+        <MudPaper Elevation="0" Class="pa-8" Style="border: 1px solid #E8EAED; border-radius: 8px; max-width: 640px; margin: 80px auto;">
+            <MudStack AlignItems="AlignItems.Center" Spacing="3">
+                @if (!_isRegistered)
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.Block" Color="Color.Error" Style="font-size: 64px;" />
+                    <MudText Typo="Typo.h5" Style="font-weight: 600;">You do not have access to this site</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Style="text-align: center;">
+                        Your account isn't registered here. Contact your administrator to request access.
+                    </MudText>
+                }
+                else
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Color="Color.Default" Style="font-size: 64px;" />
+                    <MudText Typo="Typo.h5" Style="font-weight: 600;">No access yet</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Style="text-align: center;">
+                        Your account isn't mapped to any company yet. Ask your administrator to grant access and try signing in again.
+                    </MudText>
+                }
+                @if (!string.IsNullOrEmpty(_userEmail))
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        Signed in as <strong>@_userEmail</strong>
+                    </MudText>
+                }
+            </MudStack>
+        </MudPaper>
+    }
+    else
+    {
+        <MudStack Spacing="4">
+            <MudStack Spacing="1">
+                <MudText Typo="Typo.h4" Style="font-weight: 600; color: #202124;">Select a company</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    Choose a company to open its dashboard.
+                </MudText>
+            </MudStack>
+
+            @* Uniform logo card grid. Admin-defined display_order drives the
+               layout; ties resolve by name. Each card is keyed to the
+               company id so Blazor diffs correctly when the order changes. *@
+            <div class="company-grid">
+                @foreach (var c in _visible)
+                {
+                    <MudPaper Elevation="1"
+                              Class="company-card"
+                              @key="c.Id"
+                              @onclick="@(() => PickCompany(c))">
+                        @* Tooltip wraps only the image/initials so the card
+                           itself stays a flex container that vertically +
+                           horizontally centers its single child. The tooltip
+                           root renders inline-block, which flexbox treats
+                           like any other child for alignment purposes. *@
+                        <MudTooltip Text="@c.Name" Placement="Placement.Top">
+                            @if (c.Logo is not null && c.Logo.Length > 0)
+                            {
+                                <img src="@BuildLogoDataUri(c)" alt="@c.Name" class="company-logo" />
+                            }
+                            else
+                            {
+                                @* Fallback when no logo has been uploaded:
+                                   initials in a circle + a generic icon,
+                                   with the full name as the tooltip. *@
+                                <div class="company-initials">@GetInitials(c.Name)</div>
+                            }
+                        </MudTooltip>
+                    </MudPaper>
+                }
+            </div>
+        </MudStack>
+    }
+</MudContainer>
+
+<style>
+    @* Flex + wrap (instead of grid with fr columns) so the row of tiles
+       centers on the page even when the count doesn't fill the viewport.
+       Fixed card width keeps each tile the same size as the row wraps. *@
+    .company-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        justify-content: center;
+    }
+    .company-card {
+        width: 240px;
+        aspect-ratio: 3 / 2;
+        cursor: pointer;
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+        background: #A9A9A9;
+        /* Centers the logo (or initials circle) vertically and horizontally
+           inside the tile. Padding keeps the logo off the tile's edges. */
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+    }
+    .company-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    }
+    .company-logo {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+    }
+    .company-initials {
+        width: 88px;
+        height: 88px;
+        border-radius: 50%;
+        background: #E8EAED;
+        color: #3C4043;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        font-weight: 600;
+        letter-spacing: 1px;
+    }
+</style>
+
+@code {
+    private bool _loading = true;
+    private string _userEmail = string.Empty;
+    private string? _userId;
+    private List<CompanySummary> _visible = new();
+    // Does the signed-in user have a row in RPT_users? Admins are always
+    // treated as registered (they can get in even without a RPT_users row
+    // via the legacy RPT_admins seed). Drives the "you do not have access
+    // to this site" vs "no access yet" wording on the empty state.
+    private bool _isRegistered = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+            _userEmail = user.FindFirst("preferred_username")?.Value ?? string.Empty;
+            _userId = user.FindFirst("oid")?.Value
+                      ?? user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+            var all = await CompanyRegistry.GetActiveAsync();
+            var isAdmin = AdminService.IsAdmin(_userEmail);
+
+            if (isAdmin)
+            {
+                _visible = all;
+                _isRegistered = true;
+            }
+            else if (!string.IsNullOrEmpty(_userEmail))
+            {
+                // Non-admins only see companies they've been granted access to.
+                // Access is email-keyed in UserManagementService so it works
+                // even for pre-provisioned users who haven't signed in yet.
+                var userRow = await UserManagement.GetByEmailAsync(_userEmail);
+                _isRegistered = userRow is not null;
+
+                var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
+                var allowedIds = access.Select(a => a.CompanyId).ToHashSet();
+                _visible = all.Where(c => allowedIds.Contains(c.Id)).ToList();
+            }
+            else
+            {
+                _visible = new();
+                _isRegistered = false;
+            }
+
+            // Auto-redirect to last-visited company, but only when the URL
+            // doesn't carry ?all=1 (the "show me the picker anyway" escape
+            // hatch used by the Ralis logo and the breadcrumb).
+            var query = QueryHelpers.ParseQuery(new Uri(Navigation.Uri).Query);
+            var forcePicker = query.TryGetValue("all", out var v) && v.ToString() == "1";
+
+            if (!forcePicker && !string.IsNullOrEmpty(_userEmail))
+            {
+                var last = await UserManagement.GetByEmailAsync(_userEmail);
+                if (last?.LastVisitedCompanyId is Guid lastId)
+                {
+                    var target = _visible.FirstOrDefault(c => c.Id == lastId);
+                    if (target is not null)
+                    {
+                        Navigation.NavigateTo($"/master-dashboard/{target.Code}", replace: true);
+                        return;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "CompanyPicker load failed");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void PickCompany(CompanySummary c)
+    {
+        // Last-visited is saved on the dashboard page's load rather than
+        // here — keeps the write next to the thing it tracks (what URL the
+        // user actually ended up on).
+        Navigation.NavigateTo($"/master-dashboard/{c.Code}");
+    }
+
+    private static string BuildLogoDataUri(CompanySummary c)
+    {
+        var mime = string.IsNullOrEmpty(c.LogoContentType) ? "image/png" : c.LogoContentType;
+        return $"data:{mime};base64,{Convert.ToBase64String(c.Logo!)}";
+    }
+
+    private static string GetInitials(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "?";
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 1) return parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant();
+        return $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant();
+    }
+}

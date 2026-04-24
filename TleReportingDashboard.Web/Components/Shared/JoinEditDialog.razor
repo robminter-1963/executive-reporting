@@ -1,0 +1,227 @@
+@using TleReportingDashboard.Web.Components.Pages
+@using TleReportingDashboard.Web.Services
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Link" />
+            <MudText Typo="Typo.h6">@(IsNew ? "Add Join" : "Edit Join")</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudGrid Spacing="2" Style="min-width: 600px;">
+            <MudItem xs="12" sm="8">
+                <MudTextField @bind-Value="_edited.Id" Label="Join ID" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="Unique identifier (e.g. borrinfo_join)" />
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudSwitch T="bool" @bind-Value="_edited.UseRawSql"
+                           Label="Raw SQL mode" Color="Color.Primary" />
+            </MudItem>
+
+            @if (!_edited.UseRawSql)
+            {
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="string" @bind-Value="_edited.JoinType" Label="Type"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
+                        <MudSelectItem Value="@("INNER JOIN")">INNER JOIN</MudSelectItem>
+                        <MudSelectItem Value="@("LEFT JOIN")">LEFT JOIN</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="8">
+                    @* Target Table is now driven by the connection's Table
+                       Aliases catalog — joins can only point at curated
+                       pairs so aliases stay consistent throughout the
+                       schema. Free-form entry lives in Raw SQL mode. *@
+                    <MudSelect T="string" Value="_selectedAliasKey" ValueChanged="OnAliasPicked"
+                               Label="Target Table"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Required RequiredError="Pick a table from the catalog"
+                               Error="@string.IsNullOrWhiteSpace(_edited.TargetTable)"
+                               HelperText="@TargetTableHelperText">
+                        @foreach (var entry in _effectiveAliases)
+                        {
+                            var key = BuildAliasKey(entry);
+                            <MudSelectItem T="string" Value="@key">@BuildAliasLabel(entry)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField Value="_edited.Alias" Label="Alias"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  ReadOnly
+                                  HelperText="Set by the picked Table Alias entry." />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_edited.OnClause" Label="ON clause"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Placeholder="@OnClausePlaceholder" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_edited.ExtraCondition" Label="AND condition (optional)"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Placeholder="@ExtraPlaceholder" />
+                </MudItem>
+            }
+            else
+            {
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_edited.RawSql" Label="Raw SQL Join"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Lines="8" Style="font-family: monospace; font-size: 0.85rem;"
+                                  Placeholder="@RawSqlPlaceholder"
+                                  HelperText="Full join SQL including nested joins. Pasted as-is into the query." />
+                </MudItem>
+            }
+
+            <MudItem xs="12">
+                <MudPaper Elevation="0" Class="pa-2" Style="background: #F8F9FA; border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Preview:</MudText>
+                    <MudText Typo="Typo.body2" Style="font-family: monospace; font-size: 0.8rem; white-space: pre-wrap;">@_edited.BuildSql()</MudText>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@(!IsValid)">
+            OK
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public SchemaBuilder.JoinEntry? Join { get; set; }
+    [Parameter] public bool IsNew { get; set; }
+    [Parameter] public string? ConnectionType { get; set; }
+
+    // Admin-curated table/alias pairs from the Admin → Table Aliases tab,
+    // scoped to this connection. Drives the Target Table dropdown so joins
+    // can only point at entries that are already registered.
+    [Parameter] public IEnumerable<CustomPrimaryTableRecord>? AvailableAliases { get; set; }
+
+    private SchemaBuilder.JoinEntry _edited = new();
+    private string _originalRef = string.Empty;
+
+    // Effective list shown in the dropdown. Starts with AvailableAliases; if
+    // the join being edited has a (table, alias) not in the catalog (legacy
+    // row), we insert a synthetic entry so the value stays visible/editable.
+    private List<CustomPrimaryTableRecord> _effectiveAliases = new();
+    private string _selectedAliasKey = string.Empty;
+
+    private string TargetTableHelperText =>
+        _effectiveAliases.Count == 0
+            ? "No Table Aliases defined for this connection. Add some in Admin → Table Aliases or use Raw SQL mode."
+            : "Pick from the connection's Table Aliases catalog.";
+
+    private static string BuildAliasKey(CustomPrimaryTableRecord e) =>
+        $"{e.TableName}|{e.Alias ?? string.Empty}";
+
+    private static string BuildAliasLabel(CustomPrimaryTableRecord e) =>
+        string.IsNullOrEmpty(e.Alias) ? e.TableName : $"{e.TableName} AS {e.Alias}";
+
+    private void OnAliasPicked(string? key)
+    {
+        _selectedAliasKey = key ?? string.Empty;
+        if (string.IsNullOrEmpty(key))
+        {
+            _edited.TargetTable = string.Empty;
+            _edited.Alias = string.Empty;
+            return;
+        }
+        var match = _effectiveAliases.FirstOrDefault(e => BuildAliasKey(e) == key);
+        if (match is not null)
+        {
+            _edited.TargetTable = match.TableName;
+            _edited.Alias = match.Alias ?? string.Empty;
+        }
+    }
+
+    // Dialect-aware examples so Postgres admins don't see Empower SQL
+    // Server table names in every placeholder.
+    private bool IsPostgres => string.Equals(ConnectionType, "postgres", StringComparison.OrdinalIgnoreCase);
+    private string TargetTablePlaceholder => IsPostgres ? "salesforce.lead" : "EMPOWER.LN_BORRINFO";
+    private string AliasPlaceholder       => IsPostgres ? "lead_primary"    : "LN_CODES_30";
+    private string OnClausePlaceholder    => IsPostgres
+        ? "public.accounts.id = salesforce.lead.account_id"
+        : "EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_BORRINFO.LNKEY";
+    private string ExtraPlaceholder       => IsPostgres ? "lead.is_active = true" : "LN_CODES_30.IDX=30";
+    private string RawSqlPlaceholder      => IsPostgres
+        ? "LEFT JOIN salesforce.lead l ON l.account_id = public.accounts.id\n    LEFT JOIN salesforce.opportunity o ON o.account_id = public.accounts.id"
+        : "LEFT JOIN EMPOWER.LN_CONTACTS C WITH (NOLOCK)\n    LEFT JOIN EMPOWER.U_SET_TEAMMEMBERS STM WITH (NOLOCK)\n        LEFT JOIN EMPOWER.U_SET_TEAMS ST WITH (NOLOCK) ON ST.TEAMID=STM.TEAMID\n        ON STM.TEAM_MEMBERID = C.LOAN_OFFICER_USERID\n    ON C.LNKEY=DB.LNKEY";
+
+    private bool IsValid => !string.IsNullOrWhiteSpace(_edited.Id) &&
+        (_edited.UseRawSql
+            ? !string.IsNullOrWhiteSpace(_edited.RawSql)
+            : !string.IsNullOrWhiteSpace(_edited.TargetTable) && !string.IsNullOrWhiteSpace(_edited.OnClause));
+
+    protected override void OnInitialized()
+    {
+        if (Join is not null)
+        {
+            _edited = new SchemaBuilder.JoinEntry
+            {
+                Id = Join.Id,
+                JoinType = Join.JoinType,
+                TargetTable = Join.TargetTable,
+                Alias = Join.Alias,
+                OnClause = Join.OnClause,
+                ExtraCondition = Join.ExtraCondition,
+                UseRawSql = Join.UseRawSql,
+                RawSql = Join.RawSql
+            };
+            _originalRef = !string.IsNullOrWhiteSpace(Join.Alias) ? Join.Alias : Join.TargetTable;
+        }
+
+        // Seed the effective list from the catalog, then inject the join's
+        // current (table, alias) if it's not already represented — keeps
+        // legacy rows editable even when the catalog has moved on.
+        _effectiveAliases = AvailableAliases is null
+            ? new List<CustomPrimaryTableRecord>()
+            : AvailableAliases.ToList();
+
+        if (!IsNew && !string.IsNullOrWhiteSpace(_edited.TargetTable))
+        {
+            var tableKey = _edited.TargetTable;
+            var aliasKey = _edited.Alias ?? string.Empty;
+            var exists = _effectiveAliases.Any(a =>
+                string.Equals(a.TableName, tableKey, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(a.Alias ?? string.Empty, aliasKey, StringComparison.OrdinalIgnoreCase));
+            if (!exists)
+            {
+                _effectiveAliases.Insert(0, new CustomPrimaryTableRecord
+                {
+                    Id = Guid.Empty,
+                    TableName = tableKey,
+                    Alias = aliasKey
+                });
+            }
+            _selectedAliasKey = $"{tableKey}|{aliasKey}";
+        }
+    }
+
+    private void Cancel() => MudDialog?.Cancel();
+
+    private void Ok()
+    {
+        var newRef = _edited.UseRawSql
+            ? _edited.TargetTable  // keep whatever was parsed for display
+            : !string.IsNullOrWhiteSpace(_edited.Alias) ? _edited.Alias : _edited.TargetTable;
+        var result = new JoinEditResult
+        {
+            Edited = _edited,
+            OriginalRef = _originalRef,
+            NewRef = newRef
+        };
+        MudDialog?.Close(DialogResult.Ok(result));
+    }
+
+    public class JoinEditResult
+    {
+        public SchemaBuilder.JoinEntry Edited { get; set; } = new();
+        public string OriginalRef { get; set; } = string.Empty;
+        public string NewRef { get; set; } = string.Empty;
+    }
+}

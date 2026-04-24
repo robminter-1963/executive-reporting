@@ -1,0 +1,296 @@
+@using TleReportingDashboard.Web.Services
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+            <MudIcon Icon="@Icons.Material.Filled.Schedule" />
+            <MudText Typo="Typo.h6">
+                @(ExistingSchedule is not null ? "Edit Schedule" : "New Schedule")
+            </MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width: 560px; max-width: 620px;">
+
+            @* ── General ── *@
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">General</MudText>
+
+            <MudTextField @bind-Value="_subject" Label="Subject" Variant="Variant.Outlined"
+                          Margin="Margin.Dense" Required
+                          RequiredError="Subject is required."
+                          Placeholder="e.g. Weekly Loan Pipeline Report" />
+
+            @* ── Recipients (SSRS-style) ── *@
+            <MudDivider />
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Recipients</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                Separate multiple addresses with semicolons (;). The owner (@UserEmail) is always on TO.
+            </MudText>
+
+            <MudTextField @bind-Value="_recipients" Label="To (additional)" Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Placeholder="alice@ralisservices.com; bob@ralisservices.com" />
+
+            <MudTextField @bind-Value="_ccRecipients" Label="Cc" Variant="Variant.Outlined"
+                          Margin="Margin.Dense" />
+
+            <MudTextField @bind-Value="_bccRecipients" Label="Bcc" Variant="Variant.Outlined"
+                          Margin="Margin.Dense" />
+
+            @* ── Trigger ── *@
+            <MudDivider />
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Trigger</MudText>
+
+            <MudStack Row Spacing="2">
+                <MudSelect T="string" @bind-Value="_type" Label="Type"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           Style="flex: 1;">
+                    <MudSelectItem Value="@("OneTime")">One time</MudSelectItem>
+                    <MudSelectItem Value="@("Daily")">Daily</MudSelectItem>
+                    <MudSelectItem Value="@("Weekly")">Weekly</MudSelectItem>
+                    <MudSelectItem Value="@("Monthly")">Monthly</MudSelectItem>
+                </MudSelect>
+
+                <MudTimePicker @bind-Time="_time" Label="Time" Variant="Variant.Outlined"
+                               Margin="Margin.Dense" AmPm Style="flex: 1;" />
+            </MudStack>
+
+            @* Daily: recur every N days *@
+            @if (_type == "Daily")
+            {
+                <MudNumericField T="int" @bind-Value="_interval" Label="Recur every (days)"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                 Min="1" Max="365" />
+            }
+
+            @* Weekly: recur every N weeks + days of week *@
+            @if (_type == "Weekly")
+            {
+                <MudNumericField T="int" @bind-Value="_interval" Label="Recur every (weeks)"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                 Min="1" Max="52" />
+
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Run on:</MudText>
+                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                    @foreach (var day in Enum.GetValues<DayOfWeek>())
+                    {
+                        var d = day;
+                        var selected = _daysOfWeek.Contains(d);
+                        <MudChip T="string"
+                                 Variant="@(selected ? Variant.Filled : Variant.Outlined)"
+                                 Color="@(selected ? Color.Primary : Color.Default)"
+                                 Size="Size.Small"
+                                 OnClick="() => ToggleDayOfWeek(d)">
+                            @d.ToString()[..3]
+                        </MudChip>
+                    }
+                </div>
+            }
+
+            @* Monthly: day-of-month OR ordinal-weekday *@
+            @if (_type == "Monthly")
+            {
+                <MudRadioGroup T="string" @bind-Value="_monthlyMode">
+                    <MudRadio T="string" Value="@("DaysOfMonth")" Color="Color.Primary">Days of month</MudRadio>
+                    <MudRadio T="string" Value="@("Ordinal")" Color="Color.Primary">Nth weekday</MudRadio>
+                </MudRadioGroup>
+
+                @if (_monthlyMode == "DaysOfMonth")
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Select day(s) of month:</MudText>
+                    <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                        @for (int d = 1; d <= 31; d++)
+                        {
+                            var day = d;
+                            var selected = _daysOfMonth.Contains(day);
+                            <MudChip T="string"
+                                     Variant="@(selected ? Variant.Filled : Variant.Outlined)"
+                                     Color="@(selected ? Color.Primary : Color.Default)"
+                                     Size="Size.Small"
+                                     OnClick="() => ToggleDayOfMonth(day)">
+                                @day
+                            </MudChip>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <MudStack Row Spacing="2">
+                        <MudSelect T="string" @bind-Value="_monthlyOrdinal" Label="Occurrence"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="flex: 1;">
+                            <MudSelectItem Value="@("First")">First</MudSelectItem>
+                            <MudSelectItem Value="@("Second")">Second</MudSelectItem>
+                            <MudSelectItem Value="@("Third")">Third</MudSelectItem>
+                            <MudSelectItem Value="@("Fourth")">Fourth</MudSelectItem>
+                            <MudSelectItem Value="@("Last")">Last</MudSelectItem>
+                        </MudSelect>
+                        <MudSelect T="DayOfWeek" @bind-Value="_monthlyDayOfWeek" Label="Day of week"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="flex: 1;">
+                            @foreach (var day in Enum.GetValues<DayOfWeek>())
+                            {
+                                <MudSelectItem Value="@day">@day</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudStack>
+                }
+            }
+
+            @* ── Date range ── *@
+            <MudDivider />
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Date range</MudText>
+
+            <MudStack Row Spacing="2">
+                <MudDatePicker @bind-Date="_startDate" Label="Start" Variant="Variant.Outlined"
+                               Margin="Margin.Dense" Style="flex: 1;" />
+                <MudDatePicker @bind-Date="_endDate" Label="Expire (optional)" Variant="Variant.Outlined"
+                               Margin="Margin.Dense" Style="flex: 1;" Clearable />
+            </MudStack>
+
+            @* ── Delivery ── *@
+            <MudDivider />
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Delivery</MudText>
+
+            <MudSelect T="string" @bind-Value="_attachmentFormat" Label="Attachment format"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
+                <MudSelectItem Value="@("xlsx")">Excel (.xlsx)</MudSelectItem>
+                <MudSelectItem Value="@("csv")">CSV</MudSelectItem>
+            </MudSelect>
+
+            <MudSwitch T="bool" @bind-Value="_includePreview" Label="Include inline preview in email"
+                       Color="Color.Primary" />
+
+            @* ── Summary ── *@
+            <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+                <strong>@ScheduleCron.Describe(BuildPattern())</strong>
+                @if (_startDate.HasValue) { @($" — starts {_startDate:MMM d, yyyy}") }
+                @if (_endDate.HasValue) { @($", ends {_endDate:MMM d, yyyy}") }
+            </MudAlert>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save"
+                   Disabled="@(!IsValid)">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public Guid ReportId { get; set; }
+    [Parameter] public string ReportName { get; set; } = string.Empty;
+    [Parameter] public string UserId { get; set; } = string.Empty;
+    [Parameter] public string UserEmail { get; set; } = string.Empty;
+    [Parameter] public ReportSchedule? ExistingSchedule { get; set; }
+
+    private string _subject = string.Empty;
+    private string _recipients = string.Empty;
+    private string _ccRecipients = string.Empty;
+    private string _bccRecipients = string.Empty;
+
+    private string _type = "Daily";
+    private int _interval = 1;
+    private TimeSpan? _time = new TimeSpan(8, 0, 0);
+    private HashSet<DayOfWeek> _daysOfWeek = new();
+    private HashSet<int> _daysOfMonth = new();
+    private string _monthlyMode = "DaysOfMonth";
+    private string _monthlyOrdinal = "First";
+    private DayOfWeek _monthlyDayOfWeek = DayOfWeek.Monday;
+
+    private DateTime? _startDate = DateTime.Today;
+    private DateTime? _endDate;
+
+    private string _attachmentFormat = "xlsx";
+    private bool _includePreview = true;
+
+    private bool IsValid =>
+        !string.IsNullOrWhiteSpace(_subject)
+        && _time.HasValue
+        && (_type != "Weekly" || _daysOfWeek.Count > 0)
+        && (_type != "Monthly" || _monthlyMode == "Ordinal" || _daysOfMonth.Count > 0);
+
+    protected override void OnInitialized()
+    {
+        if (ExistingSchedule is not null)
+        {
+            _subject = ExistingSchedule.Subject;
+            _recipients = ExistingSchedule.Recipients ?? string.Empty;
+            _ccRecipients = ExistingSchedule.CcRecipients ?? string.Empty;
+            _bccRecipients = ExistingSchedule.BccRecipients ?? string.Empty;
+            _attachmentFormat = ExistingSchedule.AttachmentFormat;
+            _includePreview = ExistingSchedule.IncludePreview;
+            _startDate = ExistingSchedule.StartDate;
+            _endDate = ExistingSchedule.EndDate;
+
+            var pattern = SchedulePattern.FromJson(ExistingSchedule.SchedulePatternJson);
+            _type = pattern.Type;
+            _interval = pattern.Interval;
+            _time = new TimeSpan(pattern.Hour, pattern.Minute, 0);
+            _daysOfWeek = new HashSet<DayOfWeek>(pattern.DaysOfWeek);
+            _daysOfMonth = new HashSet<int>(pattern.DaysOfMonth);
+            if (!string.IsNullOrEmpty(pattern.MonthlyOrdinal))
+            {
+                _monthlyMode = "Ordinal";
+                _monthlyOrdinal = pattern.MonthlyOrdinal;
+                _monthlyDayOfWeek = pattern.MonthlyDayOfWeek ?? DayOfWeek.Monday;
+            }
+        }
+    }
+
+    private void ToggleDayOfWeek(DayOfWeek d)
+    {
+        if (!_daysOfWeek.Add(d)) _daysOfWeek.Remove(d);
+    }
+
+    private void ToggleDayOfMonth(int d)
+    {
+        if (!_daysOfMonth.Add(d)) _daysOfMonth.Remove(d);
+    }
+
+    private SchedulePattern BuildPattern() => new()
+    {
+        Type = _type,
+        Interval = _interval,
+        Hour = _time?.Hours ?? 8,
+        Minute = _time?.Minutes ?? 0,
+        DaysOfWeek = _daysOfWeek.ToList(),
+        DaysOfMonth = _monthlyMode == "DaysOfMonth" ? _daysOfMonth.ToList() : new List<int>(),
+        MonthlyOrdinal = _type == "Monthly" && _monthlyMode == "Ordinal" ? _monthlyOrdinal : null,
+        MonthlyDayOfWeek = _type == "Monthly" && _monthlyMode == "Ordinal" ? _monthlyDayOfWeek : null
+    };
+
+    private void Cancel() => MudDialog?.Cancel();
+
+    private void Save()
+    {
+        var pattern = BuildPattern();
+
+        var schedule = ExistingSchedule is not null
+            ? ExistingSchedule
+            : new ReportSchedule
+            {
+                Id = Guid.NewGuid(),
+                ReportId = ReportId,
+                OwnerId = UserId,
+                OwnerEmail = UserEmail,
+                CreatedAt = DateTime.UtcNow,
+                IsActive = true
+            };
+
+        schedule.Subject = _subject;
+        schedule.Recipients = string.IsNullOrWhiteSpace(_recipients) ? null : _recipients.Trim();
+        schedule.CcRecipients = string.IsNullOrWhiteSpace(_ccRecipients) ? null : _ccRecipients.Trim();
+        schedule.BccRecipients = string.IsNullOrWhiteSpace(_bccRecipients) ? null : _bccRecipients.Trim();
+        schedule.SchedulePatternJson = pattern.ToJson();
+        schedule.CronExpression = ScheduleCron.Build(pattern);
+        schedule.StartDate = _startDate;
+        schedule.EndDate = _endDate;
+        schedule.AttachmentFormat = _attachmentFormat;
+        schedule.IncludePreview = _includePreview;
+
+        MudDialog?.Close(DialogResult.Ok(schedule));
+    }
+}

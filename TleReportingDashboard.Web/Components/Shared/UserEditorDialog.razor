@@ -1,0 +1,129 @@
+@using TleReportingDashboard.Web.Services
+@using Microsoft.Data.SqlClient
+@inject IUserManagementService UserManagement
+@inject IRoleService RoleService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@(IsNew ? Icons.Material.Filled.PersonAdd : Icons.Material.Filled.PersonOutline)" />
+            <MudText Typo="Typo.h6" Style="font-weight: 600;">
+                @(IsNew ? "Add user" : "Edit user")
+            </MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width: 420px;">
+            @* Email is the stable identity. Editable on create; locked on
+               edit because downstream tables (RPT_user_companies, etc.) key
+               on the string and renaming it would orphan those rows. *@
+            <MudTextField @bind-Value="_email" Label="Email" Required
+                          Disabled="@(!IsNew)"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" />
+
+            <MudTextField @bind-Value="_displayName" Label="Display name (optional)"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" />
+
+            @* Only active roles are offered. Picking "Administrator" flips
+               the is_admin flag server-side; nothing else shows it in the
+               UI. Null / "— None —" leaves role_id NULL and is_admin false. *@
+            <MudSelect T="Guid?" @bind-Value="_roleId" Label="Role"
+                       Variant="Variant.Outlined" Margin="Margin.Dense"
+                       Clearable AdornmentIcon="@Icons.Material.Filled.Badge">
+                <MudSelectItem T="Guid?" Value="@((Guid?)null)">— None —</MudSelectItem>
+                @foreach (var r in _roles)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)r.Id)">@r.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (!IsNew)
+            {
+                <MudSwitch T="bool" @bind-Value="_isActive" Label="Active" Color="Color.Success" />
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.Save"
+                   Disabled="@(!CanSave())" OnClick="Save">
+            @(IsNew ? "Add" : "Save")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    // Edit mode: pass the existing record. Create mode: pass null.
+    [Parameter] public UserRecord? Existing { get; set; }
+    [Parameter] public string? CreatedBy { get; set; }
+
+    private bool IsNew => Existing is null;
+
+    private string _email = string.Empty;
+    private string _displayName = string.Empty;
+    private Guid? _roleId;
+    private bool _isActive = true;
+    private List<RoleRecord> _roles = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Only offer active roles; inactive ones stay assigned to users
+        // who already have them but can't be newly picked.
+        _roles = (await RoleService.GetAllAsync())
+            .Where(r => r.IsActive)
+            .ToList();
+
+        if (Existing is not null)
+        {
+            _email       = Existing.Email;
+            _displayName = Existing.DisplayName ?? string.Empty;
+            _roleId      = Existing.RoleId;
+            _isActive    = Existing.IsActive;
+        }
+    }
+
+    private bool CanSave()
+    {
+        if (string.IsNullOrWhiteSpace(_email)) return false;
+        if (!_email.Contains('@')) return false;
+        return true;
+    }
+
+    private async Task Save()
+    {
+        try
+        {
+            if (IsNew)
+            {
+                await UserManagement.CreateAsync(
+                    _email.Trim(),
+                    string.IsNullOrWhiteSpace(_displayName) ? null : _displayName.Trim(),
+                    _roleId,
+                    CreatedBy);
+            }
+            else
+            {
+                await UserManagement.UpdateAsync(
+                    _email,
+                    string.IsNullOrWhiteSpace(_displayName) ? null : _displayName.Trim(),
+                    _roleId,
+                    _isActive);
+            }
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (SqlException ex) when (ex.Number is 2601 or 2627)
+        {
+            Snackbar.Add("A user with that email already exists.", Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

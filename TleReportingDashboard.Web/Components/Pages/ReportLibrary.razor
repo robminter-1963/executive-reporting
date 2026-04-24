@@ -1,0 +1,909 @@
+@page "/reports"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.WebUtilities
+@inject IReportService ReportService
+@inject ISharingService SharingService
+@inject IScheduleService ScheduleService
+@inject IUserPreferenceService PreferenceService
+@inject UserPreferenceState PreferenceState
+@inject IAdminService AdminService
+@inject ICompanyConnectionAdminService ConnectionAdminSvc
+@inject ICompanyRegistry CompanyRegistry
+@inject IMasterDashboardService MasterService
+@inject IUserManagementService UserManagement
+@inject IWebHostEnvironment Env
+@inject IConfiguration Configuration
+@inject LibraryNavState NavState
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@using TleReportingDashboard.Web.Services
+
+<PageTitle>Report Library - Executive Reporting Suite</PageTitle>
+
+@* Scope overflow-hidden to this page only. Without it, the MudTable's
+   FixedHeader + Height gives the table body its own scrollbar AND the
+   page's natural flow also scrolls, so users saw two stacked scrollbars.
+   HeadContent is removed automatically when the page unmounts, so other
+   pages keep their default body-scroll behavior. *@
+<HeadContent>
+    <style>
+        html, body { overflow-y: hidden !important; }
+    </style>
+</HeadContent>
+
+@* ── Top bar ── *@
+<MudAppBar Elevation="1" Style="background: #FFFFFF; border-bottom: 1px solid #DADCE0;" Dense Fixed="false">
+    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width: 100%;">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Assessment" Color="Color.Primary" />
+            <MudText Typo="Typo.h6" Style="font-weight: 600; color: #202124;">Report Library</MudText>
+        </MudStack>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Justify="Justify.FlexEnd">
+            @* User display + User Preferences moved into MainLayout's app bar
+               (as a dropdown off the user name) so they're available on every
+               page instead of only here. *@
+            <MudTooltip Text="Master Dashboard" Placement="Placement.Bottom">
+                <MudIconButton Icon="@Icons.Material.Filled.DashboardCustomize" Color="Color.Default"
+                               OnClick="@(() => Navigation.NavigateTo("/"))" />
+            </MudTooltip>
+            @if (_isAdmin)
+            {
+                <MudTooltip Text="@(_isAdminView ? "Admin view: showing every user's reports" : "Normal view: showing your reports")"
+                            Placement="Placement.Bottom">
+                    <MudSwitch T="bool" Value="_isAdminView" ValueChanged="OnAdminViewToggled"
+                               Color="Color.Warning" Size="Size.Small"
+                               Label="@(_isAdminView ? "Admin view" : "Normal view")" />
+                </MudTooltip>
+                @if (_isAdminView)
+                {
+                    <MudTooltip Text="Grid Templates" Placement="Placement.Bottom">
+                        <MudIconButton Icon="@Icons.Material.Filled.GridView" Color="Color.Default"
+                                       OnClick="@(() => Navigation.NavigateTo("/grid-templates"))" />
+                    </MudTooltip>
+                }
+            }
+            @* Admin moved to the MainLayout user menu — reachable from any
+               page, not just here. *@
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="@(() => Navigation.NavigateTo("/builder"))">
+                New Report
+            </MudButton>
+        </MudStack>
+    </MudStack>
+</MudAppBar>
+
+@* ── Dev mode banner ── *@
+@if (_isDevMode)
+{
+    <MudAlert Severity="Severity.Warning" Dense Variant="Variant.Filled"
+              Style="border-radius: 0; background: #F9AB00; color: #202124;">
+        DEV MODE — Authentication Stubbed
+    </MudAlert>
+}
+
+@* ── Admin view banner ── Signals to the admin that they're looking at
+   every user's reports, not just their own. Edit/Delete stay scoped to
+   ownership; this banner keeps the broadened context obvious. *@
+@if (_isAdminView)
+{
+    <MudAlert Severity="Severity.Info" Dense Variant="Variant.Filled"
+              Icon="@Icons.Material.Filled.AdminPanelSettings"
+              Style="border-radius: 0;">
+        Admin view — My Reports tab shows every user's reports. Edit and Delete still require ownership.
+    </MudAlert>
+}
+
+@* ── Loading indicator ── *@
+@if (_isLoading)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+}
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4">
+    @* ── Search + company filter ──
+       The company pick is persisted per-user via RPT_user_preferences, so
+       it survives session restarts. "All companies" (null) is the default
+       for new users. *@
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mb-4" Wrap="Wrap.Wrap">
+        <MudTextField @bind-Value="_searchText" Placeholder="Search reports by name..."
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      DebounceInterval="200" Style="max-width: 480px; flex: 1;" />
+        <MudSelect T="Guid?" Value="_selectedCompanyId" ValueChanged="OnCompanyChanged"
+                   Label="Company" Variant="Variant.Outlined" Margin="Margin.Dense"
+                   ToStringFunc="@CompanyToLabel"
+                   Style="min-width: 240px;">
+            <MudSelectItem T="Guid?" Value="@((Guid?)null)">All companies</MudSelectItem>
+            @foreach (var c in _companies)
+            {
+                <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
+            }
+        </MudSelect>
+    </MudStack>
+
+    @* ── Tabs ── *@
+    <MudTabs ActivePanelIndex="_activeTabIndex"
+             ActivePanelIndexChanged="OnTabChanged"
+             Elevation="0" Rounded ApplyEffectsToContainer
+             Class="pa-4">
+
+        @* ── Tab 1: My Reports ── *@
+        <MudTabPanel Text="@(_isAdminView ? "All Reports" : "My Reports")" Icon="@Icons.Material.Filled.Folder">
+            @if (FilteredMyReports.Any())
+            {
+                <MudTable Items="@FilteredMyReports" Hover Striped Dense FixedHeader
+                          T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
+                          Height="max(230px, calc(100vh - 350px))"
+                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        @if (_isAdminView)
+                        {
+                            <MudTh>Owner</MudTh>
+                        }
+                        <MudTh>Connection</MudTh>
+                        <MudTh>Fields</MudTh>
+                        <MudTh>Last Run</MudTh>
+                        <MudTh>Scheduled</MudTh>
+                        <MudTh Style="text-align: center;">Dashboard</MudTh>
+                        <MudTh Style="text-align: center;">On Dashboard</MudTh>
+                        <MudTh Style="text-align: right;">Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                        </MudTd>
+                        @if (_isAdminView)
+                        {
+                            <MudTd DataLabel="Owner">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@context.OwnerEmail</MudText>
+                            </MudTd>
+                        }
+                        <MudTd DataLabel="Connection">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Fields">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                @ParseFieldCount(context.FieldIds) fields
+                            </MudChip>
+                        </MudTd>
+                        <MudTd DataLabel="Last Run">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                @(context.LastRunAt?.ToString("MMM dd, yyyy h:mm tt") ?? "Never")
+                            </MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Scheduled">
+                            @if (_scheduledReportIds.Contains(context.Id))
+                            {
+                                <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
+                                    <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Color="Color.Primary" />
+                                    @if (_nextRunByReport.TryGetValue(context.Id, out var nextRun))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @nextRun.ToString("MMM d, h:mm tt")
+                                        </MudText>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Scheduled</MudText>
+                                    }
+                                </MudStack>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Dashboard" Style="text-align: center;">
+                            @if (IsDashboardEnabled(context))
+                            {
+                                <MudTooltip Text="Eligible for Master Dashboard (Show on Master Dashboard is on)">
+                                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small" Color="Color.Primary" />
+                                </MudTooltip>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="On Dashboard" Style="text-align: center;">
+                            @if (_dashboardTabsByReport.TryGetValue(context.Id, out var onTabs))
+                            {
+                                var onTabsLabel = string.Join(", ", onTabs);
+                                <MudTooltip Text="@($"Pinned on Master Dashboard tab: {onTabsLabel}")">
+                                    <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Justify="Justify.Center">
+                                        <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Success" />
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@onTabsLabel</MudText>
+                                    </MudStack>
+                                </MudTooltip>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Actions" Style="text-align: right;">
+                            @{
+                                var ownedByMe = string.Equals(context.OwnerId, _userId, StringComparison.OrdinalIgnoreCase);
+                            }
+                            <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                               Color="Color.Primary" title="Run"
+                                               OnClick="() => ViewReport(context.Id)" />
+                                @if (ownedByMe)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                   Color="Color.Default" title="Edit"
+                                                   OnClick="() => EditReport(context.Id)" />
+                                }
+                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                                               Color="Color.Default" title="Clone"
+                                               OnClick="() => CloneReport(context)" />
+                                @if (ownedByMe)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Share" Size="Size.Small"
+                                                   Color="Color.Default" title="Share"
+                                                   OnClick="() => OpenShareDialog(context)" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Schedule" Size="Size.Small"
+                                                   Color="Color.Default" title="Schedule"
+                                                   OnClick="() => OpenScheduleDialog(context)" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                   Color="Color.Error" title="Delete"
+                                                   OnClick="() => ConfirmDelete(context)" />
+                                }
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4">
+                            No reports match your search.
+                        </MudText>
+                    </NoRecordsContent>
+                    <PagerContent>
+                        <MudTablePager PageSizeOptions="new[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }" />
+                    </PagerContent>
+                </MudTable>
+            }
+            else if (!_isLoading)
+            {
+                <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                          Style="border: 1px dashed #DADCE0; min-height: 240px;">
+                    <MudIcon Icon="@Icons.Material.Filled.NoteAdd" Size="Size.Large" Color="Color.Default" />
+                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                        @(_isAdminView ? "No reports exist for the current filters." : "You haven't created any reports yet.")
+                    </MudText>
+                    @if (!_isAdminView)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+                                   OnClick="@(() => Navigation.NavigateTo("/builder"))">
+                            Create Your First Report
+                        </MudButton>
+                    }
+                </MudPaper>
+            }
+        </MudTabPanel>
+
+        @* ── Tab 2: Shared With Me ── *@
+        <MudTabPanel Text="Shared With Me" Icon="@Icons.Material.Filled.PeopleAlt">
+            @if (FilteredSharedReports.Any())
+            {
+                <MudTable Items="@FilteredSharedReports" Hover Striped Dense FixedHeader
+                          T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
+                          Height="max(230px, calc(100vh - 350px))"
+                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Connection</MudTh>
+                        <MudTh>Owner</MudTh>
+                        <MudTh>Fields</MudTh>
+                        <MudTh>Shared Date</MudTh>
+                        <MudTh Style="text-align: center;">Dashboard</MudTh>
+                        <MudTh Style="text-align: center;">On Dashboard</MudTh>
+                        <MudTh Style="text-align: right;">Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Connection">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Owner">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">@context.OwnerEmail</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Fields">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                @ParseFieldCount(context.FieldIds) fields
+                            </MudChip>
+                        </MudTd>
+                        <MudTd DataLabel="Shared Date">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                @context.CreatedAt.ToString("MMM dd, yyyy")
+                            </MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Dashboard" Style="text-align: center;">
+                            @if (IsDashboardEnabled(context))
+                            {
+                                <MudTooltip Text="Eligible for Master Dashboard (Show on Master Dashboard is on)">
+                                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small" Color="Color.Primary" />
+                                </MudTooltip>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="On Dashboard" Style="text-align: center;">
+                            @if (_dashboardTabsByReport.TryGetValue(context.Id, out var onTabs))
+                            {
+                                var onTabsLabel = string.Join(", ", onTabs);
+                                <MudTooltip Text="@($"Pinned on Master Dashboard tab: {onTabsLabel}")">
+                                    <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Justify="Justify.Center">
+                                        <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Success" />
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@onTabsLabel</MudText>
+                                    </MudStack>
+                                </MudTooltip>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Actions" Style="text-align: right;">
+                            <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                               Color="Color.Primary" title="Run"
+                                               OnClick="() => ViewReport(context.Id)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                                               Color="Color.Default" title="Clone"
+                                               OnClick="() => CloneReport(context)" />
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4">
+                            No shared reports match your search.
+                        </MudText>
+                    </NoRecordsContent>
+                    <PagerContent>
+                        <MudTablePager PageSizeOptions="new[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }" />
+                    </PagerContent>
+                </MudTable>
+            }
+            else if (!_isLoading)
+            {
+                <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                          Style="border: 1px dashed #DADCE0; min-height: 240px;">
+                    <MudIcon Icon="@Icons.Material.Filled.PeopleAlt" Size="Size.Large" Color="Color.Default" />
+                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                        No reports have been shared with you yet.
+                    </MudText>
+                </MudPaper>
+            }
+        </MudTabPanel>
+
+        @* ── Tab 3: Recent ── *@
+        <MudTabPanel Text="Recent" Icon="@Icons.Material.Filled.History">
+            @if (FilteredRecent.Any())
+            {
+                <MudTable Items="@FilteredRecent" Hover Striped Dense FixedHeader
+                          T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
+                          Height="max(230px, calc(100vh - 350px))"
+                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Connection</MudTh>
+                        <MudTh>Fields</MudTh>
+                        <MudTh>Last Run</MudTh>
+                        <MudTh Style="text-align: center;">Dashboard</MudTh>
+                        <MudTh Style="text-align: center;">On Dashboard</MudTh>
+                        <MudTh Style="text-align: right;">Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Connection">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Fields">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                @ParseFieldCount(context.FieldIds) fields
+                            </MudChip>
+                        </MudTd>
+                        <MudTd DataLabel="Last Run">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                @(context.LastRunAt?.ToString("MMM dd, yyyy h:mm tt") ?? "Never")
+                            </MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Dashboard" Style="text-align: center;">
+                            @if (IsDashboardEnabled(context))
+                            {
+                                <MudTooltip Text="Eligible for Master Dashboard (Show on Master Dashboard is on)">
+                                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small" Color="Color.Primary" />
+                                </MudTooltip>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="On Dashboard" Style="text-align: center;">
+                            @if (_dashboardTabsByReport.TryGetValue(context.Id, out var onTabs))
+                            {
+                                var onTabsLabel = string.Join(", ", onTabs);
+                                <MudTooltip Text="@($"Pinned on Master Dashboard tab: {onTabsLabel}")">
+                                    <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Justify="Justify.Center">
+                                        <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Success" />
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@onTabsLabel</MudText>
+                                    </MudStack>
+                                </MudTooltip>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Actions" Style="text-align: right;">
+                            <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                               Color="Color.Primary" title="Run"
+                                               OnClick="() => ViewReport(context.Id)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                               Color="Color.Default" title="Edit"
+                                               OnClick="() => EditReport(context.Id)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                                               Color="Color.Default" title="Clone"
+                                               OnClick="() => CloneReport(context)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Share" Size="Size.Small"
+                                               Color="Color.Default" title="Share"
+                                               OnClick="() => OpenShareDialog(context)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Schedule" Size="Size.Small"
+                                               Color="Color.Default" title="Schedule"
+                                               OnClick="() => OpenScheduleDialog(context)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                               Color="Color.Error" title="Delete"
+                                               OnClick="() => ConfirmDelete(context)" />
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4">
+                            No recent reports match your search.
+                        </MudText>
+                    </NoRecordsContent>
+                    <PagerContent>
+                        <MudTablePager PageSizeOptions="new[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }" />
+                    </PagerContent>
+                </MudTable>
+            }
+            else if (!_isLoading)
+            {
+                <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                          Style="border: 1px dashed #DADCE0; min-height: 240px;">
+                    <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Large" Color="Color.Default" />
+                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                        No recently run reports.
+                    </MudText>
+                </MudPaper>
+            }
+        </MudTabPanel>
+    </MudTabs>
+</MudContainer>
+
+@code {
+    [SupplyParameterFromQuery(Name = "tab")] public int? InitialTab { get; set; }
+
+    private bool _isLoading = true;
+    private bool _isDevMode;
+    private int _activeTabIndex;
+    private string _searchText = string.Empty;
+
+    private string _userId = string.Empty;
+    private string _userEmail = string.Empty;
+    private string _userName = string.Empty;
+    private bool _isAdmin;
+
+    private List<SavedReport> _myReports = new();
+    private List<SavedReport> _sharedWithMe = new();
+    private HashSet<Guid> _scheduledReportIds = new();
+    private Dictionary<Guid, List<string>> _dashboardTabsByReport = new();
+    private Dictionary<Guid, DateTime> _nextRunByReport = new();
+    private Dictionary<Guid, string> _connectionNamesById = new();
+    // connectionId → companyId. Lets the library scope reports by company
+    // without fetching the connection record on every row render.
+    private Dictionary<Guid, Guid> _connectionCompanyById = new();
+    private List<CompanySummary> _companies = new();
+    // null = "All companies" (unfiltered). Persisted per-user in
+    // RPT_user_preferences.report_library_company_id so the pick survives
+    // browser restarts, new devices, and any session reset.
+    private Guid? _selectedCompanyId;
+    private int _libraryPageSize = 15;
+
+    // Admin-only toggle. When true, the My Reports tab loads every user's
+    // reports via GetAllReportsAsync and renders an Owner column. Mirrored
+    // into LibraryNavState so the toggle state survives navigation to the
+    // builder/viewer and back within the same session.
+    private bool _isAdminView;
+
+    // Resolve a report's connection_id to a human label for the grid column.
+    // Returns "—" when the report has no connection assigned (legacy row)
+    // or the id points at a deleted connection.
+    private string GetConnectionName(Guid? connectionId) =>
+        connectionId is Guid id && _connectionNamesById.TryGetValue(id, out var name)
+            ? name
+            : "—";
+
+    // Renders the dropdown value explicitly so the select never falls back
+    // to Guid.ToString() during a state transition.
+    private string CompanyToLabel(Guid? id)
+    {
+        if (id is null) return "All companies";
+        var c = _companies.FirstOrDefault(x => x.Id == id);
+        return c is null ? string.Empty : $"{c.Name} ({c.Code})";
+    }
+
+    // ── Filtered collections ──
+
+    private IEnumerable<SavedReport> FilteredMyReports =>
+        ApplySearch(ApplyCompany(_myReports).OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase));
+
+    private IEnumerable<SavedReport> FilteredSharedReports =>
+        ApplySearch(ApplyCompany(_sharedWithMe).OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase));
+
+    private IEnumerable<SavedReport> FilteredRecent =>
+        ApplySearch(ApplyCompany(_myReports
+                .Where(r => r.LastRunAt.HasValue))
+            .OrderByDescending(r => r.LastRunAt)
+            .Take(10));
+
+    private IEnumerable<SavedReport> ApplySearch(IEnumerable<SavedReport> reports)
+    {
+        if (string.IsNullOrWhiteSpace(_searchText))
+            return reports;
+
+        return reports.Where(r =>
+            r.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Scopes the list to the selected company. null = "All companies" =
+    // pass-through. Reports with a ConnectionId that maps to the selected
+    // company pass the filter; reports with no connection fall out when a
+    // specific company is picked (there's no way to bucket them).
+    private IEnumerable<SavedReport> ApplyCompany(IEnumerable<SavedReport> reports)
+    {
+        if (_selectedCompanyId is not Guid companyId) return reports;
+        return reports.Where(r =>
+            r.ConnectionId is Guid cid
+            && _connectionCompanyById.TryGetValue(cid, out var cc)
+            && cc == companyId);
+    }
+
+    private async Task OnCompanyChanged(Guid? newId)
+    {
+        _selectedCompanyId = newId;
+        await PersistSelectedCompanyAsync();
+    }
+
+    // Best-effort preference save; a write failure shouldn't block the UI.
+    // Persists to RPT_user_preferences so the choice carries across sessions.
+    private async Task PersistSelectedCompanyAsync()
+    {
+        try
+        {
+            var prefs = await PreferenceService.GetPreferencesAsync(_userId);
+            prefs.UserId = _userId;
+            prefs.ReportLibraryCompanyId = _selectedCompanyId;
+            await PreferenceService.SavePreferencesAsync(prefs);
+        }
+        catch { /* ignore */ }
+    }
+
+    // ── Lifecycle ──
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            _userId = user.FindFirst("oid")?.Value ?? user.Identity?.Name ?? "anonymous";
+            _userEmail = user.FindFirst("preferred_username")?.Value ?? string.Empty;
+            _userName = user.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
+                        ?? (string.IsNullOrEmpty(_userEmail) ? "User" : _userEmail);
+            // Dev mode = stub auth is active (no AzureAd:ClientId) AND running in Development.
+            _isDevMode = Env.IsDevelopment()
+                && string.IsNullOrEmpty(Configuration["AzureAd:ClientId"]);
+            _isAdmin = AdminService.IsAdmin(_userEmail);
+            // Admin view only makes sense for admins. If the session flag
+            // drifted (role change mid-session, impersonation, etc.) clamp
+            // it back to false so a non-admin can't get stuck seeing all
+            // reports after a role removal.
+            _isAdminView = _isAdmin && NavState.IsAdminView;
+
+            // Priority: explicit ?tab= in URL wins (e.g. returning from builder with tab context),
+            // otherwise restore the last tab the user was on this session.
+            if (InitialTab is int t && t >= 0 && t <= 3)
+            {
+                _activeTabIndex = t;
+                NavState.LastActiveTab = t;
+            }
+            else
+            {
+                _activeTabIndex = NavState.LastActiveTab;
+            }
+
+            // Load user preferences (applies theme immediately via state).
+            // Also restore the last-selected Report Library company here —
+            // stored in RPT_user_preferences, so the pick persists across
+            // sessions, browsers, and machines.
+            var prefs = await PreferenceService.GetPreferencesAsync(_userId);
+            PreferenceState.Set(prefs);
+            _libraryPageSize = prefs.ReportLibraryPageSize > 0 ? prefs.ReportLibraryPageSize : 15;
+            _selectedCompanyId = prefs.ReportLibraryCompanyId;
+
+            // Admin view broadens the My Reports tab to every user's report.
+            // Shared / Recent stay user-scoped — admin view is about cross-
+            // user visibility, not collapsing the library's mental model.
+            var myReportsTask = _isAdminView
+                ? ReportService.GetAllReportsAsync()
+                : ReportService.GetReportsAsync(_userId);
+            var sharedTask = SharingService.GetSharedWithMeAsync(_userId);
+            var schedulesTask = ScheduleService.GetSchedulesForUserAsync(_userId);
+            var companiesTask = CompanyRegistry.GetActiveAsync();
+            // Reports the user currently has pinned on any master dashboard tab,
+            // along with which tab(s) — surfaced as the "On Dashboard" column.
+            // Placements are now (user, company) scoped, so when "All companies"
+            // is selected we skip the query and leave the column empty rather
+            // than inventing a cross-company answer.
+            var placedTask = _selectedCompanyId is Guid pinCid
+                ? MasterService.GetPlacedReportTabsAsync(pinCid)
+                : Task.FromResult(new Dictionary<Guid, List<string>>());
+
+            await Task.WhenAll(myReportsTask, sharedTask, schedulesTask, companiesTask, placedTask);
+
+            _companies = await companiesTask;
+
+            // Non-admins only see companies they've been granted access to.
+            // Picker + master-dashboard URL already enforce this; the Library's
+            // company filter has to match so the dropdown can't offer a
+            // company whose dashboard the user couldn't open anyway.
+            if (!_isAdmin && !string.IsNullOrEmpty(_userEmail))
+            {
+                var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
+                var allowed = access.Select(a => a.CompanyId).ToHashSet();
+                _companies = _companies.Where(c => allowed.Contains(c.Id)).ToList();
+            }
+
+            // Load connections across every active company so we can render
+            // each report's connection name AND bucket it by company. One
+            // call per company — small fan-out (companies are a handful).
+            _connectionNamesById = new();
+            _connectionCompanyById = new();
+            foreach (var c in _companies)
+            {
+                var conns = await ConnectionAdminSvc.GetByCompanyAsync(c.Id);
+                foreach (var conn in conns)
+                {
+                    _connectionNamesById[conn.Id] = conn.Name;
+                    _connectionCompanyById[conn.Id] = conn.CompanyId;
+                }
+            }
+
+            // Sanity check: if the stored company id is no longer in the
+            // active list (company was deleted/deactivated), fall back to
+            // "All companies" so we never silently show an empty list.
+            if (_selectedCompanyId is Guid sc && !_companies.Any(c => c.Id == sc))
+            {
+                _selectedCompanyId = null;
+                await PersistSelectedCompanyAsync();
+            }
+
+            _myReports = await myReportsTask;
+            _sharedWithMe = await sharedTask;
+            _dashboardTabsByReport = await placedTask;
+
+            var schedules = await schedulesTask;
+            _scheduledReportIds = schedules.Where(s => s.IsActive).Select(s => s.ReportId).ToHashSet();
+            _nextRunByReport = ComputeNextRuns(schedules);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load reports: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    // Takes all of the user's schedules and produces a per-report earliest-next-run map.
+    // A report with multiple active schedules gets the soonest fire time across all of them.
+    private static Dictionary<Guid, DateTime> ComputeNextRuns(IEnumerable<ReportSchedule> schedules)
+    {
+        var now = DateTime.Now;
+        var map = new Dictionary<Guid, DateTime>();
+        foreach (var s in schedules)
+        {
+            var next = ScheduleNextRun.Compute(s, now);
+            if (!next.HasValue) continue;
+            if (!map.TryGetValue(s.ReportId, out var existing) || next.Value < existing)
+                map[s.ReportId] = next.Value;
+        }
+        return map;
+    }
+
+    // ── Helpers ──
+
+    // Parses the report's ColumnState JSON to extract DashboardConfig.ShowOnMaster.
+    // True means the user has toggled "show on Master Dashboard" for this report.
+    // Cached so repeated renders don't reparse the same JSON.
+    private readonly Dictionary<Guid, bool> _dashboardEnabledCache = new();
+
+    private bool IsDashboardEnabled(SavedReport report)
+    {
+        if (_dashboardEnabledCache.TryGetValue(report.Id, out var cached)) return cached;
+
+        var enabled = false;
+        if (!string.IsNullOrWhiteSpace(report.ColumnState))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(report.ColumnState);
+                if (doc.RootElement.TryGetProperty("ShowOnMaster", out var v)
+                    && v.ValueKind == System.Text.Json.JsonValueKind.True)
+                {
+                    enabled = true;
+                }
+            }
+            catch { /* malformed JSON — treat as disabled */ }
+        }
+        _dashboardEnabledCache[report.Id] = enabled;
+        return enabled;
+    }
+
+    private static int ParseFieldCount(string? fieldIdsJson)
+    {
+        if (string.IsNullOrWhiteSpace(fieldIdsJson))
+            return 0;
+
+        try
+        {
+            var list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(fieldIdsJson);
+            return list?.Count ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    // ── Navigation ──
+    // Carry the current tab index forward so the builder/viewer can bounce the user
+    // back to the same tab when they're done.
+
+    private void ViewReport(Guid id) => Navigation.NavigateTo($"/viewer/{id}?tab={_activeTabIndex}");
+    private void EditReport(Guid id) => Navigation.NavigateTo($"/builder/{id}?tab={_activeTabIndex}");
+
+    private void OnTabChanged(int index)
+    {
+        _activeTabIndex = index;
+        NavState.LastActiveTab = index;
+    }
+
+    // Swap in/out of admin scope. Reloads the primary reports list so the
+    // table reflects the new scope immediately — cheap query, single round
+    // trip, and the user just clicked so some latency is expected.
+    private async Task OnAdminViewToggled(bool on)
+    {
+        if (!_isAdmin) return;
+        _isAdminView = on;
+        NavState.IsAdminView = on;
+        _isLoading = true;
+        _dashboardEnabledCache.Clear();
+        try
+        {
+            _myReports = on
+                ? await ReportService.GetAllReportsAsync()
+                : await ReportService.GetReportsAsync(_userId);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to reload reports: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    // Persists the chosen page size to the user's preferences so the Report
+    // Library remembers it across sessions. Fire-and-forget on save failure;
+    // the in-memory state still updates so the user's current session honors
+    // the change even if the DB write is slow or unavailable.
+    private async Task OnPageSizeChanged(int newSize)
+    {
+        if (newSize <= 0 || newSize == _libraryPageSize) return;
+        _libraryPageSize = newSize;
+        try
+        {
+            var prefs = PreferenceState.Current;
+            prefs.ReportLibraryPageSize = newSize;
+            prefs.UserId = _userId;
+            await PreferenceService.SavePreferencesAsync(prefs);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Could not save page-size preference: {ex.Message}", Severity.Warning);
+        }
+    }
+
+    // ── Clone ──
+
+    private async Task CloneReport(SavedReport source)
+    {
+        try
+        {
+            var cloned = new SavedReport
+            {
+                Id = Guid.NewGuid(),
+                Name = $"{source.Name} (Copy)",
+                OwnerId = _userId,
+                OwnerEmail = _userEmail,
+                FieldIds = source.FieldIds,
+                Filters = source.Filters,
+                Aggregations = source.Aggregations,
+                ColumnState = source.ColumnState,
+                ConnectionId = source.ConnectionId,
+                PrimaryTable = source.PrimaryTable,
+                LastRunAt = null,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var saved = await ReportService.SaveReportAsync(cloned);
+            _myReports.Add(saved);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Clone failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ── Share dialog ──
+
+    private async Task OpenShareDialog(SavedReport report)
+    {
+        var parameters = new DialogParameters<ShareDialog>
+        {
+            { x => x.ReportId, report.Id },
+            { x => x.ReportName, report.Name },
+            { x => x.CurrentUserId, _userId }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, options);
+    }
+
+    // ── Schedule dialog ──
+
+    private async Task OpenScheduleDialog(SavedReport report)
+    {
+        var parameters = new DialogParameters<SchedulesDialog>
+        {
+            { x => x.ReportId, report.Id },
+            { x => x.ReportName, report.Name },
+            { x => x.UserId, _userId },
+            { x => x.UserEmail, _userEmail }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<SchedulesDialog>("Schedules", parameters, options);
+        await dialog.Result;
+
+        // Refresh schedule + next-run state after the user closes the manager
+        try
+        {
+            var all = await ScheduleService.GetSchedulesForUserAsync(_userId);
+            _scheduledReportIds = all.Where(s => s.IsActive).Select(s => s.ReportId).ToHashSet();
+            _nextRunByReport = ComputeNextRuns(all);
+        }
+        catch { /* non-fatal */ }
+    }
+
+    // ── Delete confirmation ──
+
+    private async Task ConfirmDelete(SavedReport report)
+    {
+        var result = await DialogService.ShowMessageBoxAsync(
+            "Delete Report",
+            $"Are you sure you want to delete \"{report.Name}\"? This action cannot be undone.",
+            yesText: "Delete", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            try
+            {
+                await ReportService.DeleteReportAsync(report.Id, _userId);
+                _myReports.RemoveAll(r => r.Id == report.Id);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+}

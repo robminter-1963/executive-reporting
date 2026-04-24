@@ -1,0 +1,56 @@
+@if (_editing && !ReadOnly)
+{
+    <MudTextField @bind-Value="_editValue" Variant="Variant.Text" Margin="Margin.Dense"
+                  Style="font-size: 0.75rem;"
+                  Immediate AutoFocus
+                  OnBlur="Commit"
+                  OnKeyDown="OnKeyDown" />
+}
+else
+{
+    <MudText Typo="Typo.caption" Color="Color.Secondary"
+             Style="@(ReadOnly ? "" : "cursor: pointer; border-bottom: 1px dashed #DADCE0; display: inline-block;")"
+             @ondblclick="@(ReadOnly ? (Action)(() => { }) : Start)"
+             title="@(ReadOnly ? null : "Double-click to rename")">
+        @CurrentLabel
+    </MudText>
+}
+
+@code {
+    [Parameter] public string Key { get; set; } = string.Empty;
+    [Parameter] public string DefaultLabel { get; set; } = string.Empty;
+    [Parameter] public Dictionary<string, string>? CustomLabels { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private bool _editing;
+    private string _editValue = string.Empty;
+
+    private string CurrentLabel =>
+        CustomLabels is not null && CustomLabels.TryGetValue(Key, out var v) && !string.IsNullOrWhiteSpace(v)
+            ? v : DefaultLabel;
+
+    private void Start()
+    {
+        _editValue = CurrentLabel;
+        _editing = true;
+    }
+
+    private async Task Commit()
+    {
+        _editing = false;
+        if (CustomLabels is null) return;
+        var trimmed = _editValue?.Trim() ?? "";
+        if (string.IsNullOrEmpty(trimmed) || trimmed == DefaultLabel)
+            CustomLabels.Remove(Key);
+        else
+            CustomLabels[Key] = trimmed;
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Commit();
+        else if (e.Key == "Escape") _editing = false;
+    }
+}

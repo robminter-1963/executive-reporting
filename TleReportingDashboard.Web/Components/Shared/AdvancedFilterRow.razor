@@ -1,0 +1,385 @@
+@* One row of the Advanced Filters panel in Report Builder: field picker
+   → operator dropdown (options driven by the field's data type) →
+   value input(s) (shape driven by the operator) → remove button.
+
+   The `Clause` parameter is mutated in place so the parent can round-trip
+   its list without extra change plumbing. OnChanged fires after every
+   mutation so the parent can update a live SQL / JSON preview if it shows
+   one. OnRemove lets the parent drop this row from the list.
+
+   Extracted from the clickable prototype at /prototype/filters. Shares
+   the same operator catalog + rendering logic — only difference is this
+   version binds against real FieldConfig objects instead of the demo
+   field list. *@
+
+<MudPaper Elevation="0" Class="pa-3"
+          Style="border: 1px solid #E8EAED; border-radius: 4px;">
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+        @* Field picker — sorts alphabetically by label. *@
+        <MudSelect T="string" Value="Clause.FieldId"
+                   ValueChanged="@(v => OnFieldChanged(v))"
+                   Label="Field" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                   Style="min-width: 220px;">
+            @foreach (var f in AvailableFields.OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase))
+            {
+                <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+            }
+        </MudSelect>
+
+        @* Operator picker — items change with the selected field's data
+           type. @key ties to FieldId so MudSelect is recreated cleanly
+           instead of hanging onto stale items. *@
+        <MudSelect T="string" @key="@($"op-{Clause.FieldId}")"
+                   Value="Clause.Op"
+                   ValueChanged="@(v => OnOperatorChanged(v))"
+                   Label="Operator" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                   Style="min-width: 170px;">
+            @foreach (var op in OperatorsFor(CurrentField))
+            {
+                <MudSelectItem T="string" Value="@op.Id">@op.Label</MudSelectItem>
+            }
+        </MudSelect>
+
+        @* Value input — entirely driven by the operator + field type. *@
+        @RenderValueInput()
+
+        <MudSpacer />
+
+        <MudTooltip Text="Remove filter">
+            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                           Color="Color.Default"
+                           OnClick="@(() => OnRemove.InvokeAsync())" />
+        </MudTooltip>
+    </MudStack>
+</MudPaper>
+
+@code {
+    // The filter this row edits. Mutated in place; parent holds the list.
+    [Parameter, EditorRequired] public FilterClause Clause { get; set; } = default!;
+
+    // Fields the user can pick from (from SchemaService.GetFieldConfigsAsync).
+    [Parameter, EditorRequired] public List<FieldConfig> AvailableFields { get; set; } = new();
+
+    // Fires after any field / operator / value change so the parent can
+    // refresh a live preview or mark the report dirty.
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    // Fires when the row's delete icon is clicked.
+    [Parameter] public EventCallback OnRemove { get; set; }
+
+    private FieldConfig? CurrentField =>
+        AvailableFields.FirstOrDefault(f => f.Id == Clause.FieldId);
+
+    // Operator catalog by data type. Matches the prototype one-for-one so
+    // the two stay visually + behaviorally identical.
+    private record Op(string Id, string Label);
+    private static readonly Op[] DateOps = new[]
+    {
+        new Op(FilterOperators.Equals,      "Is"),
+        new Op(FilterOperators.NotEquals,   "Is not"),
+        new Op(FilterOperators.Before,      "Before"),
+        new Op(FilterOperators.After,       "After"),
+        new Op(FilterOperators.OnOrBefore,  "On or before"),
+        new Op(FilterOperators.OnOrAfter,   "On or after"),
+        new Op(FilterOperators.Between,     "Between"),
+        new Op(FilterOperators.Relative,    "Relative"),
+        new Op(FilterOperators.IsNull,      "Is blank"),
+        new Op(FilterOperators.IsNotNull,   "Is not blank")
+    };
+    private static readonly Op[] TextOps = new[]
+    {
+        new Op(FilterOperators.Equals,      "Equals"),
+        new Op(FilterOperators.NotEquals,   "Does not equal"),
+        new Op(FilterOperators.Contains,    "Contains"),
+        new Op(FilterOperators.StartsWith,  "Starts with"),
+        new Op(FilterOperators.EndsWith,    "Ends with"),
+        new Op(FilterOperators.InList,      "Is any of"),
+        new Op(FilterOperators.NotInList,   "Is none of"),
+        new Op(FilterOperators.IsNull,      "Is blank"),
+        new Op(FilterOperators.IsNotNull,   "Is not blank")
+    };
+    private static readonly Op[] NumericOps = new[]
+    {
+        new Op(FilterOperators.Equals,      "="),
+        new Op(FilterOperators.NotEquals,   "≠"),
+        new Op(FilterOperators.Lt,          "<"),
+        new Op(FilterOperators.Lte,         "≤"),
+        new Op(FilterOperators.Gt,          ">"),
+        new Op(FilterOperators.Gte,         "≥"),
+        new Op(FilterOperators.Between,     "Between"),
+        new Op(FilterOperators.InList,      "Is any of"),
+        new Op(FilterOperators.IsNull,      "Is blank"),
+        new Op(FilterOperators.IsNotNull,   "Is not blank")
+    };
+    private static readonly Op[] BoolOps = new[]
+    {
+        new Op(FilterOperators.IsTrue,  "Is true"),
+        new Op(FilterOperators.IsFalse, "Is false")
+    };
+
+    private static Op[] OperatorsFor(FieldConfig? f)
+    {
+        if (f is null) return Array.Empty<Op>();
+        return f.DataType?.ToLowerInvariant() switch
+        {
+            "date" or "datetime" => DateOps,
+            "integer" or "decimal" or "currency" or "percent" => NumericOps,
+            "boolean" => BoolOps,
+            _ => TextOps
+        };
+    }
+
+    private static readonly (string Id, string Label)[] RelativePresets = new[]
+    {
+        (RelativeDatePresets.Today,       "Today"),
+        (RelativeDatePresets.Yesterday,   "Yesterday"),
+        (RelativeDatePresets.Last7Days,   "Last 7 days"),
+        (RelativeDatePresets.Last30Days,  "Last 30 days"),
+        (RelativeDatePresets.Mtd,         "Month to date"),
+        (RelativeDatePresets.Ytd,         "Year to date"),
+        (RelativeDatePresets.LastMonth,   "Last month"),
+        (RelativeDatePresets.LastYear,    "Last year")
+    };
+
+    // ── Handlers ───────────────────────────────────────────────────────
+    private async Task OnFieldChanged(string? newFieldId)
+    {
+        Clause.FieldId = newFieldId ?? string.Empty;
+        // Reset operator to the first valid one for the new type + wipe
+        // value state so the dependent input renders blank.
+        Clause.Op = OperatorsFor(CurrentField).FirstOrDefault()?.Id ?? string.Empty;
+        Clause.Values = new List<string>();
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task OnOperatorChanged(string? newOp)
+    {
+        Clause.Op = newOp ?? string.Empty;
+        // Keep values if the shape still fits; otherwise wipe. Simplest
+        // rule: always wipe on operator change — users rarely switch
+        // between, say, Between and In list expecting their values to
+        // come along.
+        Clause.Values = new List<string>();
+        await OnChanged.InvokeAsync();
+    }
+
+    // Helper: mutate Clause.Values at a specific index (resize as needed).
+    private async Task SetValueAtAsync(int idx, string? v)
+    {
+        while (Clause.Values.Count <= idx) Clause.Values.Add(string.Empty);
+        Clause.Values[idx] = v ?? string.Empty;
+        await OnChanged.InvokeAsync();
+    }
+
+    // ── Value input renderer ───────────────────────────────────────────
+    // EventCallback-based inline editors, re-rendered on every parameter
+    // change via the outer @key binding on the operator select. All
+    // callbacks go through the Cb<T> helper so parent StateHasChanged
+    // fires reliably.
+    private EventCallback<T> Cb<T>(Action<T> action) =>
+        EventCallback.Factory.Create<T>(this, async v =>
+        {
+            action(v);
+            await OnChanged.InvokeAsync();
+            StateHasChanged();
+        });
+
+    private RenderFragment RenderValueInput() => builder =>
+    {
+        var field = CurrentField;
+        var op = Clause.Op;
+        if (field is null || string.IsNullOrEmpty(op)) return;
+
+        // No-value ops
+        if (op is FilterOperators.IsNull or FilterOperators.IsNotNull
+              or FilterOperators.IsTrue or FilterOperators.IsFalse)
+        {
+            builder.AddContent(0, (MarkupString)"<span style=\"color:#5F6368;font-style:italic;font-size:12px;\">(no value needed)</span>");
+            return;
+        }
+
+        var dt = field.DataType?.ToLowerInvariant() ?? "";
+        if (dt is "date" or "datetime")
+        {
+            RenderDateValue(builder, op);
+            return;
+        }
+        if (dt == "text")
+        {
+            RenderTextValue(builder, op);
+            return;
+        }
+        if (dt is "integer" or "decimal" or "currency" or "percent")
+        {
+            RenderNumericValue(builder, op);
+            return;
+        }
+    };
+
+    private DateTime? GetDateAt(int idx) =>
+        Clause.Values.Count > idx
+            && DateTime.TryParse(Clause.Values[idx],
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var d)
+            ? d
+            : null;
+
+    private void RenderDateValue(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, string op)
+    {
+        switch (op)
+        {
+            case FilterOperators.Between:
+                builder.OpenComponent<MudDatePicker>(0);
+                builder.AddAttribute(1, "Label", "From");
+                builder.AddAttribute(2, "Date", GetDateAt(0));
+                builder.AddAttribute(3, "DateChanged", Cb<DateTime?>(d => SetValueAt(0, d?.ToString("yyyy-MM-dd"))));
+                builder.AddAttribute(4, "Variant", Variant.Outlined);
+                builder.AddAttribute(5, "Margin", Margin.Dense);
+                builder.AddAttribute(6, "Style", "min-width: 170px;");
+                builder.CloseComponent();
+
+                builder.OpenComponent<MudDatePicker>(10);
+                builder.AddAttribute(11, "Label", "To");
+                builder.AddAttribute(12, "Date", GetDateAt(1));
+                builder.AddAttribute(13, "DateChanged", Cb<DateTime?>(d => SetValueAt(1, d?.ToString("yyyy-MM-dd"))));
+                builder.AddAttribute(14, "Variant", Variant.Outlined);
+                builder.AddAttribute(15, "Margin", Margin.Dense);
+                builder.AddAttribute(16, "Style", "min-width: 170px;");
+                builder.CloseComponent();
+                return;
+
+            case FilterOperators.Relative:
+                var currentPreset = Clause.Values.Count > 0 ? Clause.Values[0] : RelativeDatePresets.Yesterday;
+                builder.OpenComponent<MudSelect<string>>(0);
+                builder.AddAttribute(1, "Label", "Preset");
+                builder.AddAttribute(2, "Value", currentPreset);
+                builder.AddAttribute(3, "ValueChanged", Cb<string>(v => SetValueAt(0, v)));
+                builder.AddAttribute(4, "Variant", Variant.Outlined);
+                builder.AddAttribute(5, "Margin", Margin.Dense);
+                builder.AddAttribute(6, "Dense", true);
+                builder.AddAttribute(7, "Style", "min-width: 200px;");
+                builder.AddAttribute(8, "ChildContent", (RenderFragment)(cb =>
+                {
+                    foreach (var preset in RelativePresets)
+                    {
+                        cb.OpenComponent<MudSelectItem<string>>(0);
+                        cb.AddAttribute(1, "Value", preset.Id);
+                        cb.AddAttribute(2, "ChildContent", (RenderFragment)(inner => inner.AddContent(0, preset.Label)));
+                        cb.CloseComponent();
+                    }
+                }));
+                builder.CloseComponent();
+                return;
+
+            default:
+                builder.OpenComponent<MudDatePicker>(0);
+                builder.AddAttribute(1, "Label", "Date");
+                builder.AddAttribute(2, "Date", GetDateAt(0));
+                builder.AddAttribute(3, "DateChanged", Cb<DateTime?>(d => SetValueAt(0, d?.ToString("yyyy-MM-dd"))));
+                builder.AddAttribute(4, "Variant", Variant.Outlined);
+                builder.AddAttribute(5, "Margin", Margin.Dense);
+                builder.AddAttribute(6, "Style", "min-width: 180px;");
+                builder.CloseComponent();
+                return;
+        }
+    }
+
+    private void RenderTextValue(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, string op)
+    {
+        var placeholder = op is FilterOperators.InList or FilterOperators.NotInList
+            ? "comma-separated" : null;
+
+        builder.OpenComponent<MudTextField<string>>(0);
+        builder.AddAttribute(1, "Label", "Value");
+        builder.AddAttribute(2, "Value", Clause.Values.Count > 0 ? Clause.Values[0] : null);
+        builder.AddAttribute(3, "ValueChanged", Cb<string>(v =>
+        {
+            // in_list / not_in_list store each comma-separated token as a
+            // separate Values entry so the emitter gets a clean list.
+            if (op is FilterOperators.InList or FilterOperators.NotInList)
+            {
+                var parts = (v ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                Clause.Values = parts.Count > 0 ? parts : new List<string> { v ?? "" };
+            }
+            else
+            {
+                SetValueAt(0, v);
+            }
+        }));
+        builder.AddAttribute(4, "Variant", Variant.Outlined);
+        builder.AddAttribute(5, "Margin", Margin.Dense);
+        builder.AddAttribute(6, "Placeholder", placeholder);
+        builder.AddAttribute(7, "Style", "min-width: 260px;");
+        builder.CloseComponent();
+    }
+
+    private void RenderNumericValue(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, string op)
+    {
+        if (op == FilterOperators.Between)
+        {
+            builder.OpenComponent<MudNumericField<decimal?>>(0);
+            builder.AddAttribute(1, "Label", "From");
+            builder.AddAttribute(2, "Value", GetDecimalAt(0));
+            builder.AddAttribute(3, "ValueChanged", Cb<decimal?>(v => SetValueAt(0, v?.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+            builder.AddAttribute(4, "Variant", Variant.Outlined);
+            builder.AddAttribute(5, "Margin", Margin.Dense);
+            builder.AddAttribute(6, "Style", "min-width: 160px;");
+            builder.CloseComponent();
+
+            builder.OpenComponent<MudNumericField<decimal?>>(10);
+            builder.AddAttribute(11, "Label", "To");
+            builder.AddAttribute(12, "Value", GetDecimalAt(1));
+            builder.AddAttribute(13, "ValueChanged", Cb<decimal?>(v => SetValueAt(1, v?.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+            builder.AddAttribute(14, "Variant", Variant.Outlined);
+            builder.AddAttribute(15, "Margin", Margin.Dense);
+            builder.AddAttribute(16, "Style", "min-width: 160px;");
+            builder.CloseComponent();
+            return;
+        }
+
+        if (op == FilterOperators.InList)
+        {
+            builder.OpenComponent<MudTextField<string>>(0);
+            builder.AddAttribute(1, "Label", "Values");
+            builder.AddAttribute(2, "Value", string.Join(", ", Clause.Values));
+            builder.AddAttribute(3, "ValueChanged", Cb<string>(v =>
+            {
+                Clause.Values = (v ?? "")
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToList();
+            }));
+            builder.AddAttribute(4, "Variant", Variant.Outlined);
+            builder.AddAttribute(5, "Margin", Margin.Dense);
+            builder.AddAttribute(6, "Placeholder", "comma-separated");
+            builder.AddAttribute(7, "Style", "min-width: 260px;");
+            builder.CloseComponent();
+            return;
+        }
+
+        builder.OpenComponent<MudNumericField<decimal?>>(0);
+        builder.AddAttribute(1, "Label", "Value");
+        builder.AddAttribute(2, "Value", GetDecimalAt(0));
+        builder.AddAttribute(3, "ValueChanged", Cb<decimal?>(v => SetValueAt(0, v?.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+        builder.AddAttribute(4, "Variant", Variant.Outlined);
+        builder.AddAttribute(5, "Margin", Margin.Dense);
+        builder.AddAttribute(6, "Style", "min-width: 200px;");
+        builder.CloseComponent();
+    }
+
+    private decimal? GetDecimalAt(int idx) =>
+        Clause.Values.Count > idx
+            && decimal.TryParse(Clause.Values[idx],
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var d)
+            ? d
+            : null;
+
+    // Sync version of SetValueAtAsync for Cb<T> callers (which already
+    // await OnChanged + StateHasChanged around the action).
+    private void SetValueAt(int idx, string? v)
+    {
+        while (Clause.Values.Count <= idx) Clause.Values.Add(string.Empty);
+        Clause.Values[idx] = v ?? string.Empty;
+    }
+}

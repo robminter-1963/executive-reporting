@@ -1,0 +1,328 @@
+@inject ICustomPrimaryTableService TableAliasSvc
+@inject SchemaBuilderService TableBrowser
+@inject ISchemaService SchemaService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthStateProvider
+
+@* Table Aliases editor. Embedded in the Schema Builder under the
+   "Table Aliases" tab — the parent drives the ConnectionId, so this
+   component shows no picker of its own. The aliases it manages drive
+   the Source Table / Alias dropdown (Schema Builder's field editor),
+   the Join editor's Target Table picker, and the Report Builder's
+   saved-roots chips. *@
+<MudStack Spacing="3" Class="pa-2">
+    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Spacing="2" Wrap="Wrap.Wrap">
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Style="max-width: 720px;">
+            Define table/alias pairs for this connection. They surface everywhere a table reference
+            is picked — Source Table on fields, Target Table on joins, Primary Table on reports.
+        </MudText>
+        @if (ConnectionId is not null)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Add" OnClick="AddEntry">
+                Add Table Alias
+            </MudButton>
+        }
+    </MudStack>
+
+    @if (!string.IsNullOrEmpty(_dbTablesError))
+    {
+        <MudAlert Severity="Severity.Warning" Dense Variant="Variant.Outlined"
+                  Icon="@Icons.Material.Filled.CloudOff">
+            @_dbTablesError
+        </MudAlert>
+    }
+
+    @if (ConnectionId is null)
+    {
+        <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+            Pick a connection above to manage its table aliases.
+        </MudAlert>
+    }
+    else if (_entries.Count == 0)
+    {
+        <MudPaper Elevation="0" Class="pa-6 d-flex flex-column align-center"
+                  Style="border: 1px dashed #DADCE0;">
+            <MudIcon Icon="@Icons.Material.Filled.TableRows" Size="Size.Large" Color="Color.Default" />
+            <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                No table aliases defined for this connection yet.
+            </MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+                Click <strong>Add Table Alias</strong> to create one.
+            </MudText>
+        </MudPaper>
+    }
+    else
+    {
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudTable Items="_entries" Dense Hover Striped Class="pa-0">
+                <HeaderContent>
+                    <MudTh Style="width: 60px; text-align: center;">Primary</MudTh>
+                    <MudTh>Schema.Table</MudTh>
+                    <MudTh>Alias</MudTh>
+                    <MudTh>Created by</MudTh>
+                    <MudTh Style="width: 120px;"></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="text-align: center;">
+                        @* Star = default (filled, primary color), outlined star =
+                           eligible-but-not-default, blank = off-catalog. Tooltip
+                           explains the state so admins don't have to guess. *@
+                        @if (context.IsDefaultPrimary)
+                        {
+                            <MudTooltip Text="Default primary — new reports on this connection start here">
+                                <MudIcon Icon="@Icons.Material.Filled.Star" Size="Size.Small" Color="Color.Primary" />
+                            </MudTooltip>
+                        }
+                        else if (context.IsPrimary)
+                        {
+                            <MudTooltip Text="Eligible as primary — suggested in the Report Builder">
+                                <MudIcon Icon="@Icons.Material.Filled.StarBorder" Size="Size.Small" Color="Color.Default" />
+                            </MudTooltip>
+                        }
+                    </MudTd>
+                    <MudTd><strong>@context.TableName</strong></MudTd>
+                    <MudTd>
+                        @if (string.IsNullOrEmpty(context.Alias))
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary"><em>(none)</em></MudText>
+                        }
+                        else
+                        {
+                            <code style="font-family: monospace;">@context.Alias</code>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.caption">@(context.CreatedByEmail ?? "—")</MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudTooltip Text="Edit">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                           OnClick="@(() => EditEntry(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Delete">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                           OnClick="@(() => DeleteEntry(context))" />
+                        </MudTooltip>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+    }
+</MudStack>
+
+@code {
+    // Connection whose aliases we're editing. Parent-controlled — this
+    // component doesn't render a picker of its own. Null means "nothing
+    // to manage" and the UI shows a prompt.
+    [Parameter] public Guid? ConnectionId { get; set; }
+
+    // Fired after an Add/Edit/Delete so the parent (Schema Builder) can
+    // refresh its own _tableAliases list — that list feeds the field
+    // editor's Source Table dropdown and the Source column on the fields
+    // grid, so both need to stay in sync.
+    [Parameter] public EventCallback OnEntriesChanged { get; set; }
+
+    private List<CustomPrimaryTableRecord> _entries = new();
+    // DB-enumerated "schema.table" strings for the current connection. Fed
+    // into the Add/Edit dialog's autocomplete so admins can't freeform-type
+    // a non-existent table.
+    private List<string> _dbTables = new();
+    private string? _dbTablesError;
+    private Guid? _lastLoadedConnectionId;
+
+    private string _userId = "anonymous";
+    private string _userEmail = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _userId = authState.User.FindFirst("oid")?.Value
+                  ?? authState.User.Identity?.Name
+                  ?? "anonymous";
+        _userEmail = authState.User.FindFirst("preferred_username")?.Value
+                  ?? authState.User.FindFirst("email")?.Value
+                  ?? string.Empty;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Only reload when the connection actually changes — OnParametersSetAsync
+        // also fires on every parent re-render, which would otherwise re-hit
+        // the DB constantly while the user clicks around Schema Builder.
+        if (ConnectionId != _lastLoadedConnectionId)
+        {
+            _lastLoadedConnectionId = ConnectionId;
+            await LoadEntriesAsync();
+        }
+    }
+
+    private async Task LoadEntriesAsync()
+    {
+        if (ConnectionId is Guid id)
+        {
+            _entries = await TableAliasSvc.GetByConnectionAsync(id);
+            await LoadDbTablesAsync(id);
+        }
+        else
+        {
+            _entries = new();
+            _dbTables = new();
+            _dbTablesError = null;
+        }
+    }
+
+    // Enumerates the target DB's tables via SchemaBuilderService (same path
+    // the Schema Builder's table browser uses). Non-fatal on failure — the
+    // dialog simply shows no pre-populated options and surfaces a caption.
+    private async Task LoadDbTablesAsync(Guid connectionId)
+    {
+        _dbTablesError = null;
+        try
+        {
+            var tables = await TableBrowser.GetTablesAsync(connectionId);
+            _dbTables = tables
+                .Select(t => t.FullName)
+                .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _dbTables = new();
+            _dbTablesError = $"Couldn't list tables from the database: {ex.Message}";
+        }
+    }
+
+    private async Task AddEntry()
+    {
+        if (ConnectionId is not Guid connId) return;
+        var fields = await LoadFieldOptionsAsync(connId);
+        var dlg = await DialogService.ShowAsync<TableAliasEditDialog>("Add Table Alias",
+            new DialogParameters<TableAliasEditDialog>
+            {
+                { x => x.IsNew, true },
+                { x => x.InitialTableName, null },
+                { x => x.InitialAlias, null },
+                { x => x.InitialIsPrimary, false },
+                { x => x.InitialIsDefaultPrimary, false },
+                { x => x.InitialOwnerFieldId, null },
+                { x => x.AvailableTables, _dbTables },
+                { x => x.AvailableFields, fields },
+                { x => x.TakenAliases, BuildTakenAliases(excludeEntryId: null) }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dlg.Result;
+        if (result is null || result.Canceled || result.Data is not TableAliasEditDialog.EditResult edited) return;
+
+        try
+        {
+            await TableAliasSvc.AddAsync(connId, edited.TableName, edited.Alias,
+                edited.IsPrimary, edited.IsDefaultPrimary, edited.OwnerFieldId,
+                _userId, _userEmail);
+            await LoadEntriesAsync();
+            await NotifyChangedAsync();
+            Snackbar.Add($"Added \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\".", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to add: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task EditEntry(CustomPrimaryTableRecord entry)
+    {
+        if (ConnectionId is not Guid connId) return;
+        var fields = await LoadFieldOptionsAsync(connId);
+        var dlg = await DialogService.ShowAsync<TableAliasEditDialog>("Edit Table Alias",
+            new DialogParameters<TableAliasEditDialog>
+            {
+                { x => x.IsNew, false },
+                { x => x.InitialTableName, entry.TableName },
+                { x => x.InitialAlias, string.IsNullOrEmpty(entry.Alias) ? null : entry.Alias },
+                { x => x.InitialIsPrimary, entry.IsPrimary },
+                { x => x.InitialIsDefaultPrimary, entry.IsDefaultPrimary },
+                { x => x.InitialOwnerFieldId, entry.OwnerFieldId },
+                { x => x.AvailableTables, _dbTables },
+                { x => x.AvailableFields, fields },
+                { x => x.TakenAliases, BuildTakenAliases(excludeEntryId: entry.Id) }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dlg.Result;
+        if (result is null || result.Canceled || result.Data is not TableAliasEditDialog.EditResult edited) return;
+
+        try
+        {
+            await TableAliasSvc.UpdateAsync(entry.Id, edited.TableName, edited.Alias,
+                edited.IsPrimary, edited.IsDefaultPrimary, edited.OwnerFieldId);
+            await LoadEntriesAsync();
+            await NotifyChangedAsync();
+            Snackbar.Add($"Updated to \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\".", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to update: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // Pull the schema-config fields tied to this connection and project
+    // into the dialog's lightweight shape. Non-fatal on failure — the
+    // owner-field dropdown just shows only "— None —".
+    private async Task<List<TableAliasEditDialog.FieldOption>> LoadFieldOptionsAsync(Guid connectionId)
+    {
+        try
+        {
+            var fields = await SchemaService.GetFieldConfigsAsync(connectionId);
+            return fields
+                .OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase)
+                .Select(f => new TableAliasEditDialog.FieldOption(f.Id, f.Label))
+                .ToList();
+        }
+        catch
+        {
+            return new List<TableAliasEditDialog.FieldOption>();
+        }
+    }
+
+    private async Task DeleteEntry(CustomPrimaryTableRecord entry)
+    {
+        var combined = PrimaryTableRef.Format(entry.TableName, entry.Alias);
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            title: "Delete table alias",
+            message: $"Remove \"{combined}\" from this connection's catalog? Reports and fields still referencing it will keep working — they store the string directly.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+        if (confirm != true) return;
+
+        try
+        {
+            await TableAliasSvc.DeleteAsync(entry.Id);
+            await LoadEntriesAsync();
+            await NotifyChangedAsync();
+            Snackbar.Add($"Deleted \"{combined}\".", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to delete: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // Non-empty aliases already in use on this connection, minus the row the
+    // user is editing (which may keep its current alias without collision).
+    private HashSet<string> BuildTakenAliases(Guid? excludeEntryId)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in _entries)
+        {
+            if (excludeEntryId is Guid id && e.Id == id) continue;
+            if (!string.IsNullOrEmpty(e.Alias)) set.Add(e.Alias);
+        }
+        return set;
+    }
+
+    private async Task NotifyChangedAsync()
+    {
+        if (OnEntriesChanged.HasDelegate)
+            await OnEntriesChanged.InvokeAsync();
+    }
+}

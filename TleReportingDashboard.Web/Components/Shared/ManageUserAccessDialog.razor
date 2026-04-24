@@ -1,0 +1,260 @@
+@using TleReportingDashboard.Web.Services
+@inject IUserManagementService UserManagement
+@inject ICompanyRegistry CompanyRegistry
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Apartment" />
+            <MudStack Spacing="0">
+                <MudText Typo="Typo.h6" Style="font-weight: 600;">Company access</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@Email</MudText>
+            </MudStack>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        @if (IsAdmin)
+        {
+            <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined" Class="mb-3">
+                This user is an admin — admins see every company automatically. Grants below are ignored while the admin flag is on.
+            </MudAlert>
+        }
+
+        @if (_loading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+        else
+        {
+            <MudStack Spacing="3">
+                @* Existing grants — one card per company, connections
+                   listed underneath with an editable LOS/CRM login each.
+                   Not every company has multiple connections; when there's
+                   only one the extra layer is a single row, which is fine
+                   and keeps the UI consistent. *@
+                @foreach (var grant in _access)
+                {
+                    <MudPaper Elevation="0" Class="pa-3"
+                              Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                        <MudStack Spacing="2">
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                                <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">
+                                    @grant.CompanyName <span style="color: #9AA0A6;">(@grant.CompanyCode)</span>
+                                </MudText>
+                                <MudSpacer />
+                                <MudSelect T="string" Value="@grant.Role" Dense
+                                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                                           Style="min-width: 140px;"
+                                           ValueChanged="@(r => ChangeRole(grant, r))">
+                                    @foreach (var r in UserRoles.All)
+                                    {
+                                        <MudSelectItem T="string" Value="@r">@r</MudSelectItem>
+                                    }
+                                </MudSelect>
+                                <MudTooltip Text="Revoke access to this company">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                   Color="Color.Error"
+                                                   OnClick="@(() => RevokeAccess(grant))" />
+                                </MudTooltip>
+                            </MudStack>
+
+                            @* Connections under this company — per-connection
+                               LOS/CRM login, debounced-commit text field. *@
+                            @if (_connLoginsByCompany.TryGetValue(grant.CompanyId, out var conns) && conns.Count > 0)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-top: 4px;">
+                                    LOS / CRM login per connection
+                                </MudText>
+                                @foreach (var cn in conns)
+                                {
+                                    <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                                        <MudIcon Icon="@(cn.IsActive ? Icons.Material.Filled.Link : Icons.Material.Filled.LinkOff)"
+                                                 Size="Size.Small"
+                                                 Color="@(cn.IsActive ? Color.Primary : Color.Default)" />
+                                        <MudText Typo="Typo.body2" Style="min-width: 160px;">@cn.ConnectionName</MudText>
+                                        <MudTextField T="string" Value="@cn.ExternalUserId"
+                                                      Placeholder="e.g. jsmith"
+                                                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                      DebounceInterval="500"
+                                                      OnDebounceIntervalElapsed="@(v => ChangeExternalUserId(cn, v))" />
+                                    </MudStack>
+                                }
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    No connections configured for this company yet.
+                                </MudText>
+                            }
+                        </MudStack>
+                    </MudPaper>
+                }
+
+                @if (_access.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                        No company grants yet — add one below.
+                    </MudText>
+                }
+
+                @* Grant form — disables when every available company is
+                   already granted so the button can't create a duplicate. *@
+                <MudDivider />
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Grant access</MudText>
+                <MudStack Row AlignItems="AlignItems.End" Spacing="2" Wrap="Wrap.Wrap">
+                    <MudSelect T="Guid?" @bind-Value="_grantCompanyId" Label="Company"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Style="min-width: 240px;">
+                        @foreach (var c in AvailableCompanies())
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="string" @bind-Value="_grantRole" Label="Role"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Style="min-width: 160px;">
+                        @foreach (var r in UserRoles.All)
+                        {
+                            <MudSelectItem T="string" Value="@r">@r</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               Disabled="@(_grantCompanyId is null)"
+                               OnClick="GrantAccess">
+                        Grant
+                    </MudButton>
+                </MudStack>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Set LOS / CRM logins per connection once access is granted — self-scoped roles need a login to return rows.
+                </MudText>
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Email { get; set; } = string.Empty;
+    [Parameter] public bool IsAdmin { get; set; }
+
+    private bool _loading = true;
+    private List<UserCompanyAccess> _access = new();
+    private List<CompanySummary> _companies = new();
+    // Connections per company, keyed by company id. Populated lazily alongside
+    // _access so the per-connection login rows don't need a second lookup
+    // against an external service at render time.
+    private readonly Dictionary<Guid, List<UserConnectionLogin>> _connLoginsByCompany = new();
+    private Guid? _grantCompanyId;
+    private string _grantRole = UserRoles.Viewer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _companies = await CompanyRegistry.GetActiveAsync();
+        await ReloadAccessAsync();
+    }
+
+    private async Task ReloadAccessAsync()
+    {
+        _loading = true;
+        try
+        {
+            _access = await UserManagement.GetCompanyAccessAsync(Email);
+            _connLoginsByCompany.Clear();
+            foreach (var grant in _access)
+            {
+                _connLoginsByCompany[grant.CompanyId] =
+                    await UserManagement.GetConnectionLoginsAsync(Email, grant.CompanyId);
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IEnumerable<CompanySummary> AvailableCompanies()
+    {
+        var taken = _access.Select(a => a.CompanyId).ToHashSet();
+        return _companies.Where(c => !taken.Contains(c.Id));
+    }
+
+    private async Task GrantAccess()
+    {
+        if (_grantCompanyId is null) return;
+        try
+        {
+            await UserManagement.UpsertCompanyAccessAsync(Email, _grantCompanyId.Value, _grantRole);
+            _grantCompanyId = null;
+            _grantRole = UserRoles.Viewer;
+            await ReloadAccessAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to grant: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ChangeRole(UserCompanyAccess row, string newRole)
+    {
+        if (string.Equals(row.Role, newRole, StringComparison.Ordinal)) return;
+        try
+        {
+            await UserManagement.UpsertCompanyAccessAsync(row.Email, row.CompanyId, newRole);
+            await ReloadAccessAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to change role: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ChangeExternalUserId(UserConnectionLogin conn, string? newValue)
+    {
+        // Normalize; whitespace-only = unset. No-op when unchanged so
+        // tabbing through fields doesn't trigger a write per field.
+        var newTrimmed = string.IsNullOrWhiteSpace(newValue) ? null : newValue.Trim();
+        var oldTrimmed = string.IsNullOrWhiteSpace(conn.ExternalUserId) ? null : conn.ExternalUserId.Trim();
+        if (string.Equals(newTrimmed, oldTrimmed, StringComparison.Ordinal)) return;
+
+        try
+        {
+            await UserManagement.UpsertConnectionLoginAsync(Email, conn.ConnectionId, newTrimmed);
+            await ReloadAccessAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save LOS/CRM login: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RevokeAccess(UserCompanyAccess row)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = "Revoke access",
+            Message = $"Revoke {row.Email} from {row.CompanyName}?",
+            YesText = "Revoke",
+            CancelText = "Cancel"
+        });
+        if (confirmed != true) return;
+
+        try
+        {
+            await UserManagement.RevokeCompanyAccessAsync(row.Email, row.CompanyId);
+            await ReloadAccessAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to revoke: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
+}

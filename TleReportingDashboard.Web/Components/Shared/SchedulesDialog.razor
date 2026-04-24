@@ -1,0 +1,26 @@
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+            <MudIcon Icon="@Icons.Material.Filled.Schedule" />
+            <MudText Typo="Typo.h6">Schedules — @ReportName</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <div style="min-width: 560px;">
+            <ScheduleManager ReportId="ReportId" UserId="@UserId" UserEmail="@UserEmail" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" Variant="Variant.Text" OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public Guid ReportId { get; set; }
+    [Parameter] public string ReportName { get; set; } = string.Empty;
+    [Parameter] public string UserId { get; set; } = string.Empty;
+    [Parameter] public string UserEmail { get; set; } = string.Empty;
+
+    private void Close() => MudDialog?.Close(DialogResult.Ok(true));
+}

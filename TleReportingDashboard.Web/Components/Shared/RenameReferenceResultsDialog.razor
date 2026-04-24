@@ -1,0 +1,85 @@
+@using TleReportingDashboard.Web.Components.Pages
+
+@* Read-only "done" view shown after a bulk rename commits. Mirrors the
+   preview table so admins can double-check what actually changed. Opened
+   by Schema Builder after ApplyTableRename + Save succeed. *@
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+            <MudText Typo="Typo.h6">Rename Applied</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 720px;">
+            <MudAlert Severity="Severity.Success" Dense Variant="Variant.Outlined">
+                Renamed <strong>@OldText</strong> → <strong>@NewText</strong>.
+                @Matches.Count change@(Matches.Count == 1 ? "" : "s") committed and saved.
+            </MudAlert>
+
+            @* Per-scope counts so the summary line is scannable. *@
+            @{
+                var perScope = Matches
+                    .GroupBy(m => m.Scope, StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+            @if (perScope.Count > 0)
+            {
+                <MudStack Row Spacing="1" Wrap="Wrap.Wrap">
+                    @foreach (var g in perScope)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                            @g.Key: @g.Count()
+                        </MudChip>
+                    }
+                </MudStack>
+            }
+
+            @if (Matches.Count > 0)
+            {
+                <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; max-height: 420px; overflow-y: auto;">
+                    <MudTable Items="Matches" Dense Hover Striped Class="pa-0">
+                        <HeaderContent>
+                            <MudTh Style="width: 110px;">Scope</MudTh>
+                            <MudTh Style="width: 180px;">Item</MudTh>
+                            <MudTh Style="width: 140px;">Property</MudTh>
+                            <MudTh>Before → After</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd><strong>@context.Scope</strong></MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.caption" Style="font-family: monospace;">@context.ItemId</MudText>
+                            </MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.caption">@context.Property</MudText>
+                            </MudTd>
+                            <MudTd>
+                                <MudStack Spacing="0">
+                                    <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; color: #B00020;">
+                                        @context.Before
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; color: #1E8E3E;">
+                                        @context.After
+                                    </MudText>
+                                </MudStack>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                </MudPaper>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public string OldText { get; set; } = string.Empty;
+    [Parameter] public string NewText { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<RenameReferenceDialog.RenameMatch> Matches { get; set; } = Array.Empty<RenameReferenceDialog.RenameMatch>();
+
+    private void Close() => MudDialog?.Close(DialogResult.Ok(true));
+}

@@ -1,0 +1,193 @@
+@page "/preferences"
+@rendermode InteractiveServer
+@inject IUserPreferenceService PreferenceService
+@inject UserPreferenceState PreferenceState
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>Preferences - Executive Reporting Suite</PageTitle>
+
+<MudMainContent Style="padding: 16px; max-width: 700px; margin: 0 auto;">
+    <MudStack Spacing="3">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="GoBack"
+                           title="Back" />
+            <MudText Typo="Typo.h5" Style="font-weight: 600;">Preferences</MudText>
+        </MudStack>
+
+        @if (_loading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+        else
+        {
+            @* ── Display Mode ── *@
+            <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudStack Spacing="2">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Display</MudText>
+
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.body1">Theme</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Switch between Light and Dark mode
+                            </MudText>
+                        </MudStack>
+                        <MudToggleGroup T="bool" Value="_pref.IsDarkMode" ValueChanged="OnThemeChanged"
+                                        Outlined Color="Color.Primary" Size="Size.Small">
+                            <MudToggleItem T="bool" Value="false">
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudIcon Icon="@Icons.Material.Filled.LightMode" Size="Size.Small" />
+                                    <span>Light</span>
+                                </MudStack>
+                            </MudToggleItem>
+                            <MudToggleItem T="bool" Value="true">
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudIcon Icon="@Icons.Material.Filled.DarkMode" Size="Size.Small" />
+                                    <span>Dark</span>
+                                </MudStack>
+                            </MudToggleItem>
+                        </MudToggleGroup>
+                    </MudStack>
+                </MudStack>
+            </MudPaper>
+
+            @* ── Page Sizes ── *@
+            <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudStack Spacing="2">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Data Grid</MudText>
+
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.body1">Default Page Size</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Number of rows shown per page in report grids
+                            </MudText>
+                        </MudStack>
+                        <MudSelect T="int" Value="_pref.DefaultPageSize" ValueChanged="OnPageSizeChanged"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="max-width: 120px;">
+                            <MudSelectItem Value="10">10</MudSelectItem>
+                            <MudSelectItem Value="20">20</MudSelectItem>
+                            <MudSelectItem Value="30">30</MudSelectItem>
+                            <MudSelectItem Value="40">40</MudSelectItem>
+                            <MudSelectItem Value="50">50</MudSelectItem>
+                            <MudSelectItem Value="60">60</MudSelectItem>
+                            <MudSelectItem Value="70">70</MudSelectItem>
+                            <MudSelectItem Value="80">80</MudSelectItem>
+                            <MudSelectItem Value="90">90</MudSelectItem>
+                            <MudSelectItem Value="100">100</MudSelectItem>
+                        </MudSelect>
+                    </MudStack>
+
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.body1">Report Library Rows Per Page</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Rows shown on each tab of the Report Library
+                            </MudText>
+                        </MudStack>
+                        <MudSelect T="int" Value="_pref.ReportLibraryPageSize" ValueChanged="OnLibraryPageSizeChanged"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="max-width: 120px;">
+                            <MudSelectItem Value="10">10</MudSelectItem>
+                            <MudSelectItem Value="20">20</MudSelectItem>
+                            <MudSelectItem Value="30">30</MudSelectItem>
+                            <MudSelectItem Value="40">40</MudSelectItem>
+                            <MudSelectItem Value="50">50</MudSelectItem>
+                            <MudSelectItem Value="60">60</MudSelectItem>
+                            <MudSelectItem Value="70">70</MudSelectItem>
+                            <MudSelectItem Value="80">80</MudSelectItem>
+                            <MudSelectItem Value="90">90</MudSelectItem>
+                            <MudSelectItem Value="100">100</MudSelectItem>
+                        </MudSelect>
+                    </MudStack>
+                </MudStack>
+            </MudPaper>
+
+            @* ── Save ── *@
+            <MudStack Row Justify="Justify.FlexEnd" Spacing="2">
+                <MudButton Variant="Variant.Text" Color="Color.Default"
+                           OnClick="@(() => Navigation.NavigateTo("/reports"))">
+                    Cancel
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Save"
+                           OnClick="Save" Disabled="_saving">
+                    @(_saving ? "Saving..." : "Save Preferences")
+                </MudButton>
+            </MudStack>
+        }
+    </MudStack>
+</MudMainContent>
+
+@code {
+    private UserPreference _pref = new();
+    private bool _loading = true;
+    private bool _saving;
+    private string _userId = "anonymous";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _userId = authState.User.FindFirst("oid")?.Value
+                  ?? authState.User.Identity?.Name
+                  ?? "anonymous";
+
+        _pref = await PreferenceService.GetPreferencesAsync(_userId);
+        _pref.UserId = _userId;
+        _loading = false;
+    }
+
+    // Prefer browser-native back so the arrow honors the actual navigation
+    // history (could be Report Library, Master Dashboard, or anywhere else).
+    // Falls back to /reports when there's no prior entry (fresh tab opened
+    // straight to /preferences).
+    private async Task GoBack()
+    {
+        var hasHistory = await JS.InvokeAsync<bool>("eval", "window.history.length > 1");
+        if (hasHistory)
+            await JS.InvokeVoidAsync("history.back");
+        else
+            Navigation.NavigateTo("/reports");
+    }
+
+    private void OnThemeChanged(bool isDark)
+    {
+        _pref.IsDarkMode = isDark;
+        // Apply immediately so the user sees the change
+        PreferenceState.SetDarkMode(isDark);
+    }
+
+    private void OnPageSizeChanged(int size)
+    {
+        _pref.DefaultPageSize = size;
+    }
+
+    private void OnLibraryPageSizeChanged(int size)
+    {
+        _pref.ReportLibraryPageSize = size;
+    }
+
+    private async Task Save()
+    {
+        _saving = true;
+        try
+        {
+            await PreferenceService.SavePreferencesAsync(_pref);
+            PreferenceState.Set(_pref);
+            Navigation.NavigateTo("/reports");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

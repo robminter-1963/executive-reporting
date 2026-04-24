@@ -1,0 +1,193 @@
+@* Add/edit dialog for the connection's table-alias catalog. The dialog's
+   Result.Data is a (TableName, Alias) tuple returned as TableAliasEditDialog.EditResult;
+   the caller persists via ICustomPrimaryTableService. *@
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 420px;">
+            @* Autocomplete over the DB-enumerated table list. SearchFunc
+               substring-matches case-insensitively so admins can type
+               "borr" to narrow to borrower tables. Strict=true prevents
+               freeform entry — only list values are accepted. When editing
+               a row whose table is no longer in the DB (rename/drop), the
+               stale value is injected into the list so it stays editable. *@
+            @* MaxItems=null → uncapped list, limited only by the DB result
+               count and MudAutocomplete's own scrollable popover. Trade-off:
+               a 10k-table DB would render them all, which is fine for modern
+               browsers but noticeable on slow hardware. Users can still type
+               to narrow the list — SearchTables filters by substring. *@
+            <MudAutocomplete T="string" @bind-Value="_tableName"
+                             Label="Schema.Table"
+                             SearchFunc="SearchTables"
+                             Strict="true" CoerceValue="false"
+                             Required RequiredError="Table is required"
+                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                             Dense Immediate
+                             MaxItems="null"
+                             HelperText="@TableHelperText" />
+            <MudTextField @bind-Value="_alias" Label="Alias (optional)" Placeholder="L"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                          Error="@IsAliasTaken()"
+                          ErrorText="@("Already used on this connection")"
+                          HelperText="Short identifier used in field references (e.g. L.ColName). Blank means no alias." />
+
+            @* Primary curation flags. Eligible-as-primary surfaces the row
+               in the Report Builder's "Suggested primaries" group; default
+               pre-selects it for new reports. Default implies eligibility
+               so the row stays in the Suggested group; unchecking Eligible
+               also clears Default automatically. *@
+            <MudCheckBox T="bool" @bind-Value="_isPrimary" Color="Color.Primary" Dense
+                         Label="Eligible as primary table" />
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 32px; margin-top: -8px;">
+                When on, appears in the Report Builder's "Suggested primaries" group.
+            </MudText>
+            <MudCheckBox T="bool" @bind-Value="_isDefaultPrimary" Color="Color.Primary" Dense
+                         Disabled="@(!_isPrimary)"
+                         Label="Default primary for this connection" />
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 32px; margin-top: -8px;">
+                New reports on this connection start with this primary. Only one row per connection can be the default — saving here will clear any prior default.
+            </MudText>
+
+            @* Owner field — feeds the self-scope predicate. Users with a
+               role whose scope is "Only their own" get rows filtered to
+               ownerFieldColumn = their LOS/CRM login. Leave empty on
+               tables where no owner concept exists (reference / lookup
+               tables); self-scoped reports on those tables return nothing
+               by design. *@
+            <MudSelect T="string?" Value="_ownerFieldId" Dense
+                       ValueChanged="@(v => _ownerFieldId = v)"
+                       Label="Owner field (for row-level scoping)"
+                       Variant="Variant.Outlined" Margin="Margin.Dense"
+                       Clearable
+                       HelperText="Optional. Field whose column identifies the row's owner (e.g. loan_officer_id). Required for self-scoped roles to return rows from this primary.">
+                <MudSelectItem T="string?" Value="@((string?)null)">— None —</MudSelectItem>
+                @foreach (var f in AvailableFields)
+                {
+                    <MudSelectItem T="string?" Value="@f.Id">@f.Label <span style="color: #9AA0A6;">(@f.Id)</span></MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (!string.IsNullOrEmpty(_validationError))
+            {
+                <MudAlert Severity="Severity.Error" Dense>@_validationError</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   OnClick="Submit" Disabled="@(!CanSubmit())">
+            @(IsNew ? "Add" : "Save")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string? InitialTableName { get; set; }
+    [Parameter] public string? InitialAlias { get; set; }
+    [Parameter] public bool InitialIsPrimary { get; set; }
+    [Parameter] public bool InitialIsDefaultPrimary { get; set; }
+    [Parameter] public string? InitialOwnerFieldId { get; set; }
+    [Parameter] public bool IsNew { get; set; } = true;
+
+    // DB-enumerated tables ("schema.table" strings). Caller (AdminTableAliasesTab)
+    // fetches via SchemaBuilderService.GetTablesAsync and passes in.
+    [Parameter] public List<string> AvailableTables { get; set; } = new();
+
+    // Existing non-empty aliases on this connection (except the one currently
+    // being edited). Used to flag duplicates inline so the admin doesn't hit
+    // the service-level guard after clicking Save.
+    [Parameter] public HashSet<string> TakenAliases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    // Schema-config fields the admin can pick as the owner field. Caller
+    // sources from the current company's schema config so the list reflects
+    // what was already declared in the Schema Builder.
+    [Parameter] public List<FieldOption> AvailableFields { get; set; } = new();
+
+    public record EditResult(string TableName, string? Alias, bool IsPrimary, bool IsDefaultPrimary, string? OwnerFieldId);
+    public record FieldOption(string Id, string Label);
+
+    private string? _tableName;
+    private string? _alias;
+    private bool _isPrimary;
+    private bool _isDefaultPrimary;
+    private string? _ownerFieldId;
+    private string? _validationError;
+    private List<string> _effectiveTables = new();
+
+    private string TableHelperText =>
+        _effectiveTables.Count == 0
+            ? "No tables could be listed from the database. Check the connection."
+            : $"Pick from {_effectiveTables.Count:N0} tables enumerated from the database.";
+
+    protected override void OnInitialized()
+    {
+        _tableName = InitialTableName;
+        _alias = InitialAlias;
+        // Default implies Eligible; coerce on load so the dialog never shows
+        // a contradictory state (default-on + eligible-off).
+        _isPrimary = InitialIsPrimary || InitialIsDefaultPrimary;
+        _isDefaultPrimary = InitialIsDefaultPrimary;
+        _ownerFieldId = InitialOwnerFieldId;
+
+        // Copy the caller's list and ensure the current value is present so a
+        // stale saved entry stays editable even if the underlying table is
+        // gone from the DB (renamed/dropped since the row was saved).
+        _effectiveTables = new List<string>(AvailableTables);
+        if (!string.IsNullOrWhiteSpace(InitialTableName)
+            && !_effectiveTables.Contains(InitialTableName, StringComparer.OrdinalIgnoreCase))
+        {
+            _effectiveTables.Insert(0, InitialTableName);
+        }
+    }
+
+    private Task<IEnumerable<string>> SearchTables(string? value, CancellationToken ct)
+    {
+        IEnumerable<string> matches = string.IsNullOrWhiteSpace(value)
+            ? _effectiveTables
+            : _effectiveTables.Where(t => t.Contains(value, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(matches);
+    }
+
+    private bool CanSubmit()
+    {
+        if (string.IsNullOrWhiteSpace(_tableName)) return false;
+        if (!TleReportingDashboard.Web.Services.PrimaryTableRef.TableRegex().IsMatch(_tableName.Trim())) return false;
+        var alias = _alias?.Trim() ?? string.Empty;
+        if (alias.Length > 0
+            && !TleReportingDashboard.Web.Services.PrimaryTableRef.AliasRegex().IsMatch(alias)) return false;
+        if (IsAliasTaken()) return false;
+        return true;
+    }
+
+    // True when the currently-typed alias is non-empty and already claimed
+    // by another row on the same connection. Excludes the current row's
+    // alias (caller strips it from TakenAliases before passing in).
+    private bool IsAliasTaken()
+    {
+        var alias = _alias?.Trim() ?? string.Empty;
+        if (alias.Length == 0) return false;
+        return TakenAliases.Contains(alias);
+    }
+
+    private void Submit()
+    {
+        _validationError = null;
+        if (!CanSubmit())
+        {
+            _validationError = "Table and alias must be valid identifiers.";
+            return;
+        }
+        // Coerce: Default without Eligible is nonsensical. The Disabled=""
+        // on the checkbox should make this impossible but belt-and-suspenders.
+        var isPrimary = _isPrimary || _isDefaultPrimary;
+        MudDialog.Close(DialogResult.Ok(new EditResult(
+            _tableName!.Trim(),
+            string.IsNullOrWhiteSpace(_alias) ? null : _alias!.Trim(),
+            isPrimary,
+            _isDefaultPrimary,
+            string.IsNullOrWhiteSpace(_ownerFieldId) ? null : _ownerFieldId!.Trim())));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

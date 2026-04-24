@@ -1,0 +1,682 @@
+2026-04-10 12:23:06.313 -07:00 [INF] Now listening on: https://localhost:63772
+2026-04-10 12:23:06.345 -07:00 [INF] Now listening on: http://localhost:63775
+2026-04-10 12:23:06.361 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 12:23:06.362 -07:00 [INF] Hosting environment: Development
+2026-04-10 12:23:06.362 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 12:23:45.532 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.EXPCLOSEDATE AS [expected_close_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-10 12:23:45.761 -07:00 [INF] Query executed: Fields=[loan_number, borrower_name, application_date, expected_close_date, loan_amount, loan_plan_name], RowCount=610, Duration=244ms
+2026-04-10 12:24:44.828 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.EXPCLOSEDATE AS [expected_close_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8, @filter_0_9, @filter_0_10)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Code Red, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Appraisal Issue, @filter_0_5=Docs Rev, @filter_0_6=In Proc, @filter_0_7=Pending Cancel, @filter_0_8=Pre-Approval, @filter_0_9=Pre-Docs, @filter_0_10=Subordination, @_offset=0, @_pageSize=50000
+2026-04-10 12:24:44.887 -07:00 [INF] Query executed: Fields=[loan_number, borrower_name, application_date, expected_close_date, loan_amount, loan_plan_name], RowCount=39, Duration=60ms
+2026-04-10 12:24:49.544 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.EXPCLOSEDATE AS [expected_close_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8, @filter_0_9, @filter_0_10)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Code Red, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Appraisal Issue, @filter_0_5=Docs Rev, @filter_0_6=In Proc, @filter_0_7=Pending Cancel, @filter_0_8=Pre-Approval, @filter_0_9=Pre-Docs, @filter_0_10=Subordination, @_offset=0, @_pageSize=50000
+2026-04-10 12:24:49.612 -07:00 [INF] Query executed: Fields=[loan_number, borrower_name, application_date, expected_close_date, loan_amount, loan_plan_name, milestone], RowCount=39, Duration=69ms
+2026-04-10 12:24:51.110 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.EXPCLOSEDATE AS [expected_close_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8, @filter_0_9, @filter_0_10)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Code Red, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Appraisal Issue, @filter_0_5=Docs Rev, @filter_0_6=In Proc, @filter_0_7=Pending Cancel, @filter_0_8=Pre-Approval, @filter_0_9=Pre-Docs, @filter_0_10=Subordination, @_offset=0, @_pageSize=50000
+2026-04-10 12:24:51.135 -07:00 [INF] Query executed: Fields=[loan_number, borrower_name, application_date, expected_close_date, loan_amount, loan_plan_name, milestone], RowCount=39, Duration=26ms
+2026-04-10 12:28:14.006 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.EXPCLOSEDATE AS [expected_close_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8, @filter_0_9, @filter_0_10)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Code Red, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Appraisal Issue, @filter_0_5=Docs Rev, @filter_0_6=In Proc, @filter_0_7=Pending Cancel, @filter_0_8=Pre-Approval, @filter_0_9=Pre-Docs, @filter_0_10=Subordination, @_offset=0, @_pageSize=50000
+2026-04-10 12:28:14.037 -07:00 [INF] Query executed: Fields=[loan_number, borrower_name, application_date, expected_close_date, loan_amount, loan_plan_name, milestone], RowCount=39, Duration=33ms
+2026-04-10 12:29:25.851 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.EXPCLOSEDATE AS [expected_close_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8, @filter_0_9, @filter_0_10)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Code Red, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Appraisal Issue, @filter_0_5=Docs Rev, @filter_0_6=In Proc, @filter_0_7=Pending Cancel, @filter_0_8=Pre-Approval, @filter_0_9=Pre-Docs, @filter_0_10=Subordination, @_offset=0, @_pageSize=50000
+2026-04-10 12:29:25.881 -07:00 [INF] Query executed: Fields=[loan_number, borrower_name, application_date, expected_close_date, loan_amount, loan_plan_name, milestone], RowCount=39, Duration=30ms
+2026-04-10 12:35:24.679 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.EXPCLOSEDATE AS [expected_close_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8, @filter_0_9, @filter_0_10)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Code Red, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Appraisal Issue, @filter_0_5=Docs Rev, @filter_0_6=In Proc, @filter_0_7=Pending Cancel, @filter_0_8=Pre-Approval, @filter_0_9=Pre-Docs, @filter_0_10=Subordination, @_offset=0, @_pageSize=50000
+2026-04-10 12:35:24.707 -07:00 [INF] Query executed: Fields=[loan_number, borrower_name, application_date, expected_close_date, loan_amount, loan_plan_name, milestone], RowCount=39, Duration=28ms
+2026-04-10 12:35:39.464 -07:00 [INF] Application is shutting down...
+2026-04-10 12:36:15.179 -07:00 [INF] Now listening on: https://localhost:65449
+2026-04-10 12:36:15.214 -07:00 [INF] Now listening on: http://localhost:65451
+2026-04-10 12:36:15.218 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 12:36:15.219 -07:00 [INF] Hosting environment: Development
+2026-04-10 12:36:15.219 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 12:36:40.895 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-10 12:36:41.055 -07:00 [INF] Query executed: Fields=[loan_number, milestone, application_date], RowCount=610, Duration=184ms
+2026-04-10 12:42:33.145 -07:00 [INF] Application is shutting down...
+2026-04-10 12:43:04.299 -07:00 [INF] Now listening on: https://localhost:59844
+2026-04-10 12:43:04.321 -07:00 [INF] Now listening on: http://localhost:59846
+2026-04-10 12:43:04.323 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 12:43:04.324 -07:00 [INF] Hosting environment: Development
+2026-04-10 12:43:04.324 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 13:08:29.765 -07:00 [INF] Application is shutting down...
+2026-04-10 13:09:00.696 -07:00 [INF] Now listening on: https://localhost:60319
+2026-04-10 13:09:00.726 -07:00 [INF] Now listening on: http://localhost:60320
+2026-04-10 13:09:00.730 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 13:09:00.730 -07:00 [INF] Hosting environment: Development
+2026-04-10 13:09:00.731 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 13:09:18.521 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], B1.BORR_NAME AS [borrower_name]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-10 13:09:18.722 -07:00 [INF] Query executed: Fields=[loan_number, loan_amount, loan_plan_name, milestone, borrower_name], RowCount=610, Duration=217ms
+2026-04-10 13:10:40.115 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], B1.BORR_NAME AS [borrower_name]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-10 13:10:40.154 -07:00 [INF] Query executed: Fields=[loan_number, loan_amount, loan_plan_name, milestone, borrower_name], RowCount=610, Duration=38ms
+2026-04-10 13:12:02.344 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], B1.BORR_NAME AS [borrower_name]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-10 13:12:02.381 -07:00 [INF] Query executed: Fields=[loan_number, loan_amount, loan_plan_name, milestone, borrower_name], RowCount=610, Duration=38ms
+2026-04-10 13:12:23.653 -07:00 [INF] Application is shutting down...
+2026-04-10 13:48:34.488 -07:00 [INF] Now listening on: https://localhost:54368
+2026-04-10 13:48:34.505 -07:00 [INF] Now listening on: http://localhost:54370
+2026-04-10 13:48:34.507 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 13:48:34.508 -07:00 [INF] Hosting environment: Development
+2026-04-10 13:48:34.508 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 13:52:50.399 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_30.CODEDESC AS [milestone], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-10 13:52:50.623 -07:00 [INF] Query executed: Fields=[loan_number, loan_amount, loan_purpose, milestone, borrower_name, application_date, notepad_item], RowCount=610, Duration=243ms
+2026-04-10 13:54:08.182 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_30.CODEDESC AS [milestone], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-10 13:54:08.247 -07:00 [INF] Query executed: Fields=[loan_number, loan_amount, loan_purpose, milestone, borrower_name, application_date, notepad_item], RowCount=610, Duration=66ms
+2026-04-10 13:54:51.161 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_30.CODEDESC AS [milestone], B1.BORR_NAME AS [borrower_name], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-10 13:54:51.196 -07:00 [INF] Query executed: Fields=[loan_number, loan_amount, loan_purpose, milestone, borrower_name, application_date, notepad_item], RowCount=610, Duration=35ms
+2026-04-10 13:55:06.285 -07:00 [INF] Application is shutting down...
+2026-04-10 14:00:32.867 -07:00 [INF] Now listening on: https://localhost:61377
+2026-04-10 14:00:32.896 -07:00 [INF] Now listening on: http://localhost:61378
+2026-04-10 14:00:32.899 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 14:00:32.900 -07:00 [INF] Hosting environment: Development
+2026-04-10 14:00:32.900 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 14:01:42.548 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-10 14:01:42.643 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=610, Duration=118ms
+2026-04-10 14:02:31.581 -07:00 [INF] Report saved: "94ec303c-0ccf-4071-9f58-aaa1736be244" Loans By Status
+2026-04-10 14:04:13.134 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:04:13.188 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=55ms
+2026-04-10 14:04:30.442 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:04:30.466 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=25ms
+2026-04-10 14:04:36.821 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:04:36.845 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=23ms
+2026-04-10 14:04:46.187 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:04:46.210 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=22ms
+2026-04-10 14:05:03.483 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:05:03.510 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=27ms
+2026-04-10 14:06:51.502 -07:00 [INF] Application is shutting down...
+2026-04-10 14:12:00.001 -07:00 [INF] Now listening on: https://localhost:52016
+2026-04-10 14:12:00.029 -07:00 [INF] Now listening on: http://localhost:52017
+2026-04-10 14:12:00.033 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 14:12:00.033 -07:00 [INF] Hosting environment: Development
+2026-04-10 14:12:00.033 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 14:12:04.259 -07:00 [ERR] Health check EmpowerDbContext with status "Unhealthy" completed after 588.7759ms with message 'The operation was canceled.'
+System.OperationCanceledException: The operation was canceled.
+   at System.Threading.CancellationToken.ThrowOperationCanceledException()
+   at System.Threading.CancellationToken.ThrowIfCancellationRequested()
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalDatabaseCreator.CanConnectAsync(CancellationToken cancellationToken)
+   at Microsoft.Extensions.Diagnostics.HealthChecks.DbContextHealthCheck`1.CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken)
+2026-04-10 14:14:02.819 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:14:02.879 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=92ms
+2026-04-10 14:14:27.152 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:14:27.181 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=30ms
+2026-04-10 14:14:32.948 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:14:32.980 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=32ms
+2026-04-10 14:15:42.970 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:15:42.996 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=27ms
+2026-04-10 14:15:52.385 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:15:52.409 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=24ms
+2026-04-10 14:15:59.893 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:15:59.930 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=37ms
+2026-04-10 14:19:21.217 -07:00 [INF] Application is shutting down...
+2026-04-10 14:20:13.551 -07:00 [INF] Now listening on: https://localhost:49920
+2026-04-10 14:20:13.568 -07:00 [INF] Now listening on: http://localhost:49922
+2026-04-10 14:20:13.570 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 14:20:13.570 -07:00 [INF] Hosting environment: Development
+2026-04-10 14:20:13.570 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 14:20:31.167 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:20:31.222 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=72ms
+2026-04-10 14:20:53.123 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:20:53.217 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=94ms
+2026-04-10 14:22:00.901 -07:00 [INF] Application is shutting down...
+2026-04-10 14:24:17.662 -07:00 [INF] Now listening on: https://localhost:59820
+2026-04-10 14:24:17.689 -07:00 [INF] Now listening on: http://localhost:59821
+2026-04-10 14:24:17.692 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 14:24:17.693 -07:00 [INF] Hosting environment: Development
+2026-04-10 14:24:17.693 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 14:26:45.578 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:26:45.649 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=90ms
+2026-04-10 14:26:55.025 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:26:55.055 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=30ms
+2026-04-10 14:27:03.687 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:27:03.719 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=32ms
+2026-04-10 14:27:07.640 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:27:07.675 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=35ms
+2026-04-10 14:30:07.029 -07:00 [INF] Application is shutting down...
+2026-04-10 14:30:42.491 -07:00 [INF] Now listening on: https://localhost:51964
+2026-04-10 14:30:42.512 -07:00 [INF] Now listening on: http://localhost:51965
+2026-04-10 14:30:42.516 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 14:30:42.517 -07:00 [INF] Hosting environment: Development
+2026-04-10 14:30:42.517 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 14:30:50.118 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:30:50.155 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=52ms
+2026-04-10 14:30:56.999 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:30:57.024 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=25ms
+2026-04-10 14:31:03.284 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:31:03.323 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=38ms
+2026-04-10 14:31:14.713 -07:00 [INF] Application is shutting down...
+2026-04-10 14:31:48.260 -07:00 [INF] Now listening on: https://localhost:50150
+2026-04-10 14:31:48.277 -07:00 [INF] Now listening on: http://localhost:50153
+2026-04-10 14:31:48.279 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 14:31:48.280 -07:00 [INF] Hosting environment: Development
+2026-04-10 14:31:48.280 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 14:31:57.744 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:31:57.787 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=57ms
+2026-04-10 14:32:00.777 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:32:00.807 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last], RowCount=35, Duration=30ms
+2026-04-10 14:32:05.096 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 14:32:05.127 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=31ms
+2026-04-10 14:34:49.709 -07:00 [INF] Application is shutting down...
+2026-04-10 16:39:32.498 -07:00 [INF] Now listening on: https://localhost:59257
+2026-04-10 16:39:32.517 -07:00 [INF] Now listening on: http://localhost:59259
+2026-04-10 16:39:32.520 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 16:39:32.520 -07:00 [INF] Hosting environment: Development
+2026-04-10 16:39:32.520 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 16:39:44.537 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 16:39:44.579 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=62ms
+2026-04-10 16:39:59.170 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 16:39:59.209 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=39ms
+2026-04-10 16:40:23.206 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 16:40:23.235 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=29ms
+2026-04-10 16:42:32.831 -07:00 [INF] Application is shutting down...
+2026-04-10 16:45:13.999 -07:00 [INF] Now listening on: https://localhost:63599
+2026-04-10 16:45:14.029 -07:00 [INF] Now listening on: http://localhost:63601
+2026-04-10 16:45:14.032 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 16:45:14.033 -07:00 [INF] Hosting environment: Development
+2026-04-10 16:45:14.033 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 16:45:25.667 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 16:45:25.707 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=53ms
+2026-04-10 16:45:41.119 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 16:45:41.149 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=29ms
+2026-04-10 16:50:21.793 -07:00 [INF] Application is shutting down...
+2026-04-10 16:52:00.041 -07:00 [INF] Now listening on: https://localhost:52984
+2026-04-10 16:52:00.066 -07:00 [INF] Now listening on: http://localhost:52986
+2026-04-10 16:52:00.069 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 16:52:00.069 -07:00 [INF] Hosting environment: Development
+2026-04-10 16:52:00.069 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 16:52:10.529 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 16:52:10.564 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=51ms
+2026-04-10 16:54:04.930 -07:00 [INF] Application is shutting down...
+2026-04-10 16:57:35.067 -07:00 [INF] Now listening on: https://localhost:60713
+2026-04-10 16:57:35.084 -07:00 [INF] Now listening on: http://localhost:60715
+2026-04-10 16:57:35.086 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 16:57:35.086 -07:00 [INF] Hosting environment: Development
+2026-04-10 16:57:35.086 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 16:59:28.027 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 16:59:28.060 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=52ms
+2026-04-10 17:00:32.629 -07:00 [INF] Application is shutting down...
+2026-04-10 17:14:24.515 -07:00 [INF] Now listening on: https://localhost:63393
+2026-04-10 17:14:24.532 -07:00 [INF] Now listening on: http://localhost:63394
+2026-04-10 17:14:24.534 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 17:14:24.534 -07:00 [INF] Hosting environment: Development
+2026-04-10 17:14:24.534 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 17:14:50.062 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 17:14:50.102 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=57ms
+2026-04-10 17:16:24.880 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 17:16:24.917 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=37ms
+2026-04-10 17:17:04.650 -07:00 [INF] Application is shutting down...
+2026-04-10 17:27:49.772 -07:00 [INF] Now listening on: https://localhost:60948
+2026-04-10 17:27:49.790 -07:00 [INF] Now listening on: http://localhost:60949
+2026-04-10 17:27:49.792 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-10 17:27:49.792 -07:00 [INF] Hosting environment: Development
+2026-04-10 17:27:49.792 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-10 17:28:04.356 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], B1.BORR_LAST AS [borrower_last], EMPOWER.LN_NOTEPAD.DESCRIPTION AS [notepad_item]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+INNER JOIN EMPOWER.LN_BORRINFO AS B1 ON EMPOWER.LN_MTGTERMS.LNKEY = B1.LNKEY AND B1.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_NOTEPAD ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_NOTEPAD.LNKEY AND EMPOWER.LN_NOTEPAD.IDX=(SELECT MAX(IDX) FROM EMPOWER.LN_NOTEPAD NP2 WHERE NP2.LNKEY=EMPOWER.LN_NOTEPAD.LNKEY)
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Cleared, @filter_0_1=Docs In, @filter_0_2=Docs Out, @filter_0_3=Docs Rev, @filter_0_4=In Proc, @filter_0_5=Pending Cancel, @filter_0_6=Pre-Docs, @_offset=0, @_pageSize=50000
+2026-04-10 17:28:04.397 -07:00 [INF] Query executed: Fields=[loan_number, loan_purpose, loan_plan_name, milestone, loan_amount, borrower_last, notepad_item], RowCount=35, Duration=77ms
+2026-04-10 17:29:28.802 -07:00 [INF] Application is shutting down...

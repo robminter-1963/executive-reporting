@@ -1,0 +1,29 @@
+﻿@inject IConfiguration Configuration
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    @{
+        var pathBase = Configuration["PATH_BASE"];
+        var baseHref = string.IsNullOrEmpty(pathBase) ? "/" : $"{pathBase.TrimEnd('/')}/";
+    }
+    <base href="@baseHref" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="css/print.css" media="print" />
+    <link rel="icon" type="image/x-icon" href="favicon.ico" />
+    @* Disable prerender globally so pages render once (via SignalR) instead of twice
+       (static prerender → interactive rehydrate). Eliminates the startup flicker at the
+       cost of a brief blank while the SignalR circuit connects. *@
+    <HeadOutlet @rendermode="@(new InteractiveServerRenderMode(prerender: false))" />
+</head>
+<body>
+    <Routes @rendermode="@(new InteractiveServerRenderMode(prerender: false))" />
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <script src="js/export.js"></script>
+    <script src="js/fill-viewport.js"></script>
+    <script src="js/mud-sort.js"></script>
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>

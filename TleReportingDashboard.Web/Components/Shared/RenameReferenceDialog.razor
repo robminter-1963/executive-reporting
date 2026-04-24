@@ -1,0 +1,227 @@
+@using TleReportingDashboard.Web.Components.Pages
+
+@* Bulk rename utility for the Schema Builder. Takes an Old string and a
+   New string, scans every SQL-bearing field in the loaded schema
+   (Fields, Joins, Lookups, Custom Filters), and previews matches before
+   committing. The dialog does NOT mutate — it returns the (Old, New)
+   pair on Apply and the parent performs the rename + save. *@
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.FindReplace" />
+            <MudText Typo="Typo.h6">Rename Table Reference</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 720px;">
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                Case-insensitive string replace across every SourceTable, JOIN clause,
+                CTE, SQL expression, and WHERE snippet in the loaded schema. Preview
+                shows each match; nothing is written until you click Apply.
+            </MudText>
+
+            <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
+                <MudTextField @bind-Value="_oldText" Label="Find" Placeholder="EMPOWER.LN_MTGTERMS"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                              Style="flex: 1;" />
+                <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Color="Color.Secondary" />
+                <MudTextField @bind-Value="_newText" Label="Replace with" Placeholder="mt"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                              Style="flex: 1;" />
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Search"
+                           Disabled="@(!CanPreview())"
+                           OnClick="RunPreview">
+                    Preview
+                </MudButton>
+            </MudStack>
+
+            @* Scope toggles — restrict the scan/apply to whichever schema
+               areas the admin wants. Flipping any of these invalidates the
+               last preview so stale matches can't slip through to Apply. *@
+            <MudStack Row Spacing="3" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+                    INCLUDE
+                </MudText>
+                <MudCheckBox T="bool" @bind-Value="_includeFields" @bind-Value:after="InvalidatePreview"
+                             Label="@($"Fields ({Fields.Count})")" Dense Size="Size.Small" />
+                <MudCheckBox T="bool" @bind-Value="_includeJoins" @bind-Value:after="InvalidatePreview"
+                             Label="@($"Joins ({Joins.Count})")" Dense Size="Size.Small" />
+                <MudCheckBox T="bool" @bind-Value="_includeLookups" @bind-Value:after="InvalidatePreview"
+                             Label="@($"Lookups ({Lookups.Count})")" Dense Size="Size.Small" />
+                <MudCheckBox T="bool" @bind-Value="_includeCustomFilters" @bind-Value:after="InvalidatePreview"
+                             Label="@($"Custom Filters ({CustomFilters.Count})")" Dense Size="Size.Small" />
+            </MudStack>
+
+            @if (_previewed)
+            {
+                <MudDivider />
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                    <MudText Typo="Typo.subtitle2">
+                        @(_matches.Count == 0
+                            ? "No matches."
+                            : $"{_matches.Count} match{(_matches.Count == 1 ? "" : "es")} across {_matches.Select(m => m.Scope).Distinct().Count()} scope{(_matches.Select(m => m.Scope).Distinct().Count() == 1 ? "" : "s")}:")
+                    </MudText>
+                </MudStack>
+
+                @if (_matches.Count > 0)
+                {
+                    <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; max-height: 420px; overflow-y: auto;">
+                        <MudTable Items="_matches" Dense Hover Striped Class="pa-0">
+                            <HeaderContent>
+                                <MudTh Style="width: 110px;">Scope</MudTh>
+                                <MudTh Style="width: 180px;">Item</MudTh>
+                                <MudTh Style="width: 140px;">Property</MudTh>
+                                <MudTh>Before → After</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd><strong>@context.Scope</strong></MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.caption" Style="font-family: monospace;">@context.ItemId</MudText>
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.caption">@context.Property</MudText>
+                                </MudTd>
+                                <MudTd>
+                                    <MudStack Spacing="0">
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; color: #B00020;">
+                                            @context.Before
+                                        </MudText>
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; color: #1E8E3E;">
+                                            @context.After
+                                        </MudText>
+                                    </MudStack>
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    </MudPaper>
+                }
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   Disabled="@(!_previewed || _matches.Count == 0)"
+                   OnClick="Apply">
+            Apply @(_matches.Count > 0 ? $"({_matches.Count})" : "")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+
+    [Parameter] public List<SchemaBuilder.FieldEntry> Fields { get; set; } = new();
+    [Parameter] public List<SchemaBuilder.JoinEntry> Joins { get; set; } = new();
+    [Parameter] public List<SchemaBuilder.LookupEntry> Lookups { get; set; } = new();
+    [Parameter] public List<SchemaBuilder.CustomFilterEntry> CustomFilters { get; set; } = new();
+
+    public record RenameMatch(string Scope, string ItemId, string Property, string Before, string After);
+    public record RenameResult(
+        string OldText,
+        string NewText,
+        bool IncludeFields,
+        bool IncludeJoins,
+        bool IncludeLookups,
+        bool IncludeCustomFilters,
+        IReadOnlyList<RenameMatch> Matches);
+
+    private string? _oldText;
+    private string? _newText;
+    private bool _previewed;
+    private List<RenameMatch> _matches = new();
+
+    // Scope toggles — default all on so the initial behavior matches the
+    // "rename everywhere" use case without extra clicks.
+    private bool _includeFields = true;
+    private bool _includeJoins = true;
+    private bool _includeLookups = true;
+    private bool _includeCustomFilters = true;
+
+    private void InvalidatePreview()
+    {
+        _previewed = false;
+        _matches.Clear();
+    }
+
+    // Preview is legal when Find is non-empty, Replace is non-null, and at
+    // least one scope is included — otherwise there's nothing to scan.
+    private bool CanPreview() =>
+        !string.IsNullOrEmpty(_oldText)
+        && _newText is not null
+        && (_includeFields || _includeJoins || _includeLookups || _includeCustomFilters);
+
+    private void RunPreview()
+    {
+        _matches.Clear();
+        _previewed = false;
+        if (!CanPreview()) return;
+
+        var oldText = _oldText!;
+        var newText = _newText!;
+
+        if (_includeFields)
+        {
+            foreach (var f in Fields)
+            {
+                var id = !string.IsNullOrEmpty(f.Id) ? f.Id : f.Label;
+                TryAdd("Field", id, "SourceTable", f.SourceTable, oldText, newText);
+                TryAdd("Field", id, "SqlExpression", f.SqlExpression, oldText, newText);
+                TryAdd("Field", id, "SqlPreamble", f.SqlPreamble, oldText, newText);
+                TryAdd("Field", id, "SqlJoin", f.SqlJoin, oldText, newText);
+            }
+        }
+        if (_includeJoins)
+        {
+            foreach (var j in Joins)
+            {
+                TryAdd("Join", j.Id, "TargetTable", j.TargetTable, oldText, newText);
+                TryAdd("Join", j.Id, "OnClause", j.OnClause, oldText, newText);
+                TryAdd("Join", j.Id, "ExtraCondition", j.ExtraCondition, oldText, newText);
+                TryAdd("Join", j.Id, "RawSql", j.RawSql, oldText, newText);
+            }
+        }
+        if (_includeLookups)
+        {
+            foreach (var l in Lookups)
+            {
+                TryAdd("Lookup", l.Id, "SqlPreamble", l.SqlPreamble, oldText, newText);
+                TryAdd("Lookup", l.Id, "SqlJoin", l.SqlJoin, oldText, newText);
+            }
+        }
+        if (_includeCustomFilters)
+        {
+            foreach (var cf in CustomFilters)
+            {
+                TryAdd("Custom Filter", cf.Id, "SqlPreamble", cf.SqlPreamble, oldText, newText);
+                TryAdd("Custom Filter", cf.Id, "SqlJoin", cf.SqlJoin, oldText, newText);
+                TryAdd("Custom Filter", cf.Id, "SqlCondition", cf.SqlCondition, oldText, newText);
+            }
+        }
+
+        _previewed = true;
+    }
+
+    private void TryAdd(string scope, string itemId, string property, string? value, string oldText, string newText)
+    {
+        if (string.IsNullOrEmpty(value)) return;
+        if (value.IndexOf(oldText, StringComparison.OrdinalIgnoreCase) < 0) return;
+        var after = value.Replace(oldText, newText, StringComparison.OrdinalIgnoreCase);
+        _matches.Add(new RenameMatch(scope, itemId, property, value, after));
+    }
+
+    private void Apply()
+    {
+        MudDialog?.Close(DialogResult.Ok(new RenameResult(
+            _oldText!,
+            _newText ?? string.Empty,
+            _includeFields,
+            _includeJoins,
+            _includeLookups,
+            _includeCustomFilters,
+            _matches.ToList())));
+    }
+
+    private void Cancel() => MudDialog?.Cancel();
+}

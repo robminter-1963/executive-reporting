@@ -1,0 +1,295 @@
+@page "/help"
+@page "/help/{Section}"
+@rendermode InteractiveServer
+@inject NavigationManager Navigation
+
+<PageTitle>Help - Executive Reporting Suite</PageTitle>
+
+<MudMainContent Style="padding: 16px; max-width: 900px; margin: 0 auto;">
+    <MudStack Spacing="3">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="@(() => Navigation.NavigateTo("/"))" title="Back" />
+            <MudText Typo="Typo.h5" Style="font-weight: 600;">Help</MudText>
+        </MudStack>
+
+        @* ── Table of Contents ── *@
+        <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;" Class="mb-2">Contents</MudText>
+            <MudStack Spacing="0">
+                @foreach (var s in _sections)
+                {
+                    var sec = s;
+                    <MudLink Href="@($"/help/{sec.Key}")" Typo="Typo.body2" Style="padding: 4px 0;"
+                             Color="@(sec.Key == (Section ?? _sections[0].Key) ? Color.Primary : Color.Default)">
+                        @sec.Title
+                    </MudLink>
+                }
+            </MudStack>
+        </MudPaper>
+
+        @* ── Content ── *@
+        @{
+            var active = _sections.FirstOrDefault(s => s.Key == (Section ?? _sections[0].Key));
+        }
+        @if (active is not null)
+        {
+            <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudText Typo="Typo.h6" Style="font-weight: 600;" Class="mb-3">@active.Title</MudText>
+                @((MarkupString)active.Html)
+            </MudPaper>
+        }
+    </MudStack>
+</MudMainContent>
+
+@code {
+    [Parameter] public string? Section { get; set; }
+
+    private record HelpSection(string Key, string Title, string Html);
+
+    private readonly List<HelpSection> _sections = new()
+    {
+        new("getting-started", "Getting Started", @"
+<h4>Accessing the Application</h4>
+<ol>
+<li>Open your web browser (Edge, Chrome, or Firefox).</li>
+<li>Navigate to the Executive Reporting Suite URL provided by your administrator.</li>
+<li>You will be signed in automatically using your organization credentials.</li>
+</ol>
+<h4>Navigation</h4>
+<p>The <strong>header bar</strong> at the top of every page shows the Ralis logo on a dark gray background. Click the logo at any time to return home (Master Dashboard). A breadcrumb to the right of the logo shows your current location (e.g., &quot;Report Library&quot;, &quot;Report Editor&quot;).</p>
+<table style='width:100%; border-collapse:collapse; margin:12px 0;'>
+<tr style='background:#F8F9FA;'><th style='text-align:left; padding:8px; border:1px solid #E8EAED;'>Section</th><th style='text-align:left; padding:8px; border:1px solid #E8EAED;'>How to get there</th></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>Master Dashboard</td><td style='padding:8px; border:1px solid #E8EAED;'>Click the Ralis logo in the header bar</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>Report Library (Report Library)</td><td style='padding:8px; border:1px solid #E8EAED;'>Click back arrow from the Master Dashboard</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>Report Builder</td><td style='padding:8px; border:1px solid #E8EAED;'>Click &quot;New Report&quot; or Edit on any report</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>Preferences</td><td style='padding:8px; border:1px solid #E8EAED;'>Click the gear icon in the Report Library toolbar</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>Schema Builder</td><td style='padding:8px; border:1px solid #E8EAED;'>Click the shield (admin) icon in the Report Library toolbar</td></tr>
+</table>"),
+
+        new("master-dashboard", "Master Dashboard", @"
+<p>The Master Dashboard is your home page showing multiple report dashboards as tiles organized into tabs. A loading animation is displayed while tile data is fetched so there is no flash of placeholder content.</p>
+<h4>Viewing</h4>
+<ul>
+<li>Click a <strong>tab</strong> to switch between dashboard groups (e.g., Empower Loans, Leads, Calls). Each tab's layout and edits are preserved when you switch — no need to save before switching.</li>
+<li>Click the <strong>chart icon</strong> on a tile to toggle between table and chart view.</li>
+<li>Click any <strong>row</strong> in a summary table to open detail records in a new tab.</li>
+<li>Click the <strong>Totals</strong> footer to see all records.</li>
+</ul>
+<h4>Tile Appearance</h4>
+<ul>
+<li><strong>Tile header</strong> — Title text is bold. In edit mode, left/center/right alignment buttons appear in the header so you can set each tile's title alignment independently. The header area has a white background.</li>
+<li><strong>Grid header row</strong> — Column headers inside each tile are shown in dodger blue with white text.</li>
+<li><strong>Tile shadow</strong> — Each tile has a subtle box-shadow on the bottom-right for depth.</li>
+<li><strong>Cell truncation</strong> — Long cell values are cut with an ellipsis. Hover over any truncated cell to see a tooltip with the full text.</li>
+<li><strong>Row hover</strong> — Data rows highlight with a darker shade on hover.</li>
+<li><strong>Numeric columns</strong> — Columns containing numeric data are automatically right-aligned.</li>
+</ul>
+<h4>Editing the Layout</h4>
+<ol>
+<li>Click <strong>Edit Layout</strong> to enter edit mode.</li>
+<li><strong>Add Report</strong> — Click to add a report tile (must have &quot;Show on Master Dashboard&quot; enabled).</li>
+<li><strong>Add Tab</strong> — Create a new tab for organizing dashboards.</li>
+<li><strong>Resize</strong> — Drag the blue triangle at the bottom-right of a tile.</li>
+<li><strong>Reorder tiles</strong> — In edit mode a drag-indicator icon appears in each tile header. Grab the header and drag the tile to a new position. A blue outline highlights the drop target.</li>
+<li><strong>Tile title alignment</strong> — Use the left/center/right buttons in the tile header to set alignment per tile.</li>
+<li><strong>Remove</strong> — Click X on a tile (batched until you save).</li>
+<li><strong>Rename</strong> — Double-click the dashboard title or a tab name.</li>
+<li><strong>Logo</strong> — Click the image icon to upload a logo.</li>
+<li>Click <strong>Save Layout</strong> to persist all changes.</li>
+</ol>
+<p><strong>Note:</strong> Layout edits (alignment changes, resizes, reorders, and removals) are preserved when switching between tabs. You do not need to save before switching to another tab.</p>"),
+
+        new("report-library", "Report Library", @"
+<p>The <strong>Report Library</strong> shows all your reports organized into three tabs. Reports within each tab are sorted alphabetically by name.</p>
+<ul>
+<li><strong>My Reports</strong> — Reports you created.</li>
+<li><strong>Shared With Me</strong> — Reports shared by others.</li>
+<li><strong>Templates</strong> — Pre-built templates available to all.</li>
+</ul>
+<h4>Toolbar Icons</h4>
+<p>The top-right toolbar contains:</p>
+<ul>
+<li><strong>Shield (admin) icon</strong> — Opens the Schema Builder (administrators only).</li>
+<li><strong>Grid icon</strong> — Opens Grid Templates.</li>
+<li><strong>Gear icon</strong> — Opens User Preferences.</li>
+<li><strong>+ New Report</strong> — Creates a new blank report.</li>
+</ul>
+<h4>Actions on each report</h4>
+<table style='width:100%; border-collapse:collapse; margin:12px 0;'>
+<tr style='background:#F8F9FA;'><th style='padding:8px; border:1px solid #E8EAED;'>Icon</th><th style='padding:8px; border:1px solid #E8EAED;'>Action</th></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>&#9654;</td><td style='padding:8px; border:1px solid #E8EAED;'>Run — Open in viewer (read-only)</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>&#9998;</td><td style='padding:8px; border:1px solid #E8EAED;'>Edit — Open in the builder</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>&#10064;</td><td style='padding:8px; border:1px solid #E8EAED;'>Clone — Create a copy</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>&#8599;</td><td style='padding:8px; border:1px solid #E8EAED;'>Share — Share with other users</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>&#128465;</td><td style='padding:8px; border:1px solid #E8EAED;'>Delete — Remove the report</td></tr>
+</table>"),
+
+        new("building-reports", "Building a Report", @"
+<h4>From Scratch</h4>
+<ol>
+<li>Go to the Report Library and click <strong>+ New Report</strong>.</li>
+<li>In the <strong>Field Picker</strong> (left sidebar), click fields to add them to the report.</li>
+<li>Click <strong>Run Query</strong> to see the data.</li>
+<li>Optionally set filters in the filter bar above the field chips.</li>
+<li>Click <strong>Save</strong> and enter a name.</li>
+</ol>
+<h4>From a Grid Template</h4>
+<ol>
+<li>Click <strong>+ New Report</strong>.</li>
+<li>Click the <strong>Template</strong> button in the toolbar.</li>
+<li>Select a template and click <strong>Apply</strong>.</li>
+<li>Click <strong>Run Query</strong> to see data with the template's fields and layout.</li>
+<li>Click <strong>Save</strong>.</li>
+</ol>
+<h4>Template-Linked Reports: Locked Fields</h4>
+<p>When a report is linked to a template, the Field Picker works differently:</p>
+<ul>
+<li>Only the template's fields are shown — you cannot add or remove fields.</li>
+<li>Each field has an <strong>eye icon</strong> (show/hide) instead of a checkbox. Use it to control whether the column is visible in the grid.</li>
+<li>An amber banner reads: <em>&quot;Fields locked to template [name]. Use the eye icon to show or hide columns.&quot;</em></li>
+<li>The template owns the column order and default sort. The report can only customize column visibility.</li>
+</ul>
+<h4>Unlinking a Template</h4>
+<p>Click the <strong>unlink icon</strong> (chain-break) next to the template name in the toolbar. The report keeps its current fields but becomes independent — you can then add, remove, and reorder columns freely.</p>"),
+
+        new("table-view", "Table View", @"
+<h4>Sorting</h4>
+<p>Click any <strong>column header</strong> to sort ascending/descending. Use the <strong>Default Sort</strong> dropdown above the grid to set a persistent sort that saves with the report.</p>
+<h4>Resizing Columns</h4>
+<p>Hover over the <strong>right edge</strong> of a column header until the resize cursor appears. Click and drag to resize.</p>
+<h4>Reordering Columns</h4>
+<ol>
+<li>Click the <strong>Reorder</strong> button above the grid.</li>
+<li>Drag column chips to reorder.</li>
+<li>Click Reorder again to hide the bar.</li>
+</ol>
+<h4>Hiding Columns</h4>
+<ol>
+<li>Click the <strong>Columns</strong> button (grid icon) above the grid.</li>
+<li>Uncheck columns to hide them.</li>
+<li>Hidden columns stay in the query (available for dashboard Group By).</li>
+</ol>"),
+
+        new("chart-view", "Chart View", @"
+<ol>
+<li>Click the <strong>Chart</strong> tab after running a query.</li>
+<li>Choose a chart type: <strong>Bar</strong>, <strong>Line</strong>, or <strong>Pie</strong>.</li>
+<li>Select an <strong>X-Axis</strong> field (dimension like Status, State).</li>
+<li>Select a <strong>Y-Axis</strong> field (numeric like Loan Amount).</li>
+<li>The chart renders automatically.</li>
+</ol>
+<p>Fields with custom sort orders (like Loan Status) will sort the chart in that order.</p>"),
+
+        new("dashboard-view", "Dashboard View", @"
+<h4>Setting Up</h4>
+<ol>
+<li>Click the <strong>Dashboard</strong> tab after running a query.</li>
+<li>Select a <strong>Group By</strong> field (e.g., Status, State, Agent Team).</li>
+<li>Select a <strong>Primary Measure</strong> (e.g., Loan Amount) and <strong>Aggregation</strong> (Sum, Avg, Count, etc.).</li>
+<li>Optionally add <strong>extra measures</strong> via the + Measure button.</li>
+<li>Choose a <strong>Chart</strong> type (Bar, Pie, Line, or None).</li>
+</ol>
+<h4>Customizing</h4>
+<ul>
+<li><strong>Rename headers</strong> — Double-click a column header.</li>
+<li><strong>Reorder columns</strong> — Drag chips in the Columns bar.</li>
+<li><strong>Toggle % of Total</strong> — Switch on/off.</li>
+<li><strong>Toggle Summary Cards</strong> — Show/hide KPI cards.</li>
+<li><strong>Default Sort</strong> — Set sort column and direction.</li>
+</ul>
+<h4>Group By fields not in the report</h4>
+<p>The Group By dropdown shows ALL available fields. Selecting one not in the report adds it to the query automatically but keeps it hidden from the detail grid.</p>
+<h4>Master Dashboard</h4>
+<p>Check <strong>Show on Master Dashboard</strong> to make the report available for the Master Dashboard.</p>"),
+
+        new("custom-filters", "Custom Filters", @"
+<p>Custom filters are pre-defined query conditions set up by your administrator.</p>
+<ol>
+<li>Look for <strong>Custom Filters:</strong> below the filter bar in the Report Builder.</li>
+<li><strong>Click a chip</strong> to toggle it on (filled blue = active).</li>
+<li>Click again to toggle off.</li>
+<li>Click <strong>Run Query</strong> to apply.</li>
+</ol>
+<p>Active filter IDs are saved with the report and apply in the viewer and master dashboard.</p>"),
+
+        new("exporting", "Exporting Data", @"
+<h4>From the Report Builder or Viewer</h4>
+<ol>
+<li>Click the <strong>Export</strong> dropdown in the toolbar.</li>
+<li>Choose <strong>Excel (.xlsx)</strong> or <strong>CSV</strong>.</li>
+<li>The file downloads to your browser's download folder.</li>
+</ol>
+<h4>From the Detail View</h4>
+<p>The detail view (opened from a dashboard drill-down) has its own Export buttons.</p>
+<p><strong>Note:</strong> Only visible columns are exported. Hidden columns are excluded.</p>"),
+
+        new("grid-templates", "Grid Templates", @"
+<p>Grid templates define reusable field selections and layouts. Linked reports inherit the template's settings.</p>
+<h4>What the Template Controls</h4>
+<p>When a report is linked to a template, the template owns:</p>
+<ul>
+<li><strong>Column order</strong> — The template's field order is applied to all linked reports.</li>
+<li><strong>Default sort</strong> — The template's default sort field and direction are used.</li>
+<li><strong>Field list</strong> — Only the template's fields are available; reports cannot add or remove fields.</li>
+</ul>
+<p>The linked report can only customize <strong>column visibility</strong> (show/hide per column using the eye icon). Updating the template automatically updates all linked reports the next time they load.</p>
+<h4>Creating a Template</h4>
+<ol>
+<li>Go to the Report Library → click the <strong>Grid Templates</strong> icon.</li>
+<li>Click <strong>New Template</strong>.</li>
+<li>Enter a name and description.</li>
+<li>Click field chips to select fields. Use the search bar to filter.</li>
+<li>Use up/down arrows to reorder columns.</li>
+<li>Click the eye icon to hide columns from the grid.</li>
+<li>Set a default sort field and direction.</li>
+<li>Check <strong>Share with all users</strong> if desired.</li>
+<li>Click <strong>Save Template</strong>.</li>
+</ol>
+<h4>Linking to a Report</h4>
+<ol>
+<li>Open a report in the builder.</li>
+<li>Click the <strong>Template</strong> button.</li>
+<li>Select a template and click <strong>Apply</strong>.</li>
+<li>Save the report. The link is persisted.</li>
+</ol>"),
+
+        new("viewer", "Running Reports (Viewer)", @"
+<p>The Viewer is a read-only mode for running saved reports.</p>
+<ol>
+<li>Click the <strong>Play</strong> icon on a report in the Report Library.</li>
+<li>The report runs and displays Table, Chart, and Dashboard tabs.</li>
+<li>Click <strong>Refresh</strong> to re-run with latest data.</li>
+<li>Click <strong>Edit</strong> to open in the builder.</li>
+</ol>
+<h4>Dashboard Drill-Down</h4>
+<p>In the Viewer's Dashboard tab, clicking a row opens a <strong>new browser tab</strong> with the filtered detail records.</p>"),
+
+        new("preferences", "User Preferences", @"
+<ol>
+<li>Go to the Report Library → click the <strong>gear icon</strong>.</li>
+<li><strong>Theme</strong> — Toggle between Light and Dark mode. Takes effect immediately.</li>
+<li><strong>Default Page Size</strong> — Choose rows per page for all grids (25, 50, 100, 250, 500).</li>
+<li>Click <strong>Save Preferences</strong> to save and return to the Report Library.</li>
+<li>Click <strong>Cancel</strong> to discard changes and return to the Report Library.</li>
+</ol>"),
+
+        new("tips", "Tips and Shortcuts", @"
+<h4>Quick Actions</h4>
+<ul>
+<li><strong>Double-click</strong> a report name to rename it.</li>
+<li><strong>Double-click</strong> a dashboard column header to edit its label.</li>
+<li><strong>Double-click</strong> a tab name on the master dashboard to rename it.</li>
+<li>Click the <strong>Ralis logo</strong> to return to the Master Dashboard.</li>
+<li>Click the <strong>shield icon</strong> in the Report Library toolbar to open the Schema Builder (admin only).</li>
+</ul>
+<h4>Notifications</h4>
+<p>Status and confirmation messages (snackbars) appear in the <strong>bottom-right</strong> corner of the screen.</p>
+<h4>Performance Tips</h4>
+<ul>
+<li>Use <strong>filters</strong> to narrow large datasets.</li>
+<li>Custom filters with CTEs may take longer on large datasets.</li>
+<li>The master dashboard loads all tiles in parallel — many large tiles may take a moment.</li>
+</ul>")
+    };
+}

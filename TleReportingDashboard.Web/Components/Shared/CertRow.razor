@@ -1,0 +1,59 @@
+@using Microsoft.AspNetCore.Components.Forms
+@using MudBlazor
+
+@* One labelled row in the Postgres cert editor. Keeps the label separate
+   from the file-picker button so each upload is visually distinct from
+   the others on the same form. *@
+
+<MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="3" Wrap="Wrap.NoWrap">
+        <MudStack Spacing="0" Style="min-width: 220px;">
+            <MudText Typo="Typo.body2" Style="font-weight: 600;">@Label</MudText>
+            @if (!string.IsNullOrWhiteSpace(Description))
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@Description</MudText>
+            }
+        </MudStack>
+
+        <MudChip T="string" Size="Size.Small"
+                 Variant="Variant.Outlined"
+                 Color="@(Bytes is null ? Color.Default : Color.Success)"
+                 Icon="@(Bytes is null ? Icons.Material.Filled.DoNotDisturb : Icons.Material.Filled.CheckCircle)">
+            @(Bytes is null ? "not set" : $"{Bytes.Length:N0} bytes loaded")
+        </MudChip>
+
+        <MudSpacer />
+
+        <MudFileUpload T="IBrowserFile" Accept="@Accept" FilesChanged="OnFileChanged">
+            <ActivatorContent>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.UploadFile">
+                    Choose file…
+                </MudButton>
+            </ActivatorContent>
+        </MudFileUpload>
+
+        @if (Bytes is not null)
+        {
+            <MudTooltip Text="Clear">
+                <MudIconButton Icon="@Icons.Material.Filled.Clear" Size="Size.Small"
+                               Color="Color.Error" OnClick="OnClearClicked" />
+            </MudTooltip>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public string? Accept { get; set; }
+    [Parameter] public byte[]? Bytes { get; set; }
+    [Parameter] public bool Sensitive { get; set; }
+    [Parameter] public EventCallback<IBrowserFile> OnUploaded { get; set; }
+    [Parameter] public EventCallback OnCleared { get; set; }
+
+    private Task OnFileChanged(IBrowserFile? file) =>
+        file is null ? Task.CompletedTask : OnUploaded.InvokeAsync(file);
+
+    private Task OnClearClicked() => OnCleared.InvokeAsync();
+}

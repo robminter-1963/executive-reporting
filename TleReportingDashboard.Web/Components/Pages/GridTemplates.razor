@@ -1,0 +1,244 @@
+@page "/grid-templates"
+@rendermode InteractiveServer
+@inject IGridTemplateService TemplateService
+@inject ISchemaService SchemaService
+@inject IAdminService AdminService
+@inject ICompanyConnectionAdminService ConnectionAdminSvc
+@inject ICompanyRegistry CompanyRegistry
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Grid Templates - Executive Reporting Suite</PageTitle>
+
+@if (_accessDenied)
+{
+    <MudMainContent Style="padding: 16px;">
+        <MudAlert Severity="Severity.Warning">
+            Grid Templates are an admin-only area. Redirecting to the Report Library…
+        </MudAlert>
+    </MudMainContent>
+    return;
+}
+
+<MudMainContent Style="padding: 16px;">
+    <MudStack Spacing="3">
+        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                               OnClick="@(() => Navigation.NavigateTo("/reports"))"
+                               title="Back to Reports" />
+                <MudText Typo="Typo.h5" Style="font-weight: 600;">Grid Templates</MudText>
+                <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
+                         Icon="@Icons.Material.Filled.Shield"
+                         Style="font-size: 0.65rem; height: 22px;">
+                    ADMIN
+                </MudChip>
+            </MudStack>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Add" OnClick="CreateTemplate">
+                New Template
+            </MudButton>
+        </MudStack>
+
+        <MudText Typo="Typo.body2" Color="Color.Secondary">
+            Create reusable grid configurations with pre-selected fields, column order, widths, and visibility.
+            Apply them to new reports instead of building from scratch.
+        </MudText>
+
+        @if (_loading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+        else if (_templates.Any())
+        {
+            <MudTable Items="_templates" Hover Striped Dense>
+                <HeaderContent>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Connection</MudTh>
+                    <MudTh>Description</MudTh>
+                    <MudTh>Fields</MudTh>
+                    <MudTh>Shared</MudTh>
+                    <MudTh>Owner</MudTh>
+                    <MudTh>Updated</MudTh>
+                    <MudTh Style="text-align: right;">Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Name">
+                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Connection">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Description">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.Description ?? "—")</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Fields">
+                        <MudText Typo="Typo.body2">@GetFieldCount(context) fields</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Shared">
+                        @if (context.IsShared)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Color="Color.Success" />
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Owner">
+                        <MudText Typo="Typo.caption">@context.OwnerEmail</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Updated">
+                        <MudText Typo="Typo.caption">@context.UpdatedAt.ToString("MMM dd, yyyy")</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Actions" Style="text-align: right;">
+                        <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                           Color="Color.Primary"
+                                           OnClick="() => EditTemplate(context)"
+                                           Disabled="@(context.OwnerId != _userId)" title="Edit" />
+                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                                           Color="Color.Default"
+                                           OnClick="() => CloneTemplate(context)" title="Clone" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                           Color="Color.Error"
+                                           OnClick="() => DeleteTemplate(context)"
+                                           Disabled="@(context.OwnerId != _userId)" title="Delete" />
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+        else
+        {
+            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                      Style="border: 1px dashed #DADCE0; min-height: 200px;">
+                <MudIcon Icon="@Icons.Material.Filled.GridView" Size="Size.Large" Color="Color.Default" />
+                <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                    No grid templates yet. Create one to reuse across reports.
+                </MudText>
+            </MudPaper>
+        }
+    </MudStack>
+</MudMainContent>
+
+@code {
+    private string _userId = "anonymous";
+    private string _userEmail = string.Empty;
+    private bool _loading = true;
+    private bool _accessDenied;
+    private List<GridTemplate> _templates = new();
+    private Dictionary<Guid, string> _connectionNames = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _userId = user.FindFirst("oid")?.Value ?? user.Identity?.Name ?? "anonymous";
+        _userEmail = user.FindFirst("preferred_username")?.Value ?? string.Empty;
+
+        if (!AdminService.IsAdmin(_userEmail))
+        {
+            _accessDenied = true;
+            // Bounce non-admins back to the Report Library after a brief pause
+            // so they see the warning banner.
+            _ = Task.Delay(1500).ContinueWith(_ =>
+                InvokeAsync(() => Navigation.NavigateTo("/reports")));
+            return;
+        }
+
+        // Connection name lookup for the table. Built across every active
+        // company so templates belonging to any connection can be labeled
+        // correctly — the hardcoded "TLE only" load was leaving templates
+        // on other companies' connections rendering as raw IDs.
+        try
+        {
+            _connectionNames = new();
+            foreach (var comp in await CompanyRegistry.GetActiveAsync())
+            {
+                var conns = await ConnectionAdminSvc.GetByCompanyAsync(comp.Id);
+                foreach (var c in conns)
+                    _connectionNames[c.Id] = c.Name;
+            }
+        }
+        catch { /* non-fatal — column shows id/"—" instead */ }
+
+        await LoadTemplates();
+    }
+
+    private async Task LoadTemplates()
+    {
+        _loading = true;
+        try
+        {
+            _templates = await TemplateService.GetTemplatesAsync(_userId);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load templates: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private string GetConnectionName(Guid? connectionId) =>
+        connectionId.HasValue && _connectionNames.TryGetValue(connectionId.Value, out var name)
+            ? name
+            : "—";
+
+    private int GetFieldCount(GridTemplate t)
+    {
+        try
+        {
+            var ids = System.Text.Json.JsonSerializer.Deserialize<List<string>>(t.FieldIds);
+            return ids?.Count ?? 0;
+        }
+        catch { return 0; }
+    }
+
+    private void CreateTemplate()
+    {
+        Navigation.NavigateTo("/grid-templates/new");
+    }
+
+    private void EditTemplate(GridTemplate t)
+    {
+        Navigation.NavigateTo($"/grid-templates/{t.Id}");
+    }
+
+    private async Task CloneTemplate(GridTemplate source)
+    {
+        try
+        {
+            var cloned = new GridTemplate
+            {
+                Name = $"{source.Name} (Copy)",
+                Description = source.Description,
+                OwnerId = _userId,
+                OwnerEmail = _userEmail,
+                FieldIds = source.FieldIds,
+                ColumnState = source.ColumnState,
+                ConnectionId = source.ConnectionId
+            };
+            await TemplateService.SaveTemplateAsync(cloned);
+            await LoadTemplates();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Clone failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DeleteTemplate(GridTemplate t)
+    {
+        try
+        {
+            await TemplateService.DeleteTemplateAsync(t.Id, _userId);
+            _templates.Remove(t);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+        }
+    }
+}

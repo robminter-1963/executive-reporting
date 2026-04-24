@@ -1,0 +1,1820 @@
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+
+@if (Data is not null && Data.Columns.Any())
+{
+    <MudStack Spacing="@(Compact ? 0 : 3)" Style="@(Compact ? "gap: 0 !important; height: 100%;" : "")">
+        @* ── Config bar (edit mode only) ── *@
+        @if (!ReadOnly)
+        {
+        <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                <MudSelect T="string" Value="_groupByField" ValueChanged="OnGroupByChanged"
+                           Label="Group By" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Dense Style="max-width: 200px;">
+                    <MudSelectItem T="string" Value="@("")">-- None --</MudSelectItem>
+                    @foreach (var col in DimensionColumns)
+                    {
+                        <MudSelectItem T="string" Value="@col.FieldId">@col.Label</MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudSelect T="string" @bind-Value="_aggregation" @bind-Value:after="OnAggregationChanged"
+                           Label="Aggregation" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Dense Style="max-width: 140px;">
+                    <MudSelectItem T="string" Value="@("SUM")">Sum</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("AVG")">Average</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("COUNT")">Count</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("MAX")">Max</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("MIN")">Min</MudSelectItem>
+                </MudSelect>
+
+                <MudMenu Icon="@Icons.Material.Filled.AddCircleOutline" Variant="Variant.Text"
+                         Color="Color.Primary" Dense Size="Size.Small" Label="+ Measure"
+                         AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+                    @foreach (var col in AvailableExtraMeasures)
+                    {
+                        var fid = col.FieldId;
+                        <MudMenuItem OnClick="() => AddExtraMeasure(fid)">@col.Label</MudMenuItem>
+                    }
+                </MudMenu>
+
+                @* Each added dimension extends the GROUP BY: rows become one per
+                   distinct combination of (primary group-by, extra dimensions). *@
+                <MudMenu Icon="@Icons.Material.Filled.AddCircleOutline" Variant="Variant.Text"
+                         Color="Color.Secondary" Dense Size="Size.Small" Label="+ Dimension"
+                         AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+                    @foreach (var col in AvailableExtraDimensions)
+                    {
+                        var fid = col.FieldId;
+                        <MudMenuItem OnClick="() => AddExtraDimension(fid)">@col.Label</MudMenuItem>
+                    }
+                </MudMenu>
+
+                <MudSelect T="string" @bind-Value="_chartTypeStr" @bind-Value:after="BuildSummary"
+                           Label="Chart" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           Style="max-width: 120px;">
+                    <MudSelectItem T="string" Value="@("")">None</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Bar")">Bar</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Pie")">Pie</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Line")">Line</MudSelectItem>
+                </MudSelect>
+
+                <MudSwitch T="bool" @bind-Value="_showPercentColumn" @bind-Value:after="OnPercentToggled"
+                           Label="% of Total" Color="Color.Primary" Size="Size.Small"
+                           Style="margin: 0 4px;" />
+                <MudSwitch T="bool" @bind-Value="_showKpiCards"
+                           Label="Summary Cards" Color="Color.Primary" Size="Size.Small"
+                           Style="margin: 0 4px;" />
+
+                <MudSelect T="string" @bind-Value="_defaultSortColumn" @bind-Value:after="BuildSummary"
+                           Label="Default Sort" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           Style="max-width: 180px;">
+                    <MudSelectItem T="string" Value="@("")">-- None --</MudSelectItem>
+                    @foreach (var col in _dashColumnOrder)
+                    {
+                        <MudSelectItem T="string" Value="@col">@GetDashColumnLabel(col)</MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudSelect T="string" @bind-Value="_defaultSortDir" @bind-Value:after="BuildSummary"
+                           Label="Direction" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           Style="max-width: 110px;"
+                           Disabled="@(string.IsNullOrEmpty(_defaultSortColumn))">
+                    <MudSelectItem T="string" Value="@("asc")">Asc</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("desc")">Desc</MudSelectItem>
+                </MudSelect>
+
+            </MudStack>
+
+            @if (_extraColumns.Any())
+            {
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap" Class="mt-2">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Extra measures:</MudText>
+                    @foreach (var ec in _extraColumns)
+                    {
+                        var ecRef = ec;
+                        <MudChip T="string" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                 OnClose="() => RemoveExtraColumn(ecRef.Key)">
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                <span>@GetFieldLabel(ecRef.FieldId)</span>
+                                <MudSelect T="string" Value="ecRef.Aggregation"
+                                           ValueChanged="@(v => ChangeExtraAggregation(ecRef, v))"
+                                           Variant="Variant.Text" Margin="Margin.Dense" Dense
+                                           Style="min-width: 90px; max-width: 110px; font-size: 0.75rem; margin: -4px 0;">
+                                    <MudSelectItem T="string" Value="@("SUM")">Sum</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("AVG")">Avg</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("COUNT")">Count</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("MAX")">Max</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("MIN")">Min</MudSelectItem>
+                                </MudSelect>
+                            </MudStack>
+                        </MudChip>
+                    }
+                </MudStack>
+            }
+
+            @if (_extraDimensions.Any())
+            {
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap" Class="mt-2">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Extra dimensions:</MudText>
+                    @foreach (var fid in _extraDimensions)
+                    {
+                        var fidRef = fid;
+                        <MudChip T="string" Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
+                                 OnClose="() => RemoveExtraDimension(fidRef)">
+                            @GetFieldLabel(fidRef)
+                        </MudChip>
+                    }
+                </MudStack>
+            }
+
+            <MudStack Row AlignItems="AlignItems.Center" Class="mt-2">
+                <MudCheckBox T="bool" @bind-Value="_showOnMaster" Color="Color.Primary" Dense
+                             Label="Show on Master Dashboard" />
+            </MudStack>
+        </MudPaper>
+        }
+
+        @* ── KPI Cards ── *@
+        @if (_summaryData.Any())
+        {
+            @if (_showKpiCards)
+            {
+            <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #E8EAED; border-radius: 4px; min-width: 110px;">
+                    <MudStack Spacing="0">
+                        <KpiLabel Key="kpi_total" DefaultLabel="@($"Total {_aggregation}")"
+                                  CustomLabels="_customLabels" ReadOnly="ReadOnly" OnChanged="StateHasChanged" />
+                        <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@FormatNumber(_grandTotal)</MudText>
+                    </MudStack>
+                </MudPaper>
+                <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #E8EAED; border-radius: 4px; min-width: 110px;">
+                    <MudStack Spacing="0">
+                        <KpiLabel Key="kpi_rowcount" DefaultLabel="Row Count"
+                                  CustomLabels="_customLabels" ReadOnly="ReadOnly" OnChanged="StateHasChanged" />
+                        <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@Data.Rows.Count.ToString("N0")</MudText>
+                    </MudStack>
+                </MudPaper>
+                @if (!string.IsNullOrEmpty(_groupByField))
+                {
+                    <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #E8EAED; border-radius: 4px; min-width: 110px;">
+                        <MudStack Spacing="0">
+                            <KpiLabel Key="kpi_groups" DefaultLabel="Groups"
+                                      CustomLabels="_customLabels" ReadOnly="ReadOnly" OnChanged="StateHasChanged" />
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@_summaryData.Count.ToString("N0")</MudText>
+                        </MudStack>
+                    </MudPaper>
+                    <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #E8EAED; border-radius: 4px; min-width: 110px;">
+                        <MudStack Spacing="0">
+                            <KpiLabel Key="kpi_avg" DefaultLabel="Avg per Group"
+                                      CustomLabels="_customLabels" ReadOnly="ReadOnly" OnChanged="StateHasChanged" />
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@FormatNumber(_grandTotal / Math.Max(1, _summaryData.Count))</MudText>
+                        </MudStack>
+                    </MudPaper>
+                }
+            </MudStack>
+            }
+        }
+
+        @* ── Chart + Summary Table side by side ── *@
+        @if (!string.IsNullOrEmpty(_groupByField))
+        {
+                <MudGrid Spacing="@(Compact ? 0 : 3)" Style="@(Compact ? "flex: 1; min-height: 0; display: flex; flex-direction: column;" : "")">
+                    @if (ShowChart && Compact)
+                    {
+                        @* Compact mode: chart takes full space, table is hidden *@
+                        <MudItem xs="12" Style="padding: 4px !important; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                            <MudChart T="double" ChartType="_chartType" ChartSeries="_chartSeries"
+                                      ChartLabels="_chartLabels"
+                                      Width="100%" Height="@(GridHeight ?? "350px")" />
+                        </MudItem>
+                    }
+                    else if (ShowChart)
+                    {
+                        @* Normal mode: chart and table side by side *@
+                        <MudItem xs="12" md="6">
+                            <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px; height: 100%;">
+                                <MudChart T="double" ChartType="_chartType" ChartSeries="_chartSeries"
+                                          ChartLabels="_chartLabels"
+                                          Width="100%" Height="350px" />
+                            </MudPaper>
+                        </MudItem>
+                    }
+                    @if (!(ShowChart && Compact))
+                    {
+                    <MudItem xs="12" md="@(ShowChart ? 6 : 12)" Style="@(Compact ? "padding: 0 !important; flex: 1; min-height: 0; display: flex; flex-direction: column;" : "")">
+                        <MudPaper Elevation="0" Style="@(Compact ? "border-radius: 0; flex: 1; min-height: 0; display: flex; flex-direction: column;" : "border: 1px solid #E8EAED; border-radius: 4px;")">
+                            @if (!ReadOnly)
+                            {
+                                @* Reorder bar *@
+                                <div style="display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; align-items: center; border-bottom: 1px solid #E8EAED;">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-right: 4px;">Columns:</MudText>
+                                    @for (var ci = 0; ci < _dashColumnOrder.Count; ci++)
+                                    {
+                                        var idx = ci;
+                                        var dcol = _dashColumnOrder[ci];
+                                        <div style="@(_dashDragSource == idx ? "opacity: 0.3;" : "") position: relative;"
+                                             draggable="true"
+                                             @ondragstart="() => _dashDragSource = idx"
+                                             @ondragend="() => { _dashDragSource = -1; _dashDropTarget = -1; }"
+                                             @ondragover:preventDefault
+                                             @ondragover="() => { if (_dashDragSource >= 0 && idx != _dashDragSource) _dashDropTarget = idx; }"
+                                             @ondrop="() => DashColumnDrop(idx)">
+                                            @if (_dashDropTarget == idx && _dashDragSource != idx)
+                                            {
+                                                <div style="position: absolute; left: -2px; top: 2px; bottom: 2px; width: 3px; background: #1A73E8; border-radius: 2px; z-index: 10;"></div>
+                                            }
+                                            <MudChip T="string" Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                                                     Style="cursor: grab; font-size: 0.7rem;">
+                                                @GetDashColumnLabel(dcol)
+                                            </MudChip>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            @* Native HTML <table> — header / body / footer share the same
+                               column layout so totals align naturally. Scroll is on the
+                               wrapper via overflow-y: auto; header + footer stay fixed
+                               via position: sticky. Compact mode uses the flex chain
+                               (min-height: 0 on each ancestor makes it actually work);
+                               non-Compact caps at GridHeight. scrollbar-gutter keeps the
+                               gutter reserved so the table doesn't reflow when vertical
+                               scroll appears (which was causing a horizontal scrollbar). *@
+                            <div class="dash-table-wrap"
+                                 style="@(Compact ? "flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable;" : $"max-height: {GridHeight ?? "370px"}; overflow-y: auto; scrollbar-gutter: stable;")">
+                                <table class="dash-summary-table">
+                                    <thead>
+                                        <tr>
+                                            @foreach (var colKey in _dashColumnOrder)
+                                            {
+                                                var ck = colKey;
+                                                @if (ck == "groupBy")
+                                                {
+                                                    var a = GetAlign("groupBy", IsNumericDataType(GetGroupByDataType()) ? "right" : "left");
+                                                    <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                        <span class="dash-th-inner">
+                                                            <EditableHeader Label="@GetLabel("groupBy", GetGroupByLabel())"
+                                                                            OnLabelChanged="@(v => SetLabel("groupBy", v))"
+                                                                            Align="@a"
+                                                                            OnAlignChanged="@(v => SetAlign("groupBy", v))"
+                                                                            ReadOnly="ReadOnly" />
+                                                            @SortIndicator(ck)
+                                                        </span>
+                                                    </th>
+                                                }
+                                                else if (ck == "measure")
+                                                {
+                                                    var a = GetAlign("measure", "right");
+                                                    <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                        <span class="dash-th-inner">
+                                                            <EditableHeader Label="@GetLabel("measure", $"{_aggregation} of {GetMeasureLabel()}")"
+                                                                            OnLabelChanged="@(v => SetLabel("measure", v))"
+                                                                            Align="@a"
+                                                                            OnAlignChanged="@(v => SetAlign("measure", v))"
+                                                                            ReadOnly="ReadOnly" />
+                                                            @SortIndicator(ck)
+                                                        </span>
+                                                    </th>
+                                                }
+                                                else if (ck == "count")
+                                                {
+                                                    var a = GetAlign("count", "right");
+                                                    <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                        <span class="dash-th-inner">
+                                                            <EditableHeader Label="@GetLabel("count", "Count")"
+                                                                            OnLabelChanged="@(v => SetLabel("count", v))"
+                                                                            Align="@a"
+                                                                            OnAlignChanged="@(v => SetAlign("count", v))"
+                                                                            ReadOnly="ReadOnly" />
+                                                            @SortIndicator(ck)
+                                                        </span>
+                                                    </th>
+                                                }
+                                                else if (ck == "pct")
+                                                {
+                                                    var a = GetAlign("pct", "right");
+                                                    <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                        <span class="dash-th-inner">
+                                                            <EditableHeader Label="@GetLabel("pct", "% of Total")"
+                                                                            OnLabelChanged="@(v => SetLabel("pct", v))"
+                                                                            Align="@a"
+                                                                            OnAlignChanged="@(v => SetAlign("pct", v))"
+                                                                            ReadOnly="ReadOnly" />
+                                                            @SortIndicator(ck)
+                                                        </span>
+                                                    </th>
+                                                }
+                                                else if (ck.StartsWith("extra:"))
+                                                {
+                                                    var ecKey = ck[6..];
+                                                    var ec = _extraColumns.FirstOrDefault(e => e.Key == ecKey);
+                                                    if (ec is not null)
+                                                    {
+                                                        var a = GetAlign($"extra_{ec.Key}", "right");
+                                                        var ecRef = ec;
+                                                        <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                            <span class="dash-th-inner">
+                                                                <EditableHeader Label="@GetLabel($"extra_{ecRef.Key}", $"{ecRef.Aggregation} of {GetFieldLabel(ecRef.FieldId)}")"
+                                                                                OnLabelChanged="@(v => SetLabel($"extra_{ecRef.Key}", v))"
+                                                                                Align="@a"
+                                                                                OnAlignChanged="@(v => SetAlign($"extra_{ecRef.Key}", v))"
+                                                                                ReadOnly="ReadOnly" />
+                                                                @SortIndicator(ck)
+                                                                @if (!ReadOnly)
+                                                                {
+                                                                    <span @onclick:stopPropagation="true">
+                                                                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                                                       OnClick="() => RemoveExtraColumn(ecRef.Key)"
+                                                                                       Style="margin-left: 2px;" />
+                                                                    </span>
+                                                                }
+                                                            </span>
+                                                        </th>
+                                                    }
+                                                }
+                                                else if (ck.StartsWith("dim:"))
+                                                {
+                                                    var dimFid = ck[4..];
+                                                    if (_extraDimensions.Contains(dimFid, StringComparer.OrdinalIgnoreCase))
+                                                    {
+                                                        var dimCol = Data?.Columns.FirstOrDefault(c => c.FieldId.Equals(dimFid, StringComparison.OrdinalIgnoreCase));
+                                                        var a = GetAlign($"dim_{dimFid}", IsNumericDataType(dimCol?.DataType ?? "") ? "right" : "left");
+                                                        var dimFidRef = dimFid;
+                                                        <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                            <span class="dash-th-inner">
+                                                                <EditableHeader Label="@GetLabel($"dim_{dimFidRef}", GetFieldLabel(dimFidRef))"
+                                                                                OnLabelChanged="@(v => SetLabel($"dim_{dimFidRef}", v))"
+                                                                                Align="@a"
+                                                                                OnAlignChanged="@(v => SetAlign($"dim_{dimFidRef}", v))"
+                                                                                ReadOnly="ReadOnly" />
+                                                                @SortIndicator(ck)
+                                                                @if (!ReadOnly)
+                                                                {
+                                                                    <span @onclick:stopPropagation="true">
+                                                                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                                                       OnClick="() => RemoveExtraDimension(dimFidRef)"
+                                                                                       Style="margin-left: 2px;" />
+                                                                    </span>
+                                                                }
+                                                            </span>
+                                                        </th>
+                                                    }
+                                                }
+                                            }
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @if (!SortedSummaryRows().Any())
+                                        {
+                                            <tr>
+                                                <td colspan="@_dashColumnOrder.Count" class="dash-empty-cell">
+                                                    <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Class="pa-6" Spacing="1">
+                                                        <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Medium" Color="Color.Default" />
+                                                        <MudText Typo="Typo.body1" Color="Color.Secondary">No Records Found</MudText>
+                                                    </MudStack>
+                                                </td>
+                                            </tr>
+                                        }
+                                        else
+                                        {
+                                            @foreach (var row in SortedSummaryRows())
+                                            {
+                                                var rowRef = row;
+                                                <tr class="dash-body-row @(row.GroupKey == _selectedGroup ? "dash-body-row-selected" : "")"
+                                                    @onclick="@(async () => await OnGroupRowClicked(rowRef.GroupKey))">
+                                                    @foreach (var colKey in _dashColumnOrder)
+                                                    {
+                                                        var ck = colKey;
+                                                        @if (ck == "groupBy")
+                                                        {
+                                                            <td style="@AlignToCss(GetAlign("groupBy", IsNumericDataType(GetGroupByDataType()) ? "right" : "left"))">
+                                                                <span style="font-weight: 500;">@FormatGroupKey(row.GroupKey)</span>
+                                                            </td>
+                                                        }
+                                                        else if (ck == "measure")
+                                                        {
+                                                            <td style="@AlignToCss(GetAlign("measure", "right"))">@FormatNumber(row.Value)</td>
+                                                        }
+                                                        else if (ck == "count")
+                                                        {
+                                                            <td style="@AlignToCss(GetAlign("count", "right"))">@row.Count.ToString("N0")</td>
+                                                        }
+                                                        else if (ck == "pct")
+                                                        {
+                                                            <td style="@AlignToCss(GetAlign("pct", "right"))">
+                                                                <div style="display: flex; flex-direction: column; align-items: stretch; min-width: 80px;">
+                                                                    <span>@row.Percentage.ToString("N1")%</span>
+                                                                    <MudProgressLinear Value="@row.Percentage" Color="Color.Primary"
+                                                                                       Size="Size.Small" Style="height: 4px;" />
+                                                                </div>
+                                                            </td>
+                                                        }
+                                                        else if (ck.StartsWith("extra:"))
+                                                        {
+                                                            var ecKey = ck[6..];
+                                                            var ec = _extraColumns.FirstOrDefault(e => e.Key == ecKey);
+                                                            <td style="@AlignToCss(GetAlign($"extra_{ecKey}", "right"))">@(ec is not null ? FormatExtraValue(row, ec) : "")</td>
+                                                        }
+                                                        else if (ck.StartsWith("dim:"))
+                                                        {
+                                                            var dimFid = ck[4..];
+                                                            <td style="@AlignToCss(GetAlign($"dim_{dimFid}", "left"))">@FormatDimensionValue(row, dimFid)</td>
+                                                        }
+                                                    }
+                                                </tr>
+                                            }
+                                        }
+                                    </tbody>
+                                    @if (_summaryData.Any())
+                                    {
+                                        <tfoot>
+                                            <tr class="dash-footer-row" @onclick="@(async () => await OnGroupRowClicked(TotalsKey))">
+                                                @foreach (var colKey in _dashColumnOrder)
+                                                {
+                                                    var ck = colKey;
+                                                    @if (ck == "groupBy")
+                                                    {
+                                                        <td class="dash-footer-cell" style="@AlignToCss(GetAlign("groupBy", "left"))">Totals</td>
+                                                    }
+                                                    else if (ck == "measure")
+                                                    {
+                                                        var text = RenderTotal("measure", "SUM", r => r.Value, v => FormatNumber(v));
+                                                        <td class="dash-footer-cell" style="@AlignToCss(GetAlign("measure", "right"))">
+                                                            @text
+                                                            @if (!ReadOnly) { <span class="totals-menu-anchor"><TotalsMenu CurrentMethod="@GetTotalMethod("measure", "SUM")" OnMethodChanged="@(m => SetTotalMethod("measure", m))" OnLiteralChanged="@(l => SetTotalLiteral("measure", l))" /></span> }
+                                                        </td>
+                                                    }
+                                                    else if (ck == "count")
+                                                    {
+                                                        var text = RenderTotal("count", "SUM", r => r.Count, v => v.ToString("N0"));
+                                                        <td class="dash-footer-cell" style="@AlignToCss(GetAlign("count", "right"))">
+                                                            @text
+                                                            @if (!ReadOnly) { <span class="totals-menu-anchor"><TotalsMenu CurrentMethod="@GetTotalMethod("count", "SUM")" OnMethodChanged="@(m => SetTotalMethod("count", m))" OnLiteralChanged="@(l => SetTotalLiteral("count", l))" /></span> }
+                                                        </td>
+                                                    }
+                                                    else if (ck == "pct")
+                                                    {
+                                                        var text = RenderTotal("pct", "LITERAL:100.0%", r => r.Percentage, v => v.ToString("N1") + "%");
+                                                        <td class="dash-footer-cell" style="@AlignToCss(GetAlign("pct", "right"))">
+                                                            @text
+                                                            @if (!ReadOnly) { <span class="totals-menu-anchor"><TotalsMenu CurrentMethod="@GetTotalMethod("pct", "LITERAL:100.0%")" OnMethodChanged="@(m => SetTotalMethod("pct", m))" OnLiteralChanged="@(l => SetTotalLiteral("pct", l))" /></span> }
+                                                        </td>
+                                                    }
+                                                    else if (ck.StartsWith("extra:"))
+                                                    {
+                                                        var ecKey = ck[6..];
+                                                        var ec = _extraColumns.FirstOrDefault(e => e.Key == ecKey);
+                                                        var ecKeyLocal = ck;
+                                                        <td class="dash-footer-cell" style="@AlignToCss(GetAlign($"extra_{ecKey}", "right"))">
+                                                            @if (ec is not null)
+                                                            {
+                                                                var ecLocal = ec;
+                                                                var text = RenderTotal(ecKeyLocal, "SUM",
+                                                                    r => r.ExtraValues.TryGetValue(ecLocal.Key, out var v) ? v : 0,
+                                                                    v => FormatExtraNumberForTotal(ecLocal, v));
+                                                                @text
+                                                                @if (!ReadOnly) { <span class="totals-menu-anchor"><TotalsMenu CurrentMethod="@GetTotalMethod(ecKeyLocal, "SUM")" OnMethodChanged="@(m => SetTotalMethod(ecKeyLocal, m))" OnLiteralChanged="@(l => SetTotalLiteral(ecKeyLocal, l))" /></span> }
+                                                            }
+                                                        </td>
+                                                    }
+                                                    else if (ck.StartsWith("dim:"))
+                                                    {
+                                                        var dimFid = ck[4..];
+                                                        <td class="dash-footer-cell" style="@AlignToCss(GetAlign($"dim_{dimFid}", "left"))"></td>
+                                                    }
+                                                }
+                                            </tr>
+                                        </tfoot>
+                                    }
+                                </table>
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+                    }
+                </MudGrid>
+
+            @* ── Detail Table (only shown after clicking a group row) ── *@
+            @if (!string.IsNullOrEmpty(_selectedGroup))
+            {
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-1">
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                                @(_selectedGroup == TotalsKey
+                                    ? "All Records"
+                                    : $"Detail: {GetGroupByLabel()} = {_selectedGroup}")
+                            </MudText>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.ClearAll"
+                                       OnClick="() => { _selectedGroup = string.Empty; }">
+                                Hide Details
+                            </MudButton>
+                        </MudStack>
+                    </MudStack>
+                    <ReportGrid Data="DetailData"
+                                InitialColumnWidths="ColumnWidths"
+                                InitialColumnOrder="ColumnOrder"
+                                DefaultSortField="@TableSortField"
+                                DefaultSortDirection="@TableSortDirection"
+                                ReadOnly="true" />
+                </MudPaper>
+            }
+        }
+        @if (string.IsNullOrEmpty(_groupByField))
+        {
+            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                      Style="border: 1px dashed #DADCE0; min-height: 200px;">
+                <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Large" Color="Color.Default" />
+                <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                    Select a Group By field and Measure to build a dashboard view.
+                </MudText>
+            </MudPaper>
+        }
+    </MudStack>
+}
+@if (Data is null || !Data.Columns.Any())
+{
+    <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+              Style="border: 1px dashed #DADCE0; min-height: 200px;">
+        <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Large" Color="Color.Default" />
+        <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+            Run a query first, then switch to Dashboard view.
+        </MudText>
+    </MudPaper>
+}
+
+<style>
+    .dash-summary-grid {
+        margin-bottom: 0 !important;
+        flex: 1;
+    }
+    .dash-summary-grid .mud-table-foot tr {
+        display: none;
+    }
+    /* Unified summary table: header / body / footer share one table so
+       column widths always align. Scroll is on the wrapper div.
+       overflow-x: hidden guarantees no horizontal scrollbar — cells clip
+       rather than forcing a scroll when the layout is tight. */
+    .dash-table-wrap {
+        border-top: 1px solid #E8EAED;
+        overflow-x: hidden;
+    }
+    .dash-summary-table {
+        width: 100%;
+        /* table-layout: fixed makes the table strictly honor width: 100%.
+           Without it, cells whose content exceeds the available column space
+           push the table wider than the wrapper (TR visibly wider than the
+           scroll container). Cells now wrap or clip instead. */
+        table-layout: fixed;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+    }
+    .dash-summary-table thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #FAFAFA;
+        border-bottom: 1px solid #DADCE0;
+        padding: 8px 16px;
+        font-weight: 600;
+        white-space: nowrap;
+        user-select: none;
+    }
+    .dash-summary-table thead th.sortable {
+        cursor: pointer;
+    }
+    .dash-summary-table thead th.sortable:hover {
+        background: #F1F3F4;
+    }
+    .dash-th-inner {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        width: 100%;
+    }
+    .dash-summary-table tbody td {
+        padding: 8px 16px;
+        border-bottom: 1px solid #F1F3F4;
+        /* table-layout: fixed clips long content; ellipsis gives the user a
+           visual cue instead of a silent cutoff. The cell's title attribute
+           (set in Razor) shows the full value on hover. */
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .dash-body-row {
+        cursor: pointer;
+    }
+    .dash-body-row:nth-child(even) td {
+        background: #FAFAFA;
+    }
+    .dash-body-row:hover td {
+        background: #F1F3F4;
+    }
+    .dash-body-row-selected td {
+        background: #E8F0FE !important;
+    }
+    .dash-empty-cell {
+        padding: 0 !important;
+        border: none;
+    }
+    .dash-footer-row {
+        background: #F1F3F4;
+        border-top: 2px solid #DADCE0;
+        cursor: pointer;
+    }
+    .dash-footer-row:hover td {
+        background: #E8EAED;
+    }
+    .dash-footer-cell {
+        padding: 8px 16px;
+        font-weight: 600;
+        white-space: nowrap;
+        position: sticky;
+        bottom: 0;
+        background: #F1F3F4;
+        border-top: 2px solid #DADCE0;
+    }
+    .dash-footer-cell .totals-menu-anchor {
+        position: absolute;
+        right: 2px;
+        top: 50%;
+        transform: translateY(-50%);
+        opacity: 0;
+        transition: opacity 0.12s;
+    }
+    .dash-footer-cell:hover .totals-menu-anchor {
+        opacity: 1;
+    }
+</style>
+
+@code {
+    [Parameter] public QueryResponse? Data { get; set; }
+    [Parameter] public DashboardConfig? InitialConfig { get; set; }
+    [Parameter] public string? TableSortField { get; set; }
+    [Parameter] public string? TableSortDirection { get; set; }
+    [Parameter] public Dictionary<string, int>? ColumnWidths { get; set; }
+    [Parameter] public List<string>? ColumnOrder { get; set; }
+    [Parameter] public Guid? ReportId { get; set; }
+    /// <summary>
+    /// All dimension fields available in the schema (not just the ones selected for the report).
+    /// Used to populate the Group By dropdown with fields the user can group by without displaying in detail.
+    /// </summary>
+    [Parameter] public List<ColumnMeta>? AllDimensionFields { get; set; }
+    [Parameter] public string? GridHeight { get; set; }
+    [Parameter] public bool Compact { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
+    // When true, detail-view deep links include ?from=dashboard so the detail
+    // page breadcrumb shows the user came from the Master Dashboard instead of
+    // the Report Library.
+    [Parameter] public bool DetailFromDashboard { get; set; }
+
+    private string _groupByField = string.Empty;
+    private string _measureField = string.Empty;
+    // Default to COUNT so new dashboards show row counts per group out of the
+    // box — no Primary Measure selection required.
+    private string _aggregation = "COUNT";
+    private string _chartTypeStr = "Bar";
+
+    [Parameter] public bool HideChart { get; set; }
+    /// <summary>Fires when the group-by field changes to a field not currently in the query result.</summary>
+    [Parameter] public EventCallback<string> OnExtraFieldRequired { get; set; }
+    public bool HasChart => !string.IsNullOrEmpty(_chartTypeStr) && _chartLabels.Length > 0;
+    private bool ShowChart => HasChart && !HideChart;
+    private ChartType _chartType => _chartTypeStr switch
+    {
+        "Pie" => ChartType.Pie,
+        "Line" => ChartType.Line,
+        _ => ChartType.Bar
+    };
+    private string _selectedGroup = string.Empty;
+    private bool _configLoaded;
+    private Dictionary<string, string> _customLabels = new();
+    private Dictionary<string, string> _columnAlignments = new();
+    private List<ExtraColumnDef> _extraColumns = new();
+    private List<string> _extraDimensions = new();
+    private Dictionary<string, string> _totalMethods = new();
+
+    // Click-to-sort state for the summary table's column headers. Empty =
+    // fall back to the default-sort logic (ApplyDashSort via
+    // _defaultSortColumn). When the user clicks a header, this takes over.
+    private string _gridSortColumn = string.Empty;
+    private string _gridSortDir = "asc";
+    // "measure" isn't in the default — it gets added by RebuildDashColumnOrder
+    // only when aggregation is something other than COUNT (where it would just
+    // duplicate the dedicated "count" column).
+    private List<string> _dashColumnOrder = new() { "groupBy", "count", "pct" };
+    private string _defaultSortColumn = string.Empty;
+    private string _defaultSortDir = "asc";
+    private bool _showPercentColumn = true;
+    private bool _showKpiCards = true;
+    private bool _showOnMaster;
+    private int _dashDragSource = -1;
+    private int _dashDropTarget = -1;
+
+    private const string TotalsKey = "__totals__";
+
+    private List<SummaryRow> _summaryData = new();
+    private double _grandTotal;
+    private List<ChartSeries<double>> _chartSeries = new();
+    private string[] _chartLabels = Array.Empty<string>();
+
+    private string GetSummaryRowStyle(SummaryRow row, int _)
+    {
+        if (row.GroupKey == _selectedGroup)
+            return "background: #E8F0FE; cursor: pointer;";
+        return "cursor: pointer;";
+    }
+
+    private IEnumerable<ColumnMeta> DimensionColumns
+    {
+        get
+        {
+            var fromData = (Data?.Columns ?? []).Where(c =>
+                c.DataType.Equals("text", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase));
+
+            if (AllDimensionFields is null || AllDimensionFields.Count == 0)
+                return fromData;
+
+            // Merge: schema fields not already in the query result
+            var existingIds = new HashSet<string>(fromData.Select(c => c.FieldId), StringComparer.OrdinalIgnoreCase);
+            var extra = AllDimensionFields.Where(c => !existingIds.Contains(c.FieldId));
+            return fromData.Concat(extra).OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private IEnumerable<ColumnMeta> AvailableExtraColumns =>
+        (Data?.Columns ?? []).Where(c =>
+            !_extraColumns.Any(ec => ec.FieldId == c.FieldId) &&
+            c.FieldId != _measureField);
+
+    private IEnumerable<ColumnMeta> AvailableExtraMeasures =>
+        Data?.Columns ?? [];
+
+    // Non-numeric columns that aren't already the primary group-by or an
+    // existing extra dimension. Plus any AllDimensionFields not yet in Data
+    // (the picker has to be able to add fields that will be auto-included
+    // in the next query via OnExtraFieldRequired).
+    private IEnumerable<ColumnMeta> AvailableExtraDimensions
+    {
+        get
+        {
+            bool IsDimensional(ColumnMeta c) =>
+                c.DataType.Equals("text", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("date", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("datetime", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrEmpty(c.DataType);
+
+            var fromData = (Data?.Columns ?? Enumerable.Empty<ColumnMeta>())
+                .Where(c => IsDimensional(c)
+                         && c.FieldId != _groupByField
+                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase));
+            var existingIds = fromData.Select(c => c.FieldId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var extra = (AllDimensionFields ?? Enumerable.Empty<ColumnMeta>())
+                .Where(c => !existingIds.Contains(c.FieldId)
+                         && c.FieldId != _groupByField
+                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase));
+            return fromData.Concat(extra).OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private IEnumerable<Dictionary<string, object?>> DetailRows
+    {
+        get
+        {
+            if (Data is null) return [];
+            IEnumerable<Dictionary<string, object?>> rows = Data.Rows;
+
+            // Totals row → show all records; specific group → filter to that group
+            if (!string.IsNullOrEmpty(_selectedGroup) && _selectedGroup != TotalsKey && !string.IsNullOrEmpty(_groupByField))
+            {
+                if (_selectedGroup == "(empty)")
+                {
+                    // Match rows where the field is missing, null, DBNull, or empty string
+                    rows = rows.Where(r =>
+                    {
+                        if (!r.TryGetValue(_groupByField, out var v)) return true;
+                        if (v is null || v is DBNull) return true;
+                        var s = v.ToString();
+                        return string.IsNullOrWhiteSpace(s);
+                    });
+                }
+                else
+                {
+                    rows = rows.Where(r =>
+                        r.TryGetValue(_groupByField, out var v) && v is not null && v is not DBNull &&
+                        string.Equals(v.ToString(), _selectedGroup, StringComparison.OrdinalIgnoreCase));
+                }
+            }
+
+            // Apply table sort if configured (matches the saved Default Sort from editor)
+            if (!string.IsNullOrEmpty(TableSortField))
+            {
+                var col = Data.Columns.FirstOrDefault(c => c.FieldId == TableSortField);
+                if (col is not null)
+                {
+                    Func<Dictionary<string, object?>, object?> keyFn = r => GetDetailSortValue(r, col);
+                    rows = string.Equals(TableSortDirection, "desc", StringComparison.OrdinalIgnoreCase)
+                        ? rows.OrderByDescending(keyFn)
+                        : rows.OrderBy(keyFn);
+                }
+            }
+
+            return rows;
+        }
+    }
+
+    private QueryResponse? DetailData
+    {
+        get
+        {
+            if (Data is null) return null;
+            var rows = DetailRows.ToList();
+            return new QueryResponse
+            {
+                Columns = Data.Columns,
+                Rows = rows,
+                TotalCount = rows.Count
+            };
+        }
+    }
+
+    private static object? GetDetailSortValue(Dictionary<string, object?> row, ColumnMeta col)
+    {
+        if (!row.TryGetValue(col.FieldId, out var val) || val is null) return null;
+        if (col.ValueSortOrder is not null)
+        {
+            var key = val.ToString() ?? "";
+            return col.ValueSortOrder.TryGetValue(key, out var rank) ? rank : int.MaxValue;
+        }
+        return val;
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Apply saved config once when data first arrives
+        if (Data is not null && !_configLoaded && InitialConfig is not null)
+        {
+            _groupByField = InitialConfig.GroupByFieldId;
+            _measureField = InitialConfig.MeasureFieldId;
+            // Fresh reports (no saved aggregation) keep the COUNT default.
+            _aggregation = string.IsNullOrWhiteSpace(InitialConfig.Aggregation)
+                ? "COUNT"
+                : InitialConfig.Aggregation;
+            _chartTypeStr = InitialConfig.ChartType ?? "Bar";
+            _customLabels = InitialConfig.CustomLabels?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? new();
+            _columnAlignments = InitialConfig.ColumnAlignments?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? new();
+            _extraColumns = InitialConfig.ExtraColumns?.Select(ec => new ExtraColumnDef { FieldId = ec.FieldId, Aggregation = ec.Aggregation }).ToList() ?? new();
+            _extraDimensions = InitialConfig.ExtraDimensionFieldIds is { Count: > 0 }
+                ? new List<string>(InitialConfig.ExtraDimensionFieldIds)
+                : new();
+            _totalMethods = InitialConfig.TotalMethods is { Count: > 0 }
+                ? new Dictionary<string, string>(InitialConfig.TotalMethods)
+                : new();
+            _defaultSortColumn = InitialConfig.DefaultSortColumn ?? string.Empty;
+            _defaultSortDir = InitialConfig.DefaultSortDirection ?? "asc";
+            if (InitialConfig.ColumnOrder is not null && InitialConfig.ColumnOrder.Count > 0)
+                _dashColumnOrder = new List<string>(InitialConfig.ColumnOrder);
+            // Sync toggle state from the saved column order BEFORE rebuilding —
+            // otherwise the rebuild sees the default `true` and re-adds "pct"
+            // that the user just turned off.
+            _showPercentColumn = _dashColumnOrder.Contains("pct");
+            // Run regardless of whether we loaded a saved order — strips the now-
+            // redundant "measure" column from dashboards saved under the old
+            // model where COUNT aggregation still rendered a duplicate column.
+            RebuildDashColumnOrder();
+            _showKpiCards = InitialConfig.ShowKpiCards;
+            _showOnMaster = InitialConfig.ShowOnMaster;
+            _configLoaded = true;
+        }
+
+        if (Data is not null && string.IsNullOrEmpty(_measureField))
+        {
+            _measureField = Data.Columns
+                .FirstOrDefault(c => c.DataType.Equals("currency", StringComparison.OrdinalIgnoreCase)
+                                  || c.DataType.Equals("money", StringComparison.OrdinalIgnoreCase))?.FieldId
+                ?? Data.Columns.FirstOrDefault()?.FieldId
+                ?? string.Empty;
+        }
+        BuildSummary();
+    }
+
+    private async Task OnGroupByChanged(string value)
+    {
+        _groupByField = value;
+        _selectedGroup = string.Empty;
+
+        // If the selected field isn't in the current query result, ask the parent to re-run with it
+        if (!string.IsNullOrEmpty(value) && Data?.Columns.All(c => !c.FieldId.Equals(value, StringComparison.OrdinalIgnoreCase)) == true)
+        {
+            if (OnExtraFieldRequired.HasDelegate)
+                await OnExtraFieldRequired.InvokeAsync(value);
+        }
+
+        BuildSummary();
+    }
+
+    private void OnAggregationChanged()
+    {
+        // Swapping aggregation can add or remove the "measure" column
+        // (it's hidden for COUNT), so rebuild column order before redrawing.
+        RebuildDashColumnOrder();
+        BuildSummary();
+    }
+
+    // Remembers where "pct" was before it got toggled off, so turning the
+    // % of Total column back on restores its original slot instead of always
+    // appending it to the end.
+    private int _lastPctIndex = -1;
+
+    private void OnPercentToggled()
+    {
+        if (_showPercentColumn && !_dashColumnOrder.Contains("pct"))
+        {
+            var insertAt = _lastPctIndex >= 0 && _lastPctIndex <= _dashColumnOrder.Count
+                ? _lastPctIndex
+                : _dashColumnOrder.Count;
+            _dashColumnOrder.Insert(insertAt, "pct");
+        }
+        else if (!_showPercentColumn)
+        {
+            var idx = _dashColumnOrder.IndexOf("pct");
+            if (idx >= 0)
+            {
+                _lastPctIndex = idx;
+                _dashColumnOrder.RemoveAt(idx);
+            }
+        }
+    }
+
+    private async Task OnSummaryRowClick(DataGridRowClickEventArgs<SummaryRow> args)
+    {
+        await OnGroupRowClicked(args.Item.GroupKey);
+    }
+
+    private async Task OnGroupRowClicked(string groupKey)
+    {
+        // In Run mode, open detail in a new browser tab
+        if (ReadOnly && ReportId.HasValue)
+        {
+            // Group key goes in the query string — path segments reject
+            // characters like "+" at the request-filter level, triggering
+            // ERR_CONNECTION_RESET. Query strings don't have that restriction.
+            var url = $"/viewer/{ReportId.Value}/detail";
+            if (groupKey != TotalsKey)
+                url += "?group=" + Uri.EscapeDataString(groupKey);
+            // Carry origin forward so the detail page breadcrumb reflects where
+            // the user actually came from (Master Dashboard vs Report Viewer).
+            if (DetailFromDashboard)
+                url += url.Contains('?') ? "&from=dashboard" : "?from=dashboard";
+            await JS.InvokeVoidAsync("open", url, "_blank");
+            return;
+        }
+
+        // In Edit mode, show inline detail
+        if (groupKey == TotalsKey)
+        {
+            _selectedGroup = _selectedGroup == TotalsKey ? string.Empty : TotalsKey;
+        }
+        else
+        {
+            _selectedGroup = _selectedGroup == groupKey ? string.Empty : groupKey;
+        }
+    }
+
+    private void BuildSummary()
+    {
+        _summaryData.Clear();
+        _grandTotal = 0;
+        _chartSeries = new();
+        _chartLabels = Array.Empty<string>();
+
+        if (Data is null || !Data.Rows.Any() || string.IsNullOrEmpty(_measureField))
+            return;
+
+        if (string.IsNullOrEmpty(_groupByField))
+        {
+            _grandTotal = Aggregate(Data.Rows);
+            var extras = ComputeExtras(Data.Rows);
+            _summaryData.Add(new SummaryRow("Total", _grandTotal, GroupRowCount(Data.Rows), 100, extras, new Dictionary<string, string>()));
+            return;
+        }
+
+        var groupCol = Data.Columns.FirstOrDefault(c => c.FieldId == _groupByField);
+        var groupSortOrder = groupCol?.ValueSortOrder;
+
+        // Composite grouping key: primary group-by + each extra dimension. The
+        // ToString representation uses a unit separator () so row values
+        // with internal "|" don't collide. Same-named dimensions are never
+        // grouped more than once.
+        static string GroupValue(Dictionary<string, object?> r, string fieldId)
+        {
+            if (!r.TryGetValue(fieldId, out var v) || v is null) return "(empty)";
+            return v.ToString() ?? "(empty)";
+        }
+
+        // Group on the STRING composite only. A tuple key containing a
+        // Dictionary would make every row its own group — dictionaries have
+        // reference equality, not value equality — so the aggregation would
+        // never actually combine rows. Pull dim values off the first row of
+        // each group (they're identical within the group by definition).
+        var groupedRaw = Data.Rows
+            .GroupBy(r =>
+            {
+                var primary = GroupValue(r, _groupByField);
+                if (_extraDimensions.Count == 0) return primary;
+                var dimValues = _extraDimensions.ToDictionary(fid => fid, fid => GroupValue(r, fid));
+                var composite = primary + "" + string.Join("", _extraDimensions.Select(fid => dimValues[fid]));
+                return composite;
+            })
+            .Select(g =>
+            {
+                var first = g.First();
+                var primary = GroupValue(first, _groupByField);
+                var dims = _extraDimensions.ToDictionary(fid => fid, fid => GroupValue(first, fid));
+                return new { PrimaryKey = primary, Key = g.Key, Dims = (IReadOnlyDictionary<string, string>)dims, Rows = g.ToList() };
+            })
+            .ToList();
+
+        // Sort by user-defined default if set, otherwise by ValueSortOrder, otherwise by aggregate desc
+        IEnumerable<dynamic> sortedGroups;
+        if (!string.IsNullOrEmpty(_defaultSortColumn))
+        {
+            sortedGroups = ApplyDashSort(groupedRaw, _defaultSortColumn, _defaultSortDir, groupSortOrder);
+        }
+        else if (groupSortOrder is not null)
+        {
+            sortedGroups = groupedRaw.OrderBy(g => groupSortOrder.TryGetValue(g.PrimaryKey, out var rank) ? rank : int.MaxValue);
+        }
+        else
+        {
+            sortedGroups = groupedRaw.OrderByDescending(g => Aggregate(g.Rows));
+        }
+
+        var grouped = sortedGroups.Take(50).ToList();
+
+        _grandTotal = Aggregate(Data.Rows);
+
+        foreach (var g in grouped)
+        {
+            var value = Aggregate(g.Rows);
+            var pct = _grandTotal != 0 ? value / _grandTotal * 100 : 0;
+            var extras = ComputeExtras(g.Rows);
+            // Render shows the primary group value as GroupKey; dimension values
+            // live in Dimensions so each column can pull its own. PrimaryKey is
+            // the non-composite key used for click-through to detail view.
+            var dims = ((IReadOnlyDictionary<string, string>)g.Dims).ToDictionary(kv => kv.Key, kv => kv.Value);
+            _summaryData.Add(new SummaryRow(g.PrimaryKey, value, GroupRowCount(g.Rows), pct, extras, dims));
+        }
+
+        var chartData = _summaryData.Take(20).ToList();
+        _chartLabels = chartData.Select(s =>
+        {
+            var formatted = FormatGroupKey(s.GroupKey);
+            return formatted.Length > 20 ? formatted[..17] + "..." : formatted;
+        }).ToArray();
+
+        _chartSeries = new List<ChartSeries<double>>
+        {
+            new ChartSeries<double>
+            {
+                Name = GetMeasureLabel(),
+                Data = chartData.Select(s => s.Value).ToArray()
+            }
+        };
+    }
+
+    private double Aggregate(List<Dictionary<string, object?>> rows)
+    {
+        if (_aggregation == "COUNT")
+            return rows.Count;
+
+        var values = rows
+            .Select(r => r.TryGetValue(_measureField, out var v) ? ToDouble(v) : null)
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .ToList();
+
+        if (!values.Any()) return 0;
+
+        return _aggregation switch
+        {
+            "SUM" => values.Sum(),
+            "AVG" => values.Average(),
+            "MAX" => values.Max(),
+            "MIN" => values.Min(),
+            _ => values.Sum()
+        };
+    }
+
+    private static double? ToDouble(object? val)
+    {
+        if (val is null) return null;
+        if (val is double d) return d;
+        if (val is decimal dec) return (double)dec;
+        if (val is int i) return i;
+        if (val is long l) return l;
+        if (double.TryParse(val.ToString(), out var parsed)) return parsed;
+        return null;
+    }
+
+    private string FormatNumber(double val)
+    {
+        var measureCol = Data?.Columns.FirstOrDefault(c => c.FieldId == _measureField);
+        var dataType = measureCol?.DataType?.ToLowerInvariant() ?? "";
+
+        if (_aggregation == "COUNT") return val.ToString("N0");
+
+        // Per-field Format wins. Only honor it if it looks like a .NET format
+        // string — masks like "(999) 999-9999" are nonsensical on SUM/AVG/etc.
+        if (!string.IsNullOrWhiteSpace(measureCol?.Format) && !IsMask(measureCol.Format))
+            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, measureCol.Format);
+
+        return dataType switch
+        {
+            "currency" or "money" => val.ToString("C0"),
+            "percent" or "percentage" => val.ToString("N2") + "%",
+            // Integer measures stay integer even after aggregation — SUM of int
+            // is still an int in intent; N0 drops the trailing ".00".
+            "integer" or "int" or "bigint" or "smallint" or "tinyint" => val.ToString("N0"),
+            _ => val.ToString("N2")
+        };
+    }
+
+    private static bool IsMask(string format) => format.Any(c => c == '9' || c == 'A' || c == '*');
+
+    private string FormatCellValue(Dictionary<string, object?> row, ColumnMeta col)
+    {
+        if (!row.TryGetValue(col.FieldId, out var val) || val is null)
+            return string.Empty;
+
+        // Per-field Format wins over the DataType default — matches the main grid.
+        if (!string.IsNullOrWhiteSpace(col.Format))
+            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format);
+
+        return col.DataType.ToLowerInvariant() switch
+        {
+            "currency" or "money" => FormatNumeric(val, "C2"),
+            "percent" or "percentage" => FormatNumeric(val, "N3") + "%",
+            "date" => FormatDate(val),
+            "integer" or "int" => FormatNumeric(val, "N0"),
+            _ => val.ToString() ?? string.Empty
+        };
+    }
+
+    private static string FormatNumeric(object val, string format)
+    {
+        if (val is double d) return d.ToString(format);
+        if (val is decimal dec) return dec.ToString(format);
+        if (val is int i) return i.ToString(format);
+        if (val is long l) return l.ToString(format);
+        if (double.TryParse(val.ToString(), out var parsed)) return parsed.ToString(format);
+        return val.ToString() ?? string.Empty;
+    }
+
+    private static string FormatDate(object val)
+    {
+        if (val is DateTime dt) return dt.ToString("MM/dd/yyyy");
+        if (val is DateTimeOffset dto) return dto.ToString("MM/dd/yyyy");
+        if (DateTime.TryParse(val.ToString(), out var parsed)) return parsed.ToString("MM/dd/yyyy");
+        return val.ToString() ?? string.Empty;
+    }
+
+    private object? GetSortValue(Dictionary<string, object?> row, string fieldId) =>
+        row.TryGetValue(fieldId, out var val) ? val : null;
+
+    // ── Totals row: per-column method (Option A). ──────────────────────────
+    //
+    // GetTotalMethod returns the configured method for a column key, falling
+    // back to the provided default. Methods: SUM, AVG, MIN, MAX, MEDIAN, NONE,
+    // or "LITERAL:<text>". Default for measure/extras/count is SUM; pct is a
+    // 100.0% literal historically (represented as "LITERAL:100.0%").
+    private string GetTotalMethod(string columnKey, string defaultMethod) =>
+        _totalMethods.TryGetValue(columnKey, out var m) && !string.IsNullOrWhiteSpace(m)
+            ? m
+            : defaultMethod;
+
+    // Computes the totals-row value for a measure-like column given a
+    // projector that extracts a numeric value from each summary row.
+    private static double? AggregateTotal(IEnumerable<SummaryRow> rows, Func<SummaryRow, double> project, string method)
+    {
+        var list = rows.Select(project).ToList();
+        if (list.Count == 0) return null;
+        return method.ToUpperInvariant() switch
+        {
+            "SUM" => list.Sum(),
+            "AVG" => list.Average(),
+            "MIN" => list.Min(),
+            "MAX" => list.Max(),
+            "MEDIAN" => Median(list),
+            _ => null  // NONE / LITERAL / unknown — caller handles
+        };
+    }
+
+    private static double Median(List<double> values)
+    {
+        var sorted = values.OrderBy(v => v).ToList();
+        var mid = sorted.Count / 2;
+        return sorted.Count % 2 == 0 ? (sorted[mid - 1] + sorted[mid]) / 2.0 : sorted[mid];
+    }
+
+    // Methods offered in the totals-cell menu. SUM comes first as the default.
+    private static readonly string[] TotalMethodOptions =
+        new[] { "SUM", "AVG", "MIN", "MAX", "MEDIAN", "NONE" };
+
+    private void SetTotalMethod(string columnKey, string method)
+    {
+        if (string.Equals(method, "SUM", StringComparison.OrdinalIgnoreCase))
+            _totalMethods.Remove(columnKey); // default, no need to store
+        else
+            _totalMethods[columnKey] = method;
+        StateHasChanged();
+    }
+
+    private void SetTotalLiteral(string columnKey, string literal)
+    {
+        if (string.IsNullOrWhiteSpace(literal))
+            _totalMethods.Remove(columnKey);
+        else
+            _totalMethods[columnKey] = "LITERAL:" + literal;
+        StateHasChanged();
+    }
+
+    // ── Header click-to-sort for the plain-table summary. ─────────────────
+
+    private bool IsColumnSortable(string columnKey) =>
+        !Compact
+        && (columnKey == "groupBy" || columnKey == "measure" || columnKey == "count"
+            || columnKey == "pct"
+            || columnKey.StartsWith("extra:") || columnKey.StartsWith("dim:"));
+
+    private string SortHeaderClass(string columnKey) =>
+        IsColumnSortable(columnKey) ? "sortable" : string.Empty;
+
+    private void ToggleGridSort(string columnKey)
+    {
+        if (!IsColumnSortable(columnKey)) return;
+        if (string.Equals(_gridSortColumn, columnKey, StringComparison.Ordinal))
+        {
+            // Same column — flip direction (asc → desc → off cycle)
+            if (_gridSortDir == "asc") _gridSortDir = "desc";
+            else if (_gridSortDir == "desc") { _gridSortColumn = string.Empty; _gridSortDir = "asc"; }
+            else _gridSortDir = "asc";
+        }
+        else
+        {
+            _gridSortColumn = columnKey;
+            _gridSortDir = "asc";
+        }
+    }
+
+    private RenderFragment SortIndicator(string columnKey) => builder =>
+    {
+        if (!string.Equals(_gridSortColumn, columnKey, StringComparison.Ordinal)) return;
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "style", "margin-left: 2px;");
+        builder.AddContent(2, _gridSortDir == "desc" ? "▼" : "▲");
+        builder.CloseElement();
+    };
+
+    // Applies click-sort on top of the default-sort already baked into
+    // _summaryData. No-op when no user sort is active.
+    private IEnumerable<SummaryRow> SortedSummaryRows()
+    {
+        if (string.IsNullOrEmpty(_gridSortColumn)) return _summaryData;
+        var col = _gridSortColumn;
+        var desc = _gridSortDir == "desc";
+
+        IOrderedEnumerable<SummaryRow> ordered;
+        if (col == "groupBy")
+            ordered = desc ? _summaryData.OrderByDescending(r => r.GroupKey)
+                           : _summaryData.OrderBy(r => r.GroupKey);
+        else if (col == "measure")
+            ordered = desc ? _summaryData.OrderByDescending(r => r.Value)
+                           : _summaryData.OrderBy(r => r.Value);
+        else if (col == "count")
+            ordered = desc ? _summaryData.OrderByDescending(r => r.Count)
+                           : _summaryData.OrderBy(r => r.Count);
+        else if (col == "pct")
+            ordered = desc ? _summaryData.OrderByDescending(r => r.Percentage)
+                           : _summaryData.OrderBy(r => r.Percentage);
+        else if (col.StartsWith("extra:"))
+        {
+            var ecKey = col[6..];
+            double Pick(SummaryRow r) => r.ExtraValues.TryGetValue(ecKey, out var v) ? v : 0;
+            ordered = desc ? _summaryData.OrderByDescending(Pick) : _summaryData.OrderBy(Pick);
+        }
+        else if (col.StartsWith("dim:"))
+        {
+            var dimFid = col[4..];
+            string Pick(SummaryRow r) => r.Dimensions.TryGetValue(dimFid, out var v) ? v : string.Empty;
+            ordered = desc ? _summaryData.OrderByDescending(Pick) : _summaryData.OrderBy(Pick);
+        }
+        else
+        {
+            return _summaryData;
+        }
+        return ordered;
+    }
+
+    // Renders the totals cell text for a measure / extra / count / pct column.
+    // Uses the configured method; falls back to the column's baseline default.
+    private string RenderTotal(string columnKey, string defaultMethod, Func<SummaryRow, double> project, Func<double, string> format)
+    {
+        var method = GetTotalMethod(columnKey, defaultMethod);
+        if (method.StartsWith("LITERAL:", StringComparison.OrdinalIgnoreCase))
+            return method[8..];
+        if (string.Equals(method, "NONE", StringComparison.OrdinalIgnoreCase))
+            return string.Empty;
+        var val = AggregateTotal(_summaryData, project, method);
+        return val.HasValue ? format(val.Value) : string.Empty;
+    }
+
+    // Per-group record count. If the query was server-aggregated it emitted a
+    // hidden "__row_count" column holding COUNT(*) per group — sum those across
+    // whatever rows fall into a client-side group. Without server aggregation
+    // the raw row count is already correct.
+    private static int GroupRowCount(List<Dictionary<string, object?>> rows)
+    {
+        if (rows.Count > 0 && rows[0].ContainsKey("__row_count"))
+        {
+            var sum = 0;
+            foreach (var r in rows)
+            {
+                if (r.TryGetValue("__row_count", out var v) && v is not null)
+                {
+                    switch (v)
+                    {
+                        case int i: sum += i; break;
+                        case long l: sum += (int)l; break;
+                        case decimal dec: sum += (int)dec; break;
+                        default:
+                            if (int.TryParse(v.ToString(), out var parsed)) sum += parsed;
+                            break;
+                    }
+                }
+            }
+            return sum;
+        }
+        return rows.Count;
+    }
+
+    // Applies the group-by field's Format to the raw group key string. Masks
+    // (phone, SSN) walk the string's characters; .NET format strings parse the
+    // string as a DateTime or number first via FieldFormatter.
+    private string FormatGroupKey(string groupKey)
+    {
+        if (string.IsNullOrEmpty(groupKey)) return groupKey;
+        var col = Data?.Columns.FirstOrDefault(c => c.FieldId == _groupByField);
+        if (string.IsNullOrWhiteSpace(col?.Format)) return groupKey;
+        return TleReportingDashboard.Web.Services.FieldFormatter.Format(groupKey, col.Format);
+    }
+
+    // Per-row dimension value, respecting the field's Format. Blank groups
+    // render as "(empty)" (matches the GroupKey convention for nulls).
+    private string FormatDimensionValue(SummaryRow row, string fieldId)
+    {
+        if (!row.Dimensions.TryGetValue(fieldId, out var raw) || string.IsNullOrEmpty(raw))
+            return string.Empty;
+        var col = Data?.Columns.FirstOrDefault(c => c.FieldId.Equals(fieldId, StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(col?.Format)) return raw;
+        return TleReportingDashboard.Web.Services.FieldFormatter.Format(raw, col.Format);
+    }
+
+    private string GetGroupByLabel() =>
+        Data?.Columns.FirstOrDefault(c => c.FieldId == _groupByField)?.Label ?? _groupByField;
+
+    private string GetMeasureLabel() =>
+        Data?.Columns.FirstOrDefault(c => c.FieldId == _measureField)?.Label ?? _measureField;
+
+    private void RebuildDashColumnOrder()
+    {
+        // Keep existing order for columns that still exist, add new ones.
+        // "pct" is gated on _showPercentColumn so the toggle stays authoritative.
+        // "measure" is skipped when aggregation is COUNT — the dedicated "count"
+        // column already shows that value, so a duplicate "COUNT of X" column
+        // isn't useful.
+        var validKeys = new HashSet<string> { "groupBy", "count" };
+        if (_aggregation != "COUNT") validKeys.Add("measure");
+        if (_showPercentColumn) validKeys.Add("pct");
+        foreach (var ec in _extraColumns) validKeys.Add($"extra:{ec.Key}");
+        foreach (var fid in _extraDimensions) validKeys.Add($"dim:{fid}");
+
+        _dashColumnOrder.RemoveAll(k => !validKeys.Contains(k));
+        foreach (var key in validKeys)
+        {
+            if (!_dashColumnOrder.Contains(key))
+                _dashColumnOrder.Add(key);
+        }
+    }
+
+    private void DashColumnDrop(int targetIndex)
+    {
+        if (_dashDragSource < 0 || _dashDragSource == targetIndex)
+        {
+            _dashDragSource = -1; _dashDropTarget = -1;
+            return;
+        }
+        var item = _dashColumnOrder[_dashDragSource];
+        _dashColumnOrder.RemoveAt(_dashDragSource);
+        var insertAt = targetIndex > _dashDragSource ? targetIndex - 1 : targetIndex;
+        insertAt = Math.Clamp(insertAt, 0, _dashColumnOrder.Count);
+        _dashColumnOrder.Insert(insertAt, item);
+        _dashDragSource = -1; _dashDropTarget = -1;
+    }
+
+    private string GetDashColumnLabel(string key) => key switch
+    {
+        "groupBy" => GetLabel("groupBy", GetGroupByLabel()),
+        "measure" => GetLabel("measure", $"{_aggregation} {GetMeasureLabel()}"),
+        "count" => GetLabel("count", "Count"),
+        "pct" => GetLabel("pct", "% of Total"),
+        _ when key.StartsWith("extra:") =>
+            _extraColumns.FirstOrDefault(ec => ec.Key == key[6..]) is { } ec
+                ? GetLabel($"extra_{ec.Key}", $"{ec.Aggregation} {GetFieldLabel(ec.FieldId)}")
+                : key,
+        _ when key.StartsWith("dim:") =>
+            GetLabel($"dim_{key[4..]}", GetFieldLabel(key[4..])),
+        _ => key
+    };
+
+    private void AddExtraColumn(string fieldId) => AddExtraMeasure(fieldId);
+
+    private void AddExtraMeasure(string fieldId)
+    {
+        // Pick the next aggregation that isn't already used for this field
+        var usedAggs = _extraColumns.Where(ec => ec.FieldId == fieldId).Select(ec => ec.Aggregation).ToHashSet();
+        // Also consider the primary measure
+        if (fieldId == _measureField) usedAggs.Add(_aggregation);
+
+        var nextAgg = new[] { "SUM", "AVG", "COUNT", "MAX", "MIN" }.FirstOrDefault(a => !usedAggs.Contains(a)) ?? "SUM";
+        _extraColumns.Add(new ExtraColumnDef { FieldId = fieldId, Aggregation = nextAgg });
+        RebuildDashColumnOrder();
+        BuildSummary();
+    }
+
+    private async Task AddExtraDimension(string fieldId)
+    {
+        if (_extraDimensions.Contains(fieldId, StringComparer.OrdinalIgnoreCase)) return;
+        _extraDimensions.Add(fieldId);
+
+        // If the field isn't in the current result set, ask the parent to
+        // re-run the query with it included — same pattern as the group-by
+        // picker, so the dimension value actually shows up in each row.
+        if (Data is not null && Data.Columns.All(c => !c.FieldId.Equals(fieldId, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (OnExtraFieldRequired.HasDelegate)
+                await OnExtraFieldRequired.InvokeAsync(fieldId);
+        }
+
+        RebuildDashColumnOrder();
+        BuildSummary();
+    }
+
+    private void RemoveExtraDimension(string fieldId)
+    {
+        _extraDimensions.RemoveAll(f => f.Equals(fieldId, StringComparison.OrdinalIgnoreCase));
+        _customLabels.Remove($"dim_{fieldId}");
+        _columnAlignments.Remove($"dim_{fieldId}");
+        RebuildDashColumnOrder();
+        BuildSummary();
+    }
+
+    private void RemoveExtraColumn(string key)
+    {
+        _extraColumns.RemoveAll(ec => ec.Key == key);
+        _customLabels.Remove($"extra_{key}");
+        RebuildDashColumnOrder();
+        BuildSummary();
+    }
+
+    // Swap the extra column's aggregation. The column's Key is derived from
+    // FieldId + Aggregation, so changing the aggregation invalidates every
+    // lookup keyed off the old key — _dashColumnOrder, custom labels, custom
+    // alignments, and the Default Sort selection. Migrate each before
+    // re-rendering so the column doesn't vanish from the grid.
+    private void ChangeExtraAggregation(ExtraColumnDef ec, string newAggregation)
+    {
+        if (string.Equals(ec.Aggregation, newAggregation, StringComparison.OrdinalIgnoreCase)) return;
+
+        var oldKey = ec.Key;
+        ec.Aggregation = newAggregation;
+        var newKey = ec.Key;
+
+        var oldColKey = $"extra:{oldKey}";
+        var newColKey = $"extra:{newKey}";
+        var idx = _dashColumnOrder.IndexOf(oldColKey);
+        if (idx >= 0) _dashColumnOrder[idx] = newColKey;
+
+        if (_customLabels.Remove($"extra_{oldKey}", out var label))
+            _customLabels[$"extra_{newKey}"] = label;
+        if (_columnAlignments.Remove($"extra_{oldKey}", out var align))
+            _columnAlignments[$"extra_{newKey}"] = align;
+
+        if (_defaultSortColumn == oldColKey) _defaultSortColumn = newColKey;
+
+        RebuildDashColumnOrder();
+        BuildSummary();
+    }
+
+    private Dictionary<string, double> ComputeExtras(List<Dictionary<string, object?>> rows)
+    {
+        var result = new Dictionary<string, double>();
+        foreach (var ec in _extraColumns)
+        {
+            var values = rows
+                .Select(r => r.TryGetValue(ec.FieldId, out var v) ? ToDouble(v) : null)
+                .Where(v => v.HasValue)
+                .Select(v => v!.Value)
+                .ToList();
+
+            result[ec.Key] = values.Any()
+                ? ec.Aggregation switch
+                {
+                    "SUM" => values.Sum(),
+                    "AVG" => values.Average(),
+                    "COUNT" => values.Count,
+                    "MAX" => values.Max(),
+                    "MIN" => values.Min(),
+                    _ => values.Sum()
+                }
+                : 0;
+        }
+        return result;
+    }
+
+    private string FormatExtraValue(SummaryRow row, ExtraColumnDef ec)
+    {
+        if (!row.ExtraValues.TryGetValue(ec.Key, out var val)) return "—";
+        var col = Data?.Columns.FirstOrDefault(c => c.FieldId == ec.FieldId);
+        var dataType = col?.DataType?.ToLowerInvariant() ?? "";
+        if (ec.Aggregation == "COUNT") return val.ToString("N0");
+        if (!string.IsNullOrWhiteSpace(col?.Format) && !IsMask(col.Format))
+            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format);
+        return dataType switch
+        {
+            "currency" or "money" => val.ToString("C0"),
+            "percent" or "percentage" => val.ToString("N2") + "%",
+            "integer" or "int" or "bigint" or "smallint" or "tinyint" => val.ToString("N0"),
+            _ => val.ToString("N2")
+        };
+    }
+
+    private string FormatExtraTotal(ExtraColumnDef ec) =>
+        FormatExtraNumberForTotal(ec, _summaryData.Sum(r => r.ExtraValues.TryGetValue(ec.Key, out var v) ? v : 0));
+
+    // Shared number formatter for an extra column's totals cell — used by
+    // RenderTotal so AVG/MIN/MAX/MEDIAN values format the same way SUM did.
+    private string FormatExtraNumberForTotal(ExtraColumnDef ec, double val)
+    {
+        var col = Data?.Columns.FirstOrDefault(c => c.FieldId == ec.FieldId);
+        var dataType = col?.DataType?.ToLowerInvariant() ?? "";
+        if (ec.Aggregation == "COUNT") return val.ToString("N0");
+        if (!string.IsNullOrWhiteSpace(col?.Format) && !IsMask(col.Format))
+            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format);
+        return dataType switch
+        {
+            "currency" or "money" => val.ToString("C0"),
+            "percent" or "percentage" => val.ToString("N2") + "%",
+            "integer" or "int" or "bigint" or "smallint" or "tinyint" => val.ToString("N0"),
+            _ => val.ToString("N2")
+        };
+    }
+
+    private string GetFieldLabel(string fieldId) =>
+        Data?.Columns.FirstOrDefault(c => c.FieldId == fieldId)?.Label ?? fieldId;
+
+    private string GetLabel(string key, string defaultLabel) =>
+        _customLabels.TryGetValue(key, out var custom) && !string.IsNullOrWhiteSpace(custom)
+            ? custom
+            : defaultLabel;
+
+    private string GetAlign(string key, string defaultAlign) =>
+        _columnAlignments.TryGetValue(key, out var custom) && !string.IsNullOrWhiteSpace(custom)
+            ? custom
+            : defaultAlign;
+
+    private void SetAlign(string key, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            _columnAlignments.Remove(key);
+        else
+            _columnAlignments[key] = value;
+    }
+
+    private IEnumerable<dynamic> ApplyDashSort(
+        IEnumerable<dynamic> groups,
+        string sortColumn,
+        string sortDir,
+        Dictionary<string, int>? groupValueSortOrder)
+    {
+        // Use string key selector for groupBy (consistent type avoids mixed int/string comparison),
+        // double for all numeric columns.
+        if (sortColumn == "groupBy")
+        {
+            Func<dynamic, string> groupKey = g =>
+            {
+                // Use the primary key (raw group-by value), not the composite
+                // key used for grouping. ValueSortOrder is authored against
+                // the primary field only.
+                string k = (string)g.PrimaryKey;
+                if (groupValueSortOrder is not null && groupValueSortOrder.TryGetValue(k, out var rank))
+                    return rank.ToString("D10"); // zero-padded for correct string sort
+                return k;
+            };
+            return string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase)
+                ? groups.OrderByDescending(groupKey)
+                : groups.OrderBy(groupKey);
+        }
+
+        if (sortColumn.StartsWith("dim:"))
+        {
+            var dimFid = sortColumn[4..];
+            Func<dynamic, string> dimKey = g =>
+            {
+                var dims = (IReadOnlyDictionary<string, string>)g.Dims;
+                return dims.TryGetValue(dimFid, out var v) ? v : string.Empty;
+            };
+            return string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase)
+                ? groups.OrderByDescending(dimKey)
+                : groups.OrderBy(dimKey);
+        }
+
+        Func<dynamic, double> numericKey = sortColumn switch
+        {
+            "measure" => g => Aggregate((List<Dictionary<string, object?>>)g.Rows),
+            // Respect server-side __row_count when present (see GroupRowCount)
+            // — otherwise every client group has 1 row and the sort is flat.
+            "count" => g => GroupRowCount((List<Dictionary<string, object?>>)g.Rows),
+            "pct" => g => Aggregate((List<Dictionary<string, object?>>)g.Rows),
+            _ when sortColumn.StartsWith("extra:") => g =>
+            {
+                var ecKey = sortColumn[6..];
+                var ec = _extraColumns.FirstOrDefault(e => e.Key == ecKey);
+                if (ec is null) return 0d;
+                var rows = (List<Dictionary<string, object?>>)g.Rows;
+                return ComputeExtras(rows).TryGetValue(ec.Key, out var v) ? v : 0d;
+            },
+            _ => g => 0d
+        };
+
+        return string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase)
+            ? groups.OrderByDescending(numericKey)
+            : groups.OrderBy(numericKey);
+    }
+
+    private string GetGroupSortKey(string groupKey)
+    {
+        var groupCol = Data?.Columns.FirstOrDefault(c => c.FieldId == _groupByField);
+        if (groupCol?.ValueSortOrder is not null
+            && groupCol.ValueSortOrder.TryGetValue(groupKey, out var rank))
+            return rank.ToString("D10");
+        return groupKey;
+    }
+
+    private string AlignToCss(string a)
+    {
+        var justify = a switch
+        {
+            "right" => "flex-end",
+            "center" => "center",
+            _ => "flex-start"
+        };
+        return $"text-align: {a}; justify-content: {justify};";
+    }
+
+    // Data type of the current group-by field (looked up in the query columns metadata).
+    private string GetGroupByDataType()
+    {
+        if (string.IsNullOrEmpty(_groupByField) || Data?.Columns is null) return string.Empty;
+        return Data.Columns.FirstOrDefault(c =>
+            string.Equals(c.FieldId, _groupByField, StringComparison.OrdinalIgnoreCase))?.DataType ?? string.Empty;
+    }
+
+    // Mirrors ReportGrid.IsNumeric — kept inline so both components can live independently.
+    private static bool IsNumericDataType(string dataType) => dataType.ToLowerInvariant() switch
+    {
+        "currency" or "money" or "smallmoney" => true,
+        "percent" or "percentage" => true,
+        "integer" or "int" or "bigint" or "smallint" or "tinyint" => true,
+        "decimal" or "float" or "double" or "numeric" or "real" or "number" => true,
+        _ => false
+    };
+
+    // In compact (tile) mode, pin non-text columns to content-hugging widths so resizing
+    // the tile only grows/shrinks the dimension (groupBy) column. groupBy gets a minimum
+    // width so it doesn't collapse to zero when the table body is empty (No Records Found).
+    // Returns empty string in non-compact mode, letting the grid auto-size normally.
+    private string TileWidthStyle(string columnKey)
+    {
+        if (!Compact) return string.Empty;
+        // No explicit widths — auto table layout sizes columns by content.
+        // Numeric columns stay compact naturally (numbers are short); the groupBy
+        // column absorbs remaining space because its text is typically wider.
+        return string.Empty;
+    }
+
+    private void SetLabel(string key, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            _customLabels.Remove(key);
+        else
+            _customLabels[key] = value;
+    }
+
+    public DashboardConfig? GetCurrentConfig()
+    {
+        if (string.IsNullOrEmpty(_groupByField) && string.IsNullOrEmpty(_measureField))
+            return _configLoaded ? InitialConfig : null;
+
+        return new DashboardConfig
+        {
+            GroupByFieldId = _groupByField,
+            MeasureFieldId = _measureField,
+            Aggregation = _aggregation,
+            ChartType = _chartTypeStr,
+            CustomLabels = _customLabels.Any() ? new Dictionary<string, string>(_customLabels) : null,
+            ColumnAlignments = _columnAlignments.Any() ? new Dictionary<string, string>(_columnAlignments) : null,
+            ExtraColumns = _extraColumns.Any() ? _extraColumns.Select(ec => new ExtraColumnDef { FieldId = ec.FieldId, Aggregation = ec.Aggregation }).ToList() : null,
+            ExtraDimensionFieldIds = _extraDimensions.Any() ? new List<string>(_extraDimensions) : null,
+            TotalMethods = _totalMethods.Any() ? new Dictionary<string, string>(_totalMethods) : null,
+            ColumnOrder = _dashColumnOrder.Count > 0 ? new List<string>(_dashColumnOrder) : null,
+            DefaultSortColumn = string.IsNullOrEmpty(_defaultSortColumn) ? null : _defaultSortColumn,
+            DefaultSortDirection = string.IsNullOrEmpty(_defaultSortColumn) ? null : _defaultSortDir,
+            ShowOnMaster = _showOnMaster,
+            ShowKpiCards = _showKpiCards
+        };
+    }
+
+    public void LoadConfig(DashboardConfig config)
+    {
+        _groupByField = config.GroupByFieldId;
+        _measureField = config.MeasureFieldId;
+        _aggregation = config.Aggregation;
+        _chartTypeStr = config.ChartType ?? "Bar";
+        _customLabels = config.CustomLabels?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? new();
+        _columnAlignments = config.ColumnAlignments?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? new();
+        _extraColumns = config.ExtraColumns?.Select(ec => new ExtraColumnDef { FieldId = ec.FieldId, Aggregation = ec.Aggregation }).ToList() ?? new();
+        _extraDimensions = config.ExtraDimensionFieldIds is { Count: > 0 }
+            ? new List<string>(config.ExtraDimensionFieldIds)
+            : new();
+        _totalMethods = config.TotalMethods is { Count: > 0 }
+            ? new Dictionary<string, string>(config.TotalMethods)
+            : new();
+        _defaultSortColumn = config.DefaultSortColumn ?? string.Empty;
+        _defaultSortDir = config.DefaultSortDirection ?? "asc";
+        if (config.ColumnOrder is not null && config.ColumnOrder.Count > 0)
+            _dashColumnOrder = new List<string>(config.ColumnOrder);
+        else
+            RebuildDashColumnOrder();
+        _showPercentColumn = _dashColumnOrder.Contains("pct");
+        _showKpiCards = config.ShowKpiCards;
+        _showOnMaster = config.ShowOnMaster;
+        _selectedGroup = string.Empty;
+        BuildSummary();
+        StateHasChanged();
+    }
+
+    public record DashboardConfig
+    {
+        public string GroupByFieldId { get; init; } = string.Empty;
+        public string MeasureFieldId { get; init; } = string.Empty;
+        public string Aggregation { get; init; } = "SUM";
+        public string ChartType { get; init; } = "Bar";
+        public Dictionary<string, string>? CustomLabels { get; init; }
+        public Dictionary<string, string>? ColumnAlignments { get; init; }
+        public List<ExtraColumnDef>? ExtraColumns { get; init; }
+        // Additional dimension field ids that extend the GROUP BY. Each one
+        // becomes a separate column in the summary table, and rows are per
+        // distinct combination of (primary group-by, dim1, dim2, …).
+        public List<string>? ExtraDimensionFieldIds { get; init; }
+        // Totals-row method per column key ("measure", "count", "pct",
+        // "extra:<key>"). Values: SUM, AVG, MIN, MAX, MEDIAN, NONE, or
+        // "LITERAL:<text>". Missing entries use the column's default (SUM for
+        // measures/extras, SUM for count, 100.0% literal for pct).
+        public Dictionary<string, string>? TotalMethods { get; init; }
+        public List<string>? ColumnOrder { get; init; }
+        public string? DefaultSortColumn { get; init; }   // e.g., "groupBy", "measure", "count", "pct", "extra:..."
+        public string? DefaultSortDirection { get; init; } // "asc" or "desc"
+        public bool ShowOnMaster { get; init; }
+        public List<string>? ExtraGroupByFieldIds { get; init; }
+        public bool ShowKpiCards { get; init; } = true;
+    }
+
+    public class ExtraColumnDef
+    {
+        public string FieldId { get; set; } = string.Empty;
+        public string Aggregation { get; set; } = "SUM";
+        public string Key => $"{FieldId}_{Aggregation}";
+    }
+
+    // Dimensions is a per-row map of extra-dimension field id → the group's
+    // value for that field. Populated when _extraDimensions is non-empty.
+    private record SummaryRow(string GroupKey, double Value, int Count, double Percentage, Dictionary<string, double> ExtraValues, Dictionary<string, string> Dimensions);
+}

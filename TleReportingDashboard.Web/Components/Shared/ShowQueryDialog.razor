@@ -1,0 +1,94 @@
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Code" />
+            <MudText Typo="Typo.h6">Generated SQL Query</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 700px;">
+            @if (HasDetail)
+            {
+                @* Two tabs when the caller passed a detail-view query too —
+                   Table vs Detail. Each tab has its own Copy button so the
+                   one you're looking at is the one you copy. *@
+                <MudTabs ActivePanelIndex="_activeIndex" ActivePanelIndexChanged="i => _activeIndex = i"
+                         Elevation="0" Rounded>
+                    <MudTabPanel Text="Table View" Icon="@Icons.Material.Filled.TableChart">
+                        @RenderSqlBlock(Sql, Parameters)
+                    </MudTabPanel>
+                    <MudTabPanel Text="Detail View" Icon="@Icons.Material.Filled.ZoomIn">
+                        @RenderSqlBlock(DetailSql ?? string.Empty, DetailParameters)
+                    </MudTabPanel>
+                </MudTabs>
+            }
+            else
+            {
+                @RenderSqlBlock(Sql, Parameters)
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="CopyActiveToClipboard">
+            Copy to Clipboard
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public string Sql { get; set; } = string.Empty;
+    [Parameter] public Dictionary<string, object?>? Parameters { get; set; }
+    // Optional — the SQL the DetailViewer would execute for the same report.
+    // When populated, the dialog renders tabbed panels and the copy button
+    // respects the active tab.
+    [Parameter] public string? DetailSql { get; set; }
+    [Parameter] public Dictionary<string, object?>? DetailParameters { get; set; }
+
+    private int _activeIndex;
+
+    private bool HasDetail => !string.IsNullOrEmpty(DetailSql);
+
+    private RenderFragment RenderSqlBlock(string sql, Dictionary<string, object?>? parameters) => @<MudStack Spacing="2">
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; max-height: 500px; overflow: auto; background: #1E1E1E;">
+            <pre style="padding: 16px; margin: 0; color: #D4D4D4; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85rem; white-space: pre-wrap; word-wrap: break-word;">@sql</pre>
+        </MudPaper>
+        @if (parameters is not null && parameters.Count > 0)
+        {
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Parameters</MudText>
+            <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudSimpleTable Dense Hover Style="background: transparent;">
+                    <thead>
+                        <tr>
+                            <th style="text-align: left;">Name</th>
+                            <th style="text-align: left;">Value</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var p in parameters)
+                        {
+                            <tr>
+                                <td><code>@p.Key</code></td>
+                                <td>@(p.Value?.ToString() ?? "<null>")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        }
+    </MudStack>;
+
+    private void Close() => MudDialog?.Close();
+
+    private async Task CopyActiveToClipboard()
+    {
+        var sql = HasDetail && _activeIndex == 1 ? (DetailSql ?? string.Empty) : Sql;
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", sql);
+        Snackbar.Add("SQL copied to clipboard.", Severity.Success);
+    }
+}

@@ -1,0 +1,462 @@
+@using TleReportingDashboard.Web.Components.Pages
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Edit" />
+            <MudText Typo="Typo.h6">@(IsNew ? "Add Field" : "Edit Field")</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudGrid Spacing="2" Style="min-width: 600px;">
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Id"
+                              Label="@(_useSqlExpression ? "ID / Field Alias" : "ID")"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="@(_useSqlExpression
+                                            ? "Internal identifier (snake_case). Also used as the SELECT column alias for the SQL expression."
+                                            : "Internal identifier (snake_case)")" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Label" Label="Label" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="Display name shown to users" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.Description" Label="Description" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" Lines="2" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="string" Value="_edited.Domain" ValueChanged="v => _edited.Domain = v"
+                           Label="Domain" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           HelperText="@(_domainIsLegacy ? "Legacy value — not in the Domains list anymore." : "Field grouping. Manage the list in Schema Builder → Domains.")">
+                    @* If the current value isn't in the list, show it at the top
+                       with a "(legacy)" marker so saving the field doesn't lose it. *@
+                    @if (_domainIsLegacy && !string.IsNullOrWhiteSpace(_edited.Domain))
+                    {
+                        <MudSelectItem T="string" Value="@_edited.Domain">@_edited.Domain (legacy)</MudSelectItem>
+                    }
+                    @if (AvailableDomains is not null)
+                    {
+                        @foreach (var d in AvailableDomains)
+                        {
+                            <MudSelectItem T="string" Value="@d">@d</MudSelectItem>
+                        }
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudSelect T="string" @bind-Value="_edited.DataType" Label="Data Type"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
+                    <MudSelectItem Value="@("text")">text</MudSelectItem>
+                    <MudSelectItem Value="@("currency")">currency</MudSelectItem>
+                    <MudSelectItem Value="@("percent")">percent</MudSelectItem>
+                    <MudSelectItem Value="@("integer")">integer</MudSelectItem>
+                    <MudSelectItem Value="@("date")">date</MudSelectItem>
+                    <MudSelectItem Value="@("datetime")">datetime</MudSelectItem>
+                    <MudSelectItem Value="@("decimal")">decimal</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudSelect T="string" @bind-Value="_edited.FieldType" Label="Field Type"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
+                    <MudSelectItem Value="@("Dimension")">Dimension</MudSelectItem>
+                    <MudSelectItem Value="@("Measure")">Measure</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="6" sm="3">
+                <MudNumericField @bind-Value="_edited.MaxLength" Label="MaxLength"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudNumericField @bind-Value="_edited.CodeSetId" Label="CodeSetId"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.AllowedAggregationsStr" Label="Aggregations"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Placeholder="SUM,AVG,MAX,MIN" HelperText="Comma-separated list (Measure only)" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Format" Label="Display Format"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Placeholder="(999) 999-9999   or   C2   or   yyyy-MM-dd"
+                              HelperText="Mask (9=digit, A=letter, *=any) OR a .NET format string. Leave blank for no formatting." />
+            </MudItem>
+
+            @* Apply timezone conversion — only meaningful for date/datetime
+               fields on a Postgres connection. The emitter wraps the field's
+               expression with `AT TIME ZONE '<tz>'` at query time, using the
+               timezone configured on the connection (Admin → DB Connections
+               → Display Timezone). The flag is harmless on other connection
+               types — just ignored at emission. *@
+            @if (IsPostgres && IsDateLikeType(_edited.DataType))
+            {
+                <MudItem xs="12">
+                    <MudCheckBox T="bool" @bind-Value="_edited.ApplyTimezoneConversion"
+                                 Color="Color.Primary" Dense
+                                 Label="Apply timezone conversion" />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 32px; margin-top: -4px; display: block;">
+                        Wraps this field's SQL with AT TIME ZONE '&lt;connection timezone&gt;' when the report runs. Set the timezone on the connection; leave blank there to skip wrapping everywhere.
+                    </MudText>
+                </MudItem>
+            }
+
+            <MudItem xs="12">
+                <MudSwitch T="bool" @bind-Value="_useSqlExpression"
+                           Label="Use inline SQL expression instead of Source Table/Column"
+                           Color="Color.Primary" />
+            </MudItem>
+
+            @if (!_useSqlExpression)
+            {
+                <MudItem xs="12" sm="6">
+                    @* Dropdown value is the alias/table string stored on the
+                       field; the visible label shows "schema.table AS alias"
+                       when known so admins aren't left guessing which alias
+                       maps to which table. *@
+                    <MudSelect T="string" Value="_edited.SourceTable" ValueChanged="OnSourceTableChanged"
+                               Label="Source Table / Alias"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
+                        @foreach (var src in AvailableSources)
+                        {
+                            <MudSelectItem T="string" Value="@src.Value">@src.Label</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    @* Source Column is a DB-backed picker; columns come from
+                       INFORMATION_SCHEMA via the parent's LoadColumnsAsync
+                       callback (cached per-table on the page). MudSelect
+                       highlights the current value on open so re-picking
+                       is a single click — no search-as-you-type friction. *@
+                    <MudSelect T="string" @bind-Value="_edited.SourceColumn"
+                               Label="Source Column"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                               Disabled="@(_columns.Count == 0)"
+                               HelperText="@ColumnHelperText">
+                        @foreach (var col in _columns)
+                        {
+                            <MudSelectItem T="string" Value="@col">@col</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            }
+            else
+            {
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_edited.SqlExpression" Label="SQL Expression"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Lines="4" Style="font-family: monospace; font-size: 0.85rem;"
+                                  Placeholder="@SqlExpressionPlaceholder"
+                                  HelperText="Inline SQL used in place of SourceTable.SourceColumn. Used in SELECT, WHERE, GROUP BY, and ORDER BY." />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_edited.SqlPreamble" Label="Inline CTE (optional, use Lookups below instead)"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Lines="2" Style="font-family: monospace; font-size: 0.85rem;"
+                                  HelperText="Only needed for one-off CTEs not defined as a named Lookup." />
+                </MudItem>
+            }
+
+            @* JOINs — applies in both plain-column and inline-SQL modes. Pick any
+               number of existing JOINs from the Joins tab (each one is stored as a
+               reference). Useful when an inline SqlExpression spans multiple joined
+               tables. The inline JOIN textbox below is additive — it's emitted on
+               top of whatever joins are selected here. *@
+            @if (AvailableJoins is not null && AvailableJoins.Count > 0)
+            {
+                <MudItem xs="12">
+                    <MudSelect T="string" Label="JOINs (referenced)" MultiSelection
+                               SelectedValues="_selectedJoinIds"
+                               SelectedValuesChanged="OnJoinsSelected"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                               HelperText="Referenced JOINs — the SQL lives in the Joins tab. Pick all joins your field needs.">
+                        @foreach (var j in AvailableJoins)
+                        {
+                            <MudSelectItem T="string" Value="@j.Id">@FormatJoinLabel(j)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            }
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.SqlJoin" Label="Custom inline JOIN (optional)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="2" Style="font-family: monospace; font-size: 0.85rem;"
+                              HelperText="Additive: emitted on top of the referenced JOINs above. Only needed for one-off JOINs not in the Joins tab." />
+            </MudItem>
+
+            @if (AvailableLookups.Any())
+            {
+                <MudItem xs="12">
+                    <MudSelect T="string" Label="Lookups" MultiSelection
+                               SelectedValues="_selectedLookupIds"
+                               SelectedValuesChanged="v => _selectedLookupIds = v.ToHashSet()"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                               HelperText="Named CTEs included in the query when this field is selected in a report">
+                        @foreach (var lu in AvailableLookups)
+                        {
+                            <MudSelectItem T="string" Value="@lu.Id">@lu.Label (@lu.Id)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            }
+
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.RolesRequired" Label="Roles Required"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="Optional. Restricts field to users with this role." />
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@(string.IsNullOrWhiteSpace(_edited.Id) || string.IsNullOrWhiteSpace(_edited.Label))">
+            OK
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public SchemaBuilder.FieldEntry? Field { get; set; }
+    [Parameter] public bool IsNew { get; set; }
+    [Parameter] public IEnumerable<SchemaBuilder.SourceOption> AvailableSources { get; set; }
+        = Array.Empty<SchemaBuilder.SourceOption>();
+
+    // Column loader provided by the parent — given a "schema.table" returns
+    // the DB column names. The dialog calls this when the Source Table
+    // changes so the Source Column dropdown reflects the picked table's
+    // schema. Cache lives on the parent so subsequent edits reuse it.
+    [Parameter] public Func<string, Task<List<string>>>? LoadColumnsAsync { get; set; }
+    [Parameter] public IEnumerable<SchemaBuilder.LookupEntry> AvailableLookups { get; set; } = Array.Empty<SchemaBuilder.LookupEntry>();
+    [Parameter] public List<SchemaBuilder.JoinEntry>? AvailableJoins { get; set; }
+    [Parameter] public IEnumerable<string>? AvailableDomains { get; set; }
+    [Parameter] public string? ConnectionType { get; set; }
+
+    // Dialect-appropriate placeholder for the inline SQL expression field.
+    private string SqlExpressionPlaceholder =>
+        string.Equals(ConnectionType, "postgres", StringComparison.OrdinalIgnoreCase)
+            ? "(SELECT x.name FROM public.x WHERE x.id = lead.id LIMIT 1)"
+            : "(SELECT TOP 1 X.NAME FROM EMPOWER.X WHERE X.LNKEY = EMPOWER.LN_MTGTERMS.LNKEY)";
+
+    private bool IsPostgres =>
+        string.Equals(ConnectionType, "postgres", StringComparison.OrdinalIgnoreCase);
+
+    // Timezone wrap only makes sense on date-like columns.
+    private static bool IsDateLikeType(string? dataType) =>
+        string.Equals(dataType, "date", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(dataType, "datetime", StringComparison.OrdinalIgnoreCase);
+
+    private SchemaBuilder.FieldEntry _edited = new();
+    private bool _domainIsLegacy;
+    private bool _useSqlExpression;
+    private HashSet<string> _selectedLookupIds = new();
+    private HashSet<string> _selectedJoinIds = new();
+
+    // Columns for the currently-picked source table. Loaded on demand via
+    // LoadColumnsAsync; synthetic entry injected if the field's current
+    // SourceColumn isn't in the DB-returned list so stale legacy values
+    // stay editable.
+    private List<string> _columns = new();
+    private bool _columnsLoading;
+    private ColumnLoadStatus _columnLoadStatus = ColumnLoadStatus.NotAttempted;
+    private string? _columnLoadError;
+    private string? _columnLoadAttemptedTable;
+
+    private enum ColumnLoadStatus
+    {
+        NotAttempted,           // no source picked yet
+        NoResolvableTable,      // SourceOption has a null TableName
+        Loading,                // in-flight
+        SucceededWithRows,      // DB returned one or more columns
+        SucceededEmpty,         // DB returned zero rows for that table
+        Failed                  // exception caught during load
+    }
+
+    private string ColumnHelperText
+    {
+        get
+        {
+            if (_columnsLoading) return "Loading columns…";
+            return _columnLoadStatus switch
+            {
+                ColumnLoadStatus.NotAttempted =>
+                    "Pick a Source Table to load columns.",
+                ColumnLoadStatus.NoResolvableTable =>
+                    "Source alias doesn't map to a DB table — column list not available.",
+                ColumnLoadStatus.SucceededWithRows =>
+                    $"Pick from {_columns.Count:N0} columns.",
+                ColumnLoadStatus.SucceededEmpty =>
+                    $"Table \"{_columnLoadAttemptedTable}\" wasn't found in the database (or has no columns).",
+                ColumnLoadStatus.Failed =>
+                    $"Couldn't load columns: {_columnLoadError}",
+                _ => string.Empty
+            };
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        // Clone so cancelling discards changes
+        if (Field is not null)
+        {
+            _edited = new SchemaBuilder.FieldEntry
+            {
+                Id = Field.Id,
+                Label = Field.Label,
+                Description = Field.Description,
+                Domain = Field.Domain,
+                DataType = Field.DataType,
+                FieldType = Field.FieldType,
+                MaxLength = Field.MaxLength,
+                CodeSetId = Field.CodeSetId,
+                AllowedAggregationsStr = Field.AllowedAggregationsStr,
+                SourceTable = Field.SourceTable,
+                SourceColumn = Field.SourceColumn,
+                SqlExpression = Field.SqlExpression,
+                SqlPreamble = Field.SqlPreamble,
+                JoinIds = Field.JoinIds is not null ? new List<string>(Field.JoinIds) : null,
+                SqlJoin = Field.SqlJoin,
+                LookupIds = Field.LookupIds is not null ? new List<string>(Field.LookupIds) : null,
+                RolesRequired = Field.RolesRequired,
+                ValueSortOrder = Field.ValueSortOrder,
+                Format = Field.Format,
+                ApplyTimezoneConversion = Field.ApplyTimezoneConversion
+            };
+        }
+
+        _useSqlExpression = !string.IsNullOrWhiteSpace(_edited.SqlExpression);
+        _selectedLookupIds = _edited.LookupIds is not null ? new HashSet<string>(_edited.LookupIds) : new();
+        _selectedJoinIds = _edited.JoinIds is not null ? new HashSet<string>(_edited.JoinIds) : new();
+
+        // Flag any existing Domain value that isn't in the curated list so the
+        // dropdown keeps it selectable (with a "(legacy)" hint) instead of
+        // silently clearing it.
+        _domainIsLegacy = !string.IsNullOrWhiteSpace(_edited.Domain)
+            && AvailableDomains is not null
+            && !AvailableDomains.Any(d => string.Equals(d, _edited.Domain, StringComparison.OrdinalIgnoreCase));
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Preload columns for the existing field's SourceTable on first open
+        // so the Source Column picker is populated immediately instead of
+        // requiring the admin to re-pick the table.
+        if (firstRender && !string.IsNullOrWhiteSpace(_edited.SourceTable) && !_useSqlExpression)
+        {
+            await LoadColumnsForCurrentSourceAsync();
+            StateHasChanged();
+        }
+    }
+
+    // Source Table changed: reset the SourceColumn (so stale values don't
+    // leak between tables) and reload the column list from the parent.
+    private async Task OnSourceTableChanged(string? newSource)
+    {
+        _edited.SourceTable = newSource ?? string.Empty;
+        _edited.SourceColumn = string.Empty;
+        await LoadColumnsForCurrentSourceAsync();
+    }
+
+    // Looks up the picked source's TableName from AvailableSources and asks
+    // the parent's LoadColumnsAsync callback for its columns. Tracks the
+    // outcome (no-resolvable-table / empty / failed / success) so the
+    // helper text can explain exactly what happened.
+    private async Task LoadColumnsForCurrentSourceAsync()
+    {
+        _columnLoadError = null;
+        _columnLoadAttemptedTable = null;
+
+        if (LoadColumnsAsync is null)
+        {
+            _columns = new();
+            _columnLoadStatus = ColumnLoadStatus.NotAttempted;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_edited.SourceTable))
+        {
+            _columns = new();
+            _columnLoadStatus = ColumnLoadStatus.NotAttempted;
+            return;
+        }
+
+        var match = AvailableSources.FirstOrDefault(s =>
+            string.Equals(s.Value, _edited.SourceTable, StringComparison.OrdinalIgnoreCase));
+        var tableName = match?.TableName;
+        if (string.IsNullOrWhiteSpace(tableName))
+        {
+            _columns = new();
+            _columnLoadStatus = ColumnLoadStatus.NoResolvableTable;
+            return;
+        }
+
+        _columnLoadAttemptedTable = tableName;
+        _columnsLoading = true;
+        _columnLoadStatus = ColumnLoadStatus.Loading;
+        try
+        {
+            // Defensive copy — LoadColumnsAsync may return a cached reference
+            // from the parent. Mutating it here (legacy-value injection)
+            // would poison subsequent loads of the same table.
+            _columns = (await LoadColumnsAsync(tableName)).ToList();
+            _columnLoadStatus = _columns.Count > 0
+                ? ColumnLoadStatus.SucceededWithRows
+                : ColumnLoadStatus.SucceededEmpty;
+        }
+        catch (Exception ex)
+        {
+            _columns = new();
+            _columnLoadStatus = ColumnLoadStatus.Failed;
+            _columnLoadError = ex.Message;
+        }
+        finally
+        {
+            _columnsLoading = false;
+        }
+
+        // Legacy value preservation — if the stored SourceColumn isn't in
+        // the fresh list, add it and re-sort so it lands in alphabetical
+        // position rather than at the top. MudSelect auto-scrolls to the
+        // selected value on open, so the admin still sees it immediately.
+        if (!string.IsNullOrWhiteSpace(_edited.SourceColumn)
+            && !_columns.Contains(_edited.SourceColumn, StringComparer.OrdinalIgnoreCase))
+        {
+            _columns.Add(_edited.SourceColumn);
+            _columns.Sort(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+
+    private static string FormatJoinLabel(SchemaBuilder.JoinEntry j) =>
+        JoinLabelFormatter.Format(j);
+
+    private void OnJoinsSelected(IEnumerable<string> joinIds)
+    {
+        _selectedJoinIds = joinIds.ToHashSet();
+    }
+
+    private void Cancel() => MudDialog?.Cancel();
+
+    private void Ok()
+    {
+        if (_useSqlExpression)
+        {
+            _edited.SourceTable = string.Empty;
+            _edited.SourceColumn = string.Empty;
+        }
+        else
+        {
+            _edited.SqlExpression = null;
+            _edited.SqlPreamble = null;
+        }
+
+        // LookupIds, JoinIds, and SqlJoin apply regardless of SQL mode.
+        _edited.LookupIds = _selectedLookupIds.Count > 0 ? _selectedLookupIds.ToList() : null;
+        _edited.JoinIds = _selectedJoinIds.Count > 0 ? _selectedJoinIds.ToList() : null;
+
+        MudDialog?.Close(DialogResult.Ok(_edited));
+    }
+}

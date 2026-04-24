@@ -1,0 +1,876 @@
+@* ─────────────────────────────────────────────────────────────────────────
+   Ad-hoc Filters UX prototype — NON-PERSISTENT.
+
+   Route: /prototype/filters (admin-only).
+
+   Purpose: lets a reviewer click through the proposed filter model
+   (field → operator → value(s)) and see the SQL + parameters that would
+   be emitted. Nothing is saved. Nothing is queried. All field metadata
+   is hardcoded into the page so it runs without any admin configuration.
+
+   This file is intentionally throwaway — once the design is locked, the
+   real version will live in ReportBuilder with proper DTOs + an emitter
+   backed by FieldConfig. Do not import anything from here elsewhere.
+   ───────────────────────────────────────────────────────────────────────── *@
+@page "/prototype/filters"
+@rendermode InteractiveServer
+@inject IAdminService AdminService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+
+<PageTitle>Filter UX Prototype</PageTitle>
+
+@if (!_accessGranted)
+{
+    <MudMainContent Style="padding: 16px;">
+        <MudAlert Severity="Severity.Warning">
+            Prototype pages are admin-only. Redirecting…
+        </MudAlert>
+    </MudMainContent>
+    return;
+}
+
+<MudMainContent Style="padding: 16px; height: calc(100vh - 48px); overflow-y: auto;">
+    <div style="max-width: 1200px; margin: 0 auto;">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="@(() => Navigation.NavigateTo("/admin"))" />
+            <MudText Typo="Typo.h5" Style="font-weight: 600;">Filter UX Prototype</MudText>
+            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled"
+                     Icon="@Icons.Material.Filled.Science"
+                     Style="font-size: 0.65rem; height: 22px;">
+                PROTOTYPE · not saved
+            </MudChip>
+        </MudStack>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+            Click around. Nothing persists. The SQL panel at the bottom updates live.
+            Every WHERE clause keeps the raw column on the LHS, so existing btree
+            indexes on the target DB are used as-is — no tenant schema changes required.
+        </MudText>
+
+        @* ── Demo controls — tweak the connection context ───────────────── *@
+        <MudPaper Elevation="0" Class="pa-3 mb-3"
+                  Style="border: 1px solid #E8EAED; border-radius: 4px; background: #FBFCFD;">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+                    Demo context
+                </MudText>
+                <MudSelect T="string" @bind-Value="_demoTimezone"
+                           Label="Display timezone"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           Style="min-width: 220px;">
+                    @foreach (var tz in UsTimezones)
+                    {
+                        <MudSelectItem T="string" Value="@tz">@tz</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="string" @bind-Value="_demoDialect"
+                           Label="Dialect"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           Style="min-width: 160px;">
+                    <MudSelectItem T="string" Value="@("postgres")">Postgres</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("sqlserver")">SQL Server</MudSelectItem>
+                </MudSelect>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-style: italic;">
+                    TZ-flagged date fields compute UTC bounds in .NET; the LHS stays raw.
+                </MudText>
+            </MudStack>
+        </MudPaper>
+
+        @* ── Curated filters row (for context — existing chip UX) ──────── *@
+        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+            Curated (unchanged)
+        </MudText>
+        <MudStack Row Spacing="1" Wrap="Wrap.Wrap" Class="mb-3 mt-1">
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary">
+                Milestone: Funded × Applied
+            </MudChip>
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                Active only
+            </MudChip>
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                Loan Officer: Sarah J.
+            </MudChip>
+        </MudStack>
+
+        @* ── Advanced (ad-hoc) filter rows ─────────────────────────────── *@
+        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+            Advanced (ad-hoc — this is the new part)
+        </MudText>
+
+        <MudStack Spacing="2" Class="mt-1 mb-3">
+            @for (var i = 0; i < _rows.Count; i++)
+            {
+                var idx = i;
+                var row = _rows[i];
+                <MudPaper Elevation="0" Class="pa-3"
+                          Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                        @* Field picker *@
+                        <MudSelect T="string" Value="row.FieldId"
+                                   ValueChanged="@(v => OnFieldChanged(idx, v))"
+                                   Label="Field" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="min-width: 220px;">
+                            @foreach (var f in DemoFields)
+                            {
+                                <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        @* Operator picker — options depend on the field's data type.
+                           @key is tied to FieldId so MudSelect is fully recreated
+                           when the field changes (different operator set). Without
+                           the key, MudSelect's internal state can hang onto the old
+                           selected value even after row.Operator has been reset. *@
+                        <MudSelect T="string" @key="@($"op-{idx}-{row.FieldId}")"
+                                   Value="row.Operator"
+                                   ValueChanged="@(v => OnOperatorChanged(idx, v))"
+                                   Label="Operator" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="min-width: 170px;">
+                            @foreach (var op in OperatorsFor(CurrentField(row)))
+                            {
+                                <MudSelectItem T="string" Value="@op.Id">@op.Label</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        @* Value input — shape depends on both data type + operator *@
+                        @RenderValueInput(idx, row)
+
+                        <MudSpacer />
+
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                       Color="Color.Default"
+                                       OnClick="@(() => _rows.RemoveAt(idx))" />
+                    </MudStack>
+                </MudPaper>
+            }
+
+            <div>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="AddRow">
+                    Add filter
+                </MudButton>
+            </div>
+        </MudStack>
+
+        @* ── SQL preview ───────────────────────────────────────────────── *@
+        <MudPaper Elevation="0" Class="pa-3 mb-4"
+                  Style="border: 1px solid #1A73E8; border-radius: 4px; background: #F0F6FF;">
+            <MudStack Row AlignItems="AlignItems.Center" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Code" Size="Size.Small" Color="Color.Primary" />
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                    SQL preview (what would be emitted)
+                </MudText>
+            </MudStack>
+            <pre style="margin: 0; font-family: Consolas, 'Courier New', monospace; font-size: 12px;
+                        white-space: pre-wrap; color: #202124;">@PreviewSql()</pre>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2" Style="font-style: italic;">
+                Preview shows inline literals for copy-paste into a SQL tool. Production emission stays parameterized.
+            </MudText>
+        </MudPaper>
+
+        @* ── Storage shape ─────────────────────────────────────────────── *@
+        <MudPaper Elevation="0" Class="pa-3 mb-4"
+                  Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudStack Row AlignItems="AlignItems.Center" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.DataObject" Size="Size.Small" Color="Color.Secondary" />
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                    Would be persisted as
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    (JSON written to RPT_saved_reports.filters)
+                </MudText>
+            </MudStack>
+            <pre style="margin: 0; font-family: Consolas, 'Courier New', monospace; font-size: 12px;
+                        white-space: pre-wrap; color: #202124;">@PreviewJson()</pre>
+        </MudPaper>
+
+        <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+            <strong>What to click:</strong> add a row, switch between date / text / numeric fields, try Relative → Yesterday on a date field, change the timezone at top. The SQL panel updates live.
+            <br />
+            <strong>What's mocked:</strong> field list + table alias. The real build would read fields from <code>SchemaService.GetFieldConfigsAsync</code> and resolve the timezone from the connection's <code>pg_display_timezone</code>.
+        </MudAlert>
+    </div>
+</MudMainContent>
+
+@code {
+    // ── Access control (matches other admin pages) ─────────────────────
+    private bool _accessGranted;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        var email = user.FindFirst("preferred_username")?.Value
+                    ?? user.FindFirst("email")?.Value
+                    ?? user.Identity?.Name
+                    ?? string.Empty;
+        _accessGranted = AdminService.IsGlobalAdmin(email);
+        if (!_accessGranted)
+        {
+            _ = Task.Delay(1500).ContinueWith(_ =>
+                InvokeAsync(() => Navigation.NavigateTo("/reports")));
+        }
+
+        // Seed one row so the page isn't empty on first open.
+        if (_rows.Count == 0)
+        {
+            _rows.Add(new FilterRow
+            {
+                FieldId = "created_at",
+                Operator = "between",
+                DateFrom = DateTime.Today.AddDays(-7),
+                DateTo = DateTime.Today
+            });
+        }
+    }
+
+    // ── Demo context ───────────────────────────────────────────────────
+    private string _demoTimezone = "US/Pacific";
+    private string _demoDialect = "postgres";
+    private static readonly string[] UsTimezones = new[]
+    {
+        "US/Alaska", "US/Aleutian", "US/Arizona", "US/Central",
+        "US/East-Indiana", "US/Eastern", "US/Hawaii", "US/Indiana-Starke",
+        "US/Michigan", "US/Mountain", "US/Pacific", "US/Samoa"
+    };
+
+    // ── Mock field catalog — stand-in for SchemaService fields ─────────
+    private record DemoField(string Id, string Label, string Table, string Column,
+                             string DataType, bool TzFlagged = false,
+                             string[]? CodesetValues = null);
+
+    private static readonly DemoField[] DemoFields = new[]
+    {
+        new DemoField("created_at",  "Created Date",  "l", "createddate",
+                      "datetime", TzFlagged: true),
+        new DemoField("due_date",    "Due Date",      "l", "due_date",
+                      "date"),
+        new DemoField("status",      "Status",        "l", "status",
+                      "text", CodesetValues: new[] { "Funded", "Applied", "Pre-Qual", "Closed", "Withdrawn" }),
+        new DemoField("campaign",    "Campaign",      "l", "campaign_name__c",
+                      "text"),
+        new DemoField("loan_amount", "Loan Amount",   "l", "loan_amount",
+                      "currency"),
+        new DemoField("is_active",   "Active",        "l", "is_active",
+                      "boolean"),
+    };
+
+    // ── Operator catalog per data type ─────────────────────────────────
+    private record Op(string Id, string Label);
+
+    private static readonly Op[] DateOps = new[]
+    {
+        new Op("equals", "Is"),  new Op("not_equals", "Is not"),
+        new Op("before", "Before"),  new Op("after", "After"),
+        new Op("on_or_before", "On or before"),  new Op("on_or_after", "On or after"),
+        new Op("between", "Between"),
+        new Op("relative", "Relative"),
+        new Op("is_null", "Is blank"),  new Op("is_not_null", "Is not blank")
+    };
+    private static readonly Op[] TextOps = new[]
+    {
+        new Op("equals", "Equals"),  new Op("not_equals", "Does not equal"),
+        new Op("contains", "Contains"),  new Op("starts_with", "Starts with"),
+        new Op("ends_with", "Ends with"),
+        new Op("in_list", "Is any of"),  new Op("not_in_list", "Is none of"),
+        new Op("is_null", "Is blank"),  new Op("is_not_null", "Is not blank")
+    };
+    private static readonly Op[] CodesetOps = new[]
+    {
+        new Op("in_list", "Is any of"),  new Op("not_in_list", "Is none of"),
+        new Op("is_null", "Is blank"),  new Op("is_not_null", "Is not blank")
+    };
+    private static readonly Op[] NumericOps = new[]
+    {
+        new Op("equals", "="),  new Op("not_equals", "≠"),
+        new Op("lt", "<"),  new Op("lte", "≤"),
+        new Op("gt", ">"),  new Op("gte", "≥"),
+        new Op("between", "Between"),  new Op("in_list", "Is any of"),
+        new Op("is_null", "Is blank"),  new Op("is_not_null", "Is not blank")
+    };
+    private static readonly Op[] BoolOps = new[]
+    {
+        new Op("is_true", "Is true"),  new Op("is_false", "Is false")
+    };
+
+    private Op[] OperatorsFor(DemoField? f)
+    {
+        if (f is null) return Array.Empty<Op>();
+        return f.DataType switch
+        {
+            "date" or "datetime" => DateOps,
+            "integer" or "decimal" or "currency" or "percent" => NumericOps,
+            "boolean" => BoolOps,
+            "text" when f.CodesetValues is { Length: > 0 } => CodesetOps,
+            "text" => TextOps,
+            _ => TextOps
+        };
+    }
+
+    private static readonly (string Id, string Label)[] RelativePresets = new[]
+    {
+        ("today", "Today"),
+        ("yesterday", "Yesterday"),
+        ("last_7_days", "Last 7 days"),
+        ("last_30_days", "Last 30 days"),
+        ("mtd", "Month to date"),
+        ("ytd", "Year to date"),
+        ("last_month", "Last month"),
+        ("last_year", "Last year")
+    };
+
+    // ── Row state ─────────────────────────────────────────────────────
+    private sealed class FilterRow
+    {
+        public string? FieldId { get; set; }
+        public string? Operator { get; set; }
+        public string? TextValue { get; set; }
+        public decimal? NumValue { get; set; }
+        public decimal? NumValueTo { get; set; }
+        public DateTime? DateFrom { get; set; }
+        public DateTime? DateTo { get; set; }
+        public List<string> ListValues { get; set; } = new();
+        public string? RelativePreset { get; set; }
+        public bool BoolValue { get; set; }
+    }
+
+    private readonly List<FilterRow> _rows = new();
+
+    // ── Handlers ──────────────────────────────────────────────────────
+    private DemoField? CurrentField(FilterRow row) =>
+        DemoFields.FirstOrDefault(f => f.Id == row.FieldId);
+
+    private void OnFieldChanged(int idx, string? newFieldId)
+    {
+        var row = _rows[idx];
+        row.FieldId = newFieldId;
+        var field = CurrentField(row);
+        // Reset operator to the first valid one for the new field's data type.
+        row.Operator = OperatorsFor(field).FirstOrDefault()?.Id;
+        // Clear value state so the new operator's input renders blank.
+        row.TextValue = null;
+        row.NumValue = null;
+        row.NumValueTo = null;
+        row.DateFrom = null;
+        row.DateTo = null;
+        row.ListValues = new();
+        row.RelativePreset = null;
+    }
+
+    private void OnOperatorChanged(int idx, string? newOp)
+    {
+        _rows[idx].Operator = newOp;
+    }
+
+    private void AddRow()
+    {
+        _rows.Add(new FilterRow
+        {
+            FieldId = "status",
+            Operator = "in_list"
+        });
+    }
+
+    // Dynamic RenderFragments (built via RenderTreeBuilder) don't always
+    // re-render the parent when their inner EventCallback fires —
+    // explicitly calling StateHasChanged guarantees the SQL + JSON preview
+    // panels update on every interaction. Without this, DateChanged events
+    // mutate state but the page stays stuck on the last-rendered SQL.
+    private EventCallback<T> Cb<T>(Action<T> action) =>
+        EventCallback.Factory.Create<T>(this, v =>
+        {
+            action(v);
+            StateHasChanged();
+        });
+
+    // ── Value input renderer ──────────────────────────────────────────
+    private RenderFragment RenderValueInput(int idx, FilterRow row) => builder =>
+    {
+        var field = CurrentField(row);
+        if (field is null || string.IsNullOrEmpty(row.Operator)) return;
+
+        // is_null / is_not_null / is_true / is_false — no value input needed.
+        if (row.Operator is "is_null" or "is_not_null" or "is_true" or "is_false")
+        {
+            builder.AddContent(0, (MarkupString)"<span style=\"color:#5F6368;font-style:italic;font-size:12px;\">(no value needed)</span>");
+            return;
+        }
+
+        // Date/datetime operators
+        if (field.DataType is "date" or "datetime")
+        {
+            switch (row.Operator)
+            {
+                case "between":
+                    builder.OpenComponent<MudDatePicker>(0);
+                    builder.AddAttribute(1, "Label", "From");
+                    builder.AddAttribute(2, "Date", row.DateFrom);
+                    builder.AddAttribute(3, "DateChanged", Cb<DateTime?>(d => row.DateFrom = d));
+                    builder.AddAttribute(4, "Variant", Variant.Outlined);
+                    builder.AddAttribute(5, "Margin", Margin.Dense);
+                    builder.AddAttribute(6, "Style", "min-width: 170px;");
+                    builder.CloseComponent();
+
+                    builder.OpenComponent<MudDatePicker>(10);
+                    builder.AddAttribute(11, "Label", "To");
+                    builder.AddAttribute(12, "Date", row.DateTo);
+                    builder.AddAttribute(13, "DateChanged", Cb<DateTime?>(d => row.DateTo = d));
+                    builder.AddAttribute(14, "Variant", Variant.Outlined);
+                    builder.AddAttribute(15, "Margin", Margin.Dense);
+                    builder.AddAttribute(16, "Style", "min-width: 170px;");
+                    builder.CloseComponent();
+                    return;
+
+                case "relative":
+                    builder.OpenComponent<MudSelect<string>>(0);
+                    builder.AddAttribute(1, "Label", "Preset");
+                    builder.AddAttribute(2, "Value", row.RelativePreset ?? "yesterday");
+                    builder.AddAttribute(3, "ValueChanged", Cb<string>(v => row.RelativePreset = v));
+                    builder.AddAttribute(4, "Variant", Variant.Outlined);
+                    builder.AddAttribute(5, "Margin", Margin.Dense);
+                    builder.AddAttribute(6, "Dense", true);
+                    builder.AddAttribute(7, "Style", "min-width: 200px;");
+                    builder.AddAttribute(8, "ChildContent", (RenderFragment)(cb =>
+                    {
+                        foreach (var preset in RelativePresets)
+                        {
+                            cb.OpenComponent<MudSelectItem<string>>(0);
+                            cb.AddAttribute(1, "Value", preset.Id);
+                            cb.AddAttribute(2, "ChildContent", (RenderFragment)(inner => inner.AddContent(0, preset.Label)));
+                            cb.CloseComponent();
+                        }
+                    }));
+                    builder.CloseComponent();
+                    return;
+
+                default: // equals, before, after, on_or_before, on_or_after
+                    builder.OpenComponent<MudDatePicker>(0);
+                    builder.AddAttribute(1, "Label", "Date");
+                    builder.AddAttribute(2, "Date", row.DateFrom);
+                    builder.AddAttribute(3, "DateChanged", Cb<DateTime?>(d => row.DateFrom = d));
+                    builder.AddAttribute(4, "Variant", Variant.Outlined);
+                    builder.AddAttribute(5, "Margin", Margin.Dense);
+                    builder.AddAttribute(6, "Style", "min-width: 180px;");
+                    builder.CloseComponent();
+                    return;
+            }
+        }
+
+        // Codeset text — in_list / not_in_list
+        if (field.DataType == "text" && field.CodesetValues is { Length: > 0 }
+            && row.Operator is "in_list" or "not_in_list")
+        {
+            builder.OpenComponent<MudSelect<string>>(0);
+            builder.AddAttribute(1, "Label", "Values");
+            builder.AddAttribute(2, "MultiSelection", true);
+            builder.AddAttribute(3, "SelectedValues", row.ListValues.ToHashSet());
+            // MudSelect<T>.SelectedValuesChanged binds EventCallback<IReadOnlyCollection<T>>
+            // in MudBlazor 9. Using IEnumerable<T> compiles but blows up at
+            // parameter-set time with a cast exception.
+            builder.AddAttribute(4, "SelectedValuesChanged", Cb<IReadOnlyCollection<string>>(vals => row.ListValues = vals?.ToList() ?? new List<string>()));
+            builder.AddAttribute(5, "Variant", Variant.Outlined);
+            builder.AddAttribute(6, "Margin", Margin.Dense);
+            builder.AddAttribute(7, "Dense", true);
+            builder.AddAttribute(8, "Style", "min-width: 260px;");
+            builder.AddAttribute(9, "ChildContent", (RenderFragment)(cb =>
+            {
+                foreach (var v in field.CodesetValues)
+                {
+                    cb.OpenComponent<MudSelectItem<string>>(0);
+                    cb.AddAttribute(1, "Value", v);
+                    cb.AddAttribute(2, "ChildContent", (RenderFragment)(inner => inner.AddContent(0, v)));
+                    cb.CloseComponent();
+                }
+            }));
+            builder.CloseComponent();
+            return;
+        }
+
+        // Free text (includes in_list on non-codeset text — comma-separated)
+        if (field.DataType == "text")
+        {
+            var placeholder = row.Operator is "in_list" or "not_in_list"
+                ? "comma-separated list" : null;
+            builder.OpenComponent<MudTextField<string>>(0);
+            builder.AddAttribute(1, "Label", "Value");
+            builder.AddAttribute(2, "Value", row.TextValue);
+            builder.AddAttribute(3, "ValueChanged", Cb<string>(v => row.TextValue = v));
+            builder.AddAttribute(4, "Variant", Variant.Outlined);
+            builder.AddAttribute(5, "Margin", Margin.Dense);
+            builder.AddAttribute(6, "Placeholder", placeholder);
+            builder.AddAttribute(7, "Style", "min-width: 260px;");
+            builder.CloseComponent();
+            return;
+        }
+
+        // Numeric
+        if (field.DataType is "integer" or "decimal" or "currency" or "percent")
+        {
+            if (row.Operator == "between")
+            {
+                builder.OpenComponent<MudNumericField<decimal?>>(0);
+                builder.AddAttribute(1, "Label", "From");
+                builder.AddAttribute(2, "Value", row.NumValue);
+                builder.AddAttribute(3, "ValueChanged", Cb<decimal?>(v => row.NumValue = v));
+                builder.AddAttribute(4, "Variant", Variant.Outlined);
+                builder.AddAttribute(5, "Margin", Margin.Dense);
+                builder.AddAttribute(6, "Style", "min-width: 160px;");
+                builder.CloseComponent();
+
+                builder.OpenComponent<MudNumericField<decimal?>>(10);
+                builder.AddAttribute(11, "Label", "To");
+                builder.AddAttribute(12, "Value", row.NumValueTo);
+                builder.AddAttribute(13, "ValueChanged", Cb<decimal?>(v => row.NumValueTo = v));
+                builder.AddAttribute(14, "Variant", Variant.Outlined);
+                builder.AddAttribute(15, "Margin", Margin.Dense);
+                builder.AddAttribute(16, "Style", "min-width: 160px;");
+                builder.CloseComponent();
+                return;
+            }
+            if (row.Operator is "in_list")
+            {
+                builder.OpenComponent<MudTextField<string>>(0);
+                builder.AddAttribute(1, "Label", "Values");
+                builder.AddAttribute(2, "Value", row.TextValue);
+                builder.AddAttribute(3, "ValueChanged", Cb<string>(v => row.TextValue = v));
+                builder.AddAttribute(4, "Variant", Variant.Outlined);
+                builder.AddAttribute(5, "Margin", Margin.Dense);
+                builder.AddAttribute(6, "Placeholder", "comma-separated");
+                builder.AddAttribute(7, "Style", "min-width: 260px;");
+                builder.CloseComponent();
+                return;
+            }
+
+            builder.OpenComponent<MudNumericField<decimal?>>(0);
+            builder.AddAttribute(1, "Label", "Value");
+            builder.AddAttribute(2, "Value", row.NumValue);
+            builder.AddAttribute(3, "ValueChanged", Cb<decimal?>(v => row.NumValue = v));
+            builder.AddAttribute(4, "Variant", Variant.Outlined);
+            builder.AddAttribute(5, "Margin", Margin.Dense);
+            builder.AddAttribute(6, "Style", "min-width: 200px;");
+            builder.CloseComponent();
+        }
+    };
+
+    // ── SQL preview emission ──────────────────────────────────────────
+    //
+    // The preview panel shows INLINE LITERALS for copy-paste readability
+    // (`col >= '2026-04-15 07:00:00'` instead of `col >= @p0`). The real
+    // runtime emitter stays parameterized — inlining values at execution
+    // time would re-introduce SQL-injection risk and defeat the whole
+    // reason the app restricts users to a curated field catalog.
+    //
+    // Quoting helpers below only apply to PREVIEW output, so they cover
+    // the shapes we render (dates, numbers, strings) without pretending
+    // to be a general-purpose SQL escape layer.
+
+    private string PreviewSql()
+    {
+        if (_rows.Count == 0)
+            return "-- No filters yet. Click \"Add filter\" to start.";
+
+        var clauses = new List<string>();
+        foreach (var row in _rows)
+        {
+            var field = CurrentField(row);
+            if (field is null || string.IsNullOrEmpty(row.Operator)) continue;
+            var clause = BuildClause(field, row);
+            if (!string.IsNullOrEmpty(clause)) clauses.Add(clause);
+        }
+
+        var where = clauses.Count == 0
+            ? "-- (no complete filter rows)"
+            : "WHERE " + string.Join("\n  AND ", clauses);
+
+        return $"-- Dialect: {_demoDialect}    Display TZ: {_demoTimezone}\nSELECT ... FROM salesforce.lead AS l\n{where}";
+    }
+
+    // Emit one WHERE fragment per filter row. Raw column on the LHS for
+    // every operator, so existing btree indexes are used.
+    private string BuildClause(DemoField field, FilterRow row)
+    {
+        var col = $"{field.Table}.{field.Column}";
+        var op = row.Operator!;
+
+        if (op == "is_null") return $"{col} IS NULL";
+        if (op == "is_not_null") return $"{col} IS NOT NULL";
+        // Boolean storage is dialect-specific in this app:
+        //   * Postgres → native `boolean` column, uses TRUE / FALSE.
+        //   * SQL Server → CHAR(1) with 'Y' / 'N' / NULL. Strict equality
+        //     excludes NULLs; pair `is_false` with `is_null` if you want
+        //     "false or missing" semantics.
+        if (op == "is_true")
+            return _demoDialect == "sqlserver" ? $"{col} = 'Y'" : $"{col} = TRUE";
+        if (op == "is_false")
+            return _demoDialect == "sqlserver" ? $"{col} = 'N'" : $"{col} = FALSE";
+
+        if (field.DataType is "date" or "datetime")
+            return BuildDateClause(col, field, row);
+
+        if (field.DataType == "text")
+            return BuildTextClause(col, row);
+
+        if (field.DataType is "integer" or "decimal" or "currency" or "percent")
+            return BuildNumericClause(col, row);
+
+        return $"-- unsupported: {field.Id} {op}";
+    }
+
+    // Emission pattern for date filters (matches the user's preferred idiom):
+    //   LHS:  (col AT TIME ZONE 'UTC' AT TIME ZONE '<tz>')::date       (Postgres, TZ-flagged)
+    //         CAST(col AT TIME ZONE 'UTC' AT TIME ZONE '<tz>' AS DATE) (SQL Server, TZ-flagged)
+    //         col::date / CAST(col AS DATE)                            (non-TZ-flagged)
+    //   RHS:  - plain date literal for user-picked dates
+    //         - NOW()/GETDATE() arithmetic for relative presets
+    //
+    // INDEXING NOTE: wrapping the LHS disables a plain btree on the raw
+    // column. The planner will only use an index here if the tenant DB has
+    // a **functional index** on the exact wrapped expression, e.g.:
+    //   CREATE INDEX ... ON salesforce.lead
+    //       (((createddate AT TIME ZONE 'UTC' AT TIME ZONE 'US/Pacific')::date));
+    // Without that, every date filter is a table scan. Since the target
+    // Postgres DB can't be modified, this is worth verifying in Heroku /
+    // whatever mirror is supplying the data — Salesforce-mirror tools
+    // sometimes ship functional indexes for createddate out of the box.
+    private string BuildDateClause(string col, DemoField field, FilterRow row)
+    {
+        var lhs = BuildDateLhs(col, field);
+
+        switch (row.Operator)
+        {
+            case "equals":
+                if (row.DateFrom is not DateTime d) return "-- (date not set)";
+                return $"{lhs} = {DateOnlyLit(d)}";
+            case "not_equals":
+                if (row.DateFrom is not DateTime dn) return "-- (date not set)";
+                return $"{lhs} <> {DateOnlyLit(dn)}";
+            case "before":
+                if (row.DateFrom is not DateTime db) return "-- (date not set)";
+                return $"{lhs} < {DateOnlyLit(db)}";
+            case "after":
+                if (row.DateFrom is not DateTime da) return "-- (date not set)";
+                return $"{lhs} > {DateOnlyLit(da)}";
+            case "on_or_before":
+                if (row.DateFrom is not DateTime dob) return "-- (date not set)";
+                return $"{lhs} <= {DateOnlyLit(dob)}";
+            case "on_or_after":
+                if (row.DateFrom is not DateTime doa) return "-- (date not set)";
+                return $"{lhs} >= {DateOnlyLit(doa)}";
+            case "between":
+                if (row.DateFrom is not DateTime bf || row.DateTo is not DateTime bt)
+                    return "-- (range not set)";
+                return $"{lhs} BETWEEN {DateOnlyLit(bf)} AND {DateOnlyLit(bt)}";
+            case "relative":
+                return BuildRelativeClause(lhs, row.RelativePreset, field);
+            default:
+                return $"-- unsupported date op: {row.Operator}";
+        }
+    }
+
+    // Build the left-hand expression for a date filter. Matches the SELECT
+    // projection idiom for TZ-flagged fields so filter + display stay
+    // consistent in the same wall-clock day.
+    //
+    // Dialect semantics:
+    //   * Postgres — tenant stores datetimes in UTC. When the field is
+    //     TZ-flagged, wrap it as (col AT TIME ZONE 'UTC' AT TIME ZONE '<tz>')::date
+    //     so the filter matches the user's wall-clock day.
+    //   * SQL Server — tenant physical columns are `datetime` but the
+    //     Empower application view categorizes them as Date or Datetime.
+    //     For now, always CAST AS DATE regardless of the application-level
+    //     type. Strips the time portion so date filters match across a
+    //     whole calendar day, and avoids the AT-TIME-ZONE overload that
+    //     only works on datetimeoffset. Data is stored in local time, so
+    //     no TZ conversion is needed.
+    //
+    // Matches the real app: SchemaService only paints DisplayTimezone onto
+    // a FieldConfig when ConnectionType == "postgres", so FieldConfig's
+    // GetSqlExpression() already skips the wrap on SQL Server connections.
+    private string BuildDateLhs(string col, DemoField field)
+    {
+        if (_demoDialect == "postgres")
+        {
+            return field.TzFlagged
+                ? $"({col} AT TIME ZONE 'UTC' AT TIME ZONE '{_demoTimezone}')::date"
+                : $"{col}::date";
+        }
+        // SQL Server — always CAST AS DATE for both date and datetime.
+        return $"CAST({col} AS DATE)";
+    }
+
+    // Relative presets. All anchored to "today in the display timezone" so
+    // a user's "yesterday" matches their wall-clock expectation regardless
+    // of when the server's UTC day flips.
+    private string BuildRelativeClause(string lhs, string? preset, DemoField field)
+    {
+        var tz = _demoTimezone;
+        // Today-in-TZ as a date. Reused for arithmetic across all presets.
+        string todayExpr, firstOfMonth, firstOfNextMonth, firstOfYear, firstOfLastYear;
+        if (_demoDialect == "postgres")
+        {
+            todayExpr = field.TzFlagged
+                ? $"(NOW() AT TIME ZONE '{tz}')::date"
+                : "CURRENT_DATE";
+            firstOfMonth      = $"date_trunc('month', {todayExpr})::date";
+            firstOfNextMonth  = $"(date_trunc('month', {todayExpr}) + INTERVAL '1 month')::date";
+            firstOfYear       = $"date_trunc('year', {todayExpr})::date";
+            firstOfLastYear   = $"(date_trunc('year', {todayExpr}) - INTERVAL '1 year')::date";
+        }
+        else // sqlserver — data is local, GETDATE() is already the right clock.
+        {
+            todayExpr = "CAST(GETDATE() AS DATE)";
+            firstOfMonth      = $"DATEFROMPARTS(YEAR({todayExpr}), MONTH({todayExpr}), 1)";
+            firstOfNextMonth  = $"DATEADD(month, 1, DATEFROMPARTS(YEAR({todayExpr}), MONTH({todayExpr}), 1))";
+            firstOfYear       = $"DATEFROMPARTS(YEAR({todayExpr}), 1, 1)";
+            firstOfLastYear   = $"DATEFROMPARTS(YEAR({todayExpr}) - 1, 1, 1)";
+        }
+
+        // Postgres date math: `date - N` subtracts N days. SQL Server uses DATEADD.
+        string DaysAgo(int n) => _demoDialect == "postgres"
+            ? $"{todayExpr} - {n}"
+            : $"DATEADD(day, -{n}, {todayExpr})";
+
+        switch (preset ?? "yesterday")
+        {
+            case "today":
+                return $"{lhs} = {todayExpr}";
+            case "yesterday":
+                return $"{lhs} = {DaysAgo(1)}";
+            case "last_7_days":
+                return $"{lhs} >= {DaysAgo(7)} AND {lhs} <= {todayExpr}";
+            case "last_30_days":
+                return $"{lhs} >= {DaysAgo(30)} AND {lhs} <= {todayExpr}";
+            case "mtd":
+                return $"{lhs} >= {firstOfMonth} AND {lhs} <= {todayExpr}";
+            case "ytd":
+                return $"{lhs} >= {firstOfYear} AND {lhs} <= {todayExpr}";
+            case "last_month":
+                // [first of last month, first of this month)
+                var firstOfLastMonth = _demoDialect == "postgres"
+                    ? $"(date_trunc('month', {todayExpr}) - INTERVAL '1 month')::date"
+                    : $"DATEADD(month, -1, DATEFROMPARTS(YEAR({todayExpr}), MONTH({todayExpr}), 1))";
+                return $"{lhs} >= {firstOfLastMonth} AND {lhs} < {firstOfMonth}";
+            case "last_year":
+                // Calendar year: Jan 1 last year through Dec 31 last year.
+                return $"{lhs} >= {firstOfLastYear} AND {lhs} < {firstOfYear}";
+            default:
+                return $"{lhs} = {DaysAgo(1)}";
+        }
+    }
+
+private string BuildTextClause(string col, FilterRow row)
+    {
+        if (string.IsNullOrWhiteSpace(row.TextValue) && row.ListValues.Count == 0)
+            return "-- (value not set)";
+
+        // ILIKE and ||-concat are Postgres; SQL Server uses LIKE (case-
+        // insensitive by default on most collations) + '+' concat.
+        var likeOp = _demoDialect == "sqlserver" ? "LIKE" : "ILIKE";
+        var concat = _demoDialect == "sqlserver" ? " + " : " || ";
+        var v = row.TextValue ?? "";
+
+        switch (row.Operator)
+        {
+            case "equals":      return $"{col} = {StrLit(v)}";
+            case "not_equals":  return $"{col} <> {StrLit(v)}";
+            case "contains":    return $"{col} {likeOp} {StrLit("%" + v + "%")}";
+            case "starts_with": return $"{col} {likeOp} {StrLit(v + "%")}";
+            case "ends_with":   return $"{col} {likeOp} {StrLit("%" + v)}";
+            case "in_list":
+            case "not_in_list":
+                var src = row.ListValues.Count > 0 ? row.ListValues : SplitCsv(row.TextValue);
+                if (src.Count == 0) return "-- (no values)";
+                var negate = row.Operator == "not_in_list" ? "NOT " : "";
+                return $"{col} {negate}IN ({string.Join(", ", src.Select(StrLit))})";
+        }
+        return $"-- unsupported text op: {row.Operator}";
+    }
+
+    private string BuildNumericClause(string col, FilterRow row)
+    {
+        if (row.Operator == "between")
+        {
+            if (row.NumValue is not decimal a || row.NumValueTo is not decimal b)
+                return "-- (range not set)";
+            return $"{col} BETWEEN {NumLit(a)} AND {NumLit(b)}";
+        }
+
+        if (row.Operator == "in_list")
+        {
+            var parts = SplitCsv(row.TextValue)
+                .Select(s => decimal.TryParse(s, out var n) ? (decimal?)n : null)
+                .Where(x => x.HasValue)
+                .Select(x => NumLit(x!.Value))
+                .ToList();
+            return parts.Count > 0
+                ? $"{col} IN ({string.Join(", ", parts)})"
+                : "-- (no parseable numbers)";
+        }
+
+        if (row.NumValue is not decimal val) return "-- (value not set)";
+        return row.Operator switch
+        {
+            "equals"     => $"{col} = {NumLit(val)}",
+            "not_equals" => $"{col} <> {NumLit(val)}",
+            "lt"         => $"{col} < {NumLit(val)}",
+            "lte"        => $"{col} <= {NumLit(val)}",
+            "gt"         => $"{col} > {NumLit(val)}",
+            "gte"        => $"{col} >= {NumLit(val)}",
+            _            => $"-- unsupported numeric op: {row.Operator}"
+        };
+    }
+
+    // ── Literal formatters for inline preview ─────────────────────────
+    //
+    // These only emit values we generate in this page (dates, numbers,
+    // strings from MudTextField / codesets). Real runtime emission
+    // parameterizes — these exist solely so the preview panel reads
+    // naturally and pastes into a SQL tool.
+    private static string StrLit(string? s) =>
+        "'" + (s ?? "").Replace("'", "''") + "'";
+    private static string NumLit(decimal n) =>
+        n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    // Plain date literal — both Postgres and SQL Server accept 'YYYY-MM-DD'
+    // as an implicit date; no cast needed on the RHS when the LHS is
+    // already a date expression.
+    private static string DateOnlyLit(DateTime d) =>
+        "'" + d.ToString("yyyy-MM-dd") + "'";
+
+    private static List<string> SplitCsv(string? s) =>
+        string.IsNullOrWhiteSpace(s) ? new List<string>()
+            : s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    private string PreviewJson()
+    {
+        var arr = _rows
+            .Where(r => !string.IsNullOrEmpty(r.FieldId) && !string.IsNullOrEmpty(r.Operator))
+            .Select(r => new
+            {
+                field = r.FieldId,
+                op = r.Operator,
+                values = CollectValues(r)
+            })
+            .ToList();
+        var obj = new { filters = arr };
+        return System.Text.Json.JsonSerializer.Serialize(obj,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static object[] CollectValues(FilterRow r)
+    {
+        if (r.Operator is "is_null" or "is_not_null" or "is_true" or "is_false")
+            return Array.Empty<object>();
+        if (r.RelativePreset is not null && r.Operator == "relative")
+            return new object[] { r.RelativePreset };
+        var vals = new List<object>();
+        if (r.DateFrom.HasValue) vals.Add(r.DateFrom.Value.ToString("yyyy-MM-dd"));
+        if (r.DateTo.HasValue) vals.Add(r.DateTo.Value.ToString("yyyy-MM-dd"));
+        if (r.NumValue.HasValue) vals.Add(r.NumValue.Value);
+        if (r.NumValueTo.HasValue) vals.Add(r.NumValueTo.Value);
+        if (!string.IsNullOrEmpty(r.TextValue)) vals.Add(r.TextValue);
+        if (r.ListValues.Count > 0) vals.AddRange(r.ListValues);
+        return vals.ToArray();
+    }
+}

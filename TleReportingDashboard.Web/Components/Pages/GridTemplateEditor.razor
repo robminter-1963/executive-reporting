@@ -1,0 +1,415 @@
+@page "/grid-templates/new"
+@page "/grid-templates/{TemplateId:guid}"
+@rendermode InteractiveServer
+@inject IGridTemplateService TemplateService
+@inject ISchemaService SchemaService
+@inject IAdminService AdminService
+@inject ICompanyConnectionAdminService ConnectionAdminSvc
+@inject ICompanyRegistry CompanyRegistry
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>@(_isNew ? "New Grid Template" : _template.Name) - Executive Reporting Suite</PageTitle>
+
+@if (_accessDenied)
+{
+    <MudMainContent Style="padding: 16px;">
+        <MudAlert Severity="Severity.Warning">
+            Grid Templates are an admin-only area. Redirecting to the Report Library…
+        </MudAlert>
+    </MudMainContent>
+    return;
+}
+
+<MudMainContent Style="padding: 16px; height: calc(100vh - 48px); overflow-y: auto;">
+    <div style="max-width: 900px; margin: 0 auto;">
+    <MudStack Spacing="3">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="@(() => Navigation.NavigateTo("/grid-templates"))" />
+            <MudText Typo="Typo.h5" Style="font-weight: 600;">
+                @(_isNew ? "New Grid Template" : $"Edit: {_template.Name}")
+            </MudText>
+            <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
+                     Icon="@Icons.Material.Filled.Shield"
+                     Style="font-size: 0.65rem; height: 22px;">
+                ADMIN
+            </MudChip>
+        </MudStack>
+
+        @* ── Template Properties ── *@
+        <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudStack Spacing="2">
+                <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Template Settings</MudText>
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="_template.Name" Label="Name" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" Placeholder="e.g. Pipeline Overview" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="_template.Description" Label="Description (optional)"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudItem>
+                    @* Connection picker — required. Locked after the first save
+                       because the template's field ids belong to this connection's
+                       schema catalog; switching would silently invalidate them. *@
+                    <MudItem xs="12" sm="6">
+                        <MudTooltip Text="@(_isNew ? "Schema this template's fields belong to" : "Connection is locked after the template is saved")">
+                            <MudSelect T="Guid?" Value="_template.ConnectionId"
+                                       ValueChanged="OnConnectionChanged"
+                                       ToStringFunc="@ConnectionToLabel"
+                                       Label="Connection" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                       Disabled="@(!_isNew)" Required
+                                       Error="@(!_template.ConnectionId.HasValue)"
+                                       ErrorText="Required">
+                                @foreach (var c in _availableConnections.Where(c => c.IsActive))
+                                {
+                                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">
+                                        @c.Name@(c.IsDefault ? " (default)" : "")
+                                    </MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudTooltip>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudCheckBox T="bool" @bind-Value="_template.IsShared" Label="Share with all users"
+                                     Color="Color.Primary" Dense />
+                    </MudItem>
+                </MudGrid>
+            </MudStack>
+        </MudPaper>
+
+        @* ── Field Selection ── *@
+        <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudStack Spacing="2">
+                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">
+                        Fields (@_selectedFieldIds.Count selected)
+                    </MudText>
+                    <MudTextField @bind-Value="_fieldSearch" Placeholder="Search fields..." Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" Immediate DebounceInterval="300"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Style="max-width: 250px;" />
+                </MudStack>
+
+                @foreach (var domain in _domains)
+                {
+                    var filtered = domain.Fields.Where(f => MatchesSearch(f)).ToList();
+                    if (!filtered.Any()) continue;
+
+                    <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mt-1">@domain.Name</MudText>
+                    <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                        @foreach (var field in filtered)
+                        {
+                            var fid = field.Id;
+                            var selected = _selectedFieldIds.Contains(fid);
+                            <MudChip T="string" Variant="@(selected ? Variant.Filled : Variant.Outlined)"
+                                     Color="@(selected ? Color.Primary : Color.Default)" Size="Size.Small"
+                                     OnClick="() => ToggleField(fid)" Style="cursor: pointer;">
+                                @field.Label
+                            </MudChip>
+                        }
+                    </div>
+                }
+            </MudStack>
+        </MudPaper>
+
+        @* ── Selected Fields Order ── *@
+        @if (_selectedFieldIds.Any())
+        {
+            <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudStack Spacing="2">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Column Order & Visibility</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        Drag to reorder. Click the eye icon to hide a column from the grid (it stays in the query for dashboards).
+                    </MudText>
+                    <MudTable Items="_orderedFields" Dense Hover>
+                        <HeaderContent>
+                            <MudTh Style="width: 40px;">#</MudTh>
+                            <MudTh>Field</MudTh>
+                            <MudTh>Type</MudTh>
+                            <MudTh Style="width: 60px;">Visible</MudTh>
+                            <MudTh Style="width: 80px;">Move</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            @{
+                                var idx = _orderedFields.IndexOf(context);
+                                var fld = context;
+                            }
+                            <MudTd>@(idx + 1)</MudTd>
+                            <MudTd><MudText Typo="Typo.body2" Style="font-weight: 500;">@fld.Label</MudText></MudTd>
+                            <MudTd><MudText Typo="Typo.caption">@fld.DataType</MudText></MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@(_hiddenColumns.Contains(fld.Id) ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                               Size="Size.Small"
+                                               Color="@(_hiddenColumns.Contains(fld.Id) ? Color.Default : Color.Primary)"
+                                               OnClick="() => ToggleVisibility(fld.Id)"
+                                               title="@(_hiddenColumns.Contains(fld.Id) ? "Show column" : "Hide column")" />
+                            </MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
+                                               Disabled="@(idx == 0)"
+                                               OnClick="() => MoveField(idx, -1)"
+                                               title="Move up" />
+                                <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
+                                               Disabled="@(idx == _orderedFields.Count - 1)"
+                                               OnClick="() => MoveField(idx, 1)"
+                                               title="Move down" />
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                </MudStack>
+            </MudPaper>
+        }
+
+        @* ── Sort Settings ── *@
+        @if (_selectedFieldIds.Any())
+        {
+            <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudStack Spacing="2">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Default Sort</MudText>
+                    <MudStack Row Spacing="2">
+                        <MudSelect T="string" @bind-Value="_defaultSortField" Label="Sort Field" Variant="Variant.Outlined"
+                                   Margin="Margin.Dense" Dense Style="max-width: 250px;">
+                            <MudSelectItem T="string" Value="@("")">-- None --</MudSelectItem>
+                            @foreach (var f in _orderedFields)
+                            {
+                                <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="string" @bind-Value="_defaultSortDir" Label="Direction" Variant="Variant.Outlined"
+                                   Margin="Margin.Dense" Dense Style="max-width: 120px;"
+                                   Disabled="@(string.IsNullOrEmpty(_defaultSortField))">
+                            <MudSelectItem T="string" Value="@("asc")">Asc</MudSelectItem>
+                            <MudSelectItem T="string" Value="@("desc")">Desc</MudSelectItem>
+                        </MudSelect>
+                    </MudStack>
+                </MudStack>
+            </MudPaper>
+        }
+
+        @* ── Save ── *@
+        <MudStack Row Justify="Justify.FlexEnd" Spacing="2">
+            <MudButton Variant="Variant.Text" Color="Color.Default"
+                       OnClick="@(() => Navigation.NavigateTo("/grid-templates"))">
+                Cancel
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Save"
+                       OnClick="Save" Disabled="@(string.IsNullOrWhiteSpace(_template.Name) || !_selectedFieldIds.Any())">
+                Save Template
+            </MudButton>
+        </MudStack>
+    </MudStack>
+    </div>
+</MudMainContent>
+
+@code {
+    [Parameter] public Guid? TemplateId { get; set; }
+
+    private bool _isNew => !TemplateId.HasValue;
+    private string _userId = "anonymous";
+    private string _userEmail = string.Empty;
+    private GridTemplate _template = new();
+    private List<DomainGroup> _domains = new();
+    private List<string> _selectedFieldIds = new();
+    private List<FieldDefinition> _orderedFields = new();
+    private HashSet<string> _hiddenColumns = new();
+    private string _defaultSortField = string.Empty;
+    private string _defaultSortDir = "asc";
+    private string _fieldSearch = string.Empty;
+
+    private bool _accessDenied;
+    private List<CompanyConnectionRecord> _availableConnections = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _userId = user.FindFirst("oid")?.Value ?? user.Identity?.Name ?? "anonymous";
+        _userEmail = user.FindFirst("preferred_username")?.Value ?? string.Empty;
+
+        if (!AdminService.IsAdmin(_userEmail))
+        {
+            _accessDenied = true;
+            _ = Task.Delay(1500).ContinueWith(_ =>
+                InvokeAsync(() => Navigation.NavigateTo("/reports")));
+            return;
+        }
+
+        // Load connections across every active company so templates can be
+        // authored against any company's connection — the hardcoded "TLE
+        // only" load was silently hiding other companies' options.
+        _availableConnections = new();
+        foreach (var comp in await CompanyRegistry.GetActiveAsync())
+        {
+            var conns = await ConnectionAdminSvc.GetByCompanyAsync(comp.Id);
+            _availableConnections.AddRange(conns);
+        }
+
+        if (TemplateId.HasValue)
+        {
+            var existing = await TemplateService.GetTemplateAsync(TemplateId.Value);
+            if (existing is not null)
+            {
+                _template = existing;
+                _selectedFieldIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(existing.FieldIds) ?? new();
+                // Load domains against the template's own connection so the
+                // field picker shows the catalog the template was built against.
+                _domains = await SchemaService.GetDomainGroupsAsync(connectionId: _template.ConnectionId);
+                RebuildOrderedFields();
+
+                if (!string.IsNullOrWhiteSpace(existing.ColumnState))
+                {
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(existing.ColumnState);
+                        if (doc.RootElement.TryGetProperty("TableColumnOrder", out var coEl))
+                        {
+                            var order = System.Text.Json.JsonSerializer.Deserialize<List<string>>(coEl.GetRawText());
+                            if (order is not null)
+                                ReorderFields(order);
+                        }
+                        if (doc.RootElement.TryGetProperty("HiddenColumns", out var hcEl))
+                        {
+                            var hc = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcEl.GetRawText());
+                            if (hc is not null) _hiddenColumns = new HashSet<string>(hc, StringComparer.OrdinalIgnoreCase);
+                        }
+                        if (doc.RootElement.TryGetProperty("TableSortField", out var sfEl))
+                            _defaultSortField = sfEl.GetString() ?? string.Empty;
+                        if (doc.RootElement.TryGetProperty("TableSortDirection", out var sdEl))
+                            _defaultSortDir = sdEl.GetString() ?? "asc";
+                    }
+                    catch { }
+                }
+            }
+        }
+        else
+        {
+            // New template: pre-select the company's default connection and
+            // load its field catalog. User can change before saving.
+            var defaultConn = _availableConnections.FirstOrDefault(c => c.IsDefault && c.IsActive)
+                              ?? _availableConnections.FirstOrDefault(c => c.IsActive);
+            _template.ConnectionId = defaultConn?.Id;
+            _domains = await SchemaService.GetDomainGroupsAsync(connectionId: _template.ConnectionId);
+        }
+    }
+
+    private async Task OnConnectionChanged(Guid? newId)
+    {
+        // Saved templates lock the connection, so the picker is disabled — this
+        // only fires for new templates. Swap the field catalog and clear any
+        // selections that don't belong to the new connection (keeps the UI
+        // honest: no stale selections from the previous connection).
+        if (!_isNew) return;
+        _template.ConnectionId = newId;
+        _domains = await SchemaService.GetDomainGroupsAsync(connectionId: newId);
+        var validFieldIds = new HashSet<string>(
+            _domains.SelectMany(d => d.Fields.Select(f => f.Id)),
+            StringComparer.OrdinalIgnoreCase);
+        _selectedFieldIds = _selectedFieldIds.Where(validFieldIds.Contains).ToList();
+        RebuildOrderedFields();
+    }
+
+    // Maps the Guid? value back to its display label. Without this, MudSelect
+    // falls back to value.ToString() (the GUID) on first render before the
+    // items list is wired up.
+    private string ConnectionToLabel(Guid? id)
+    {
+        if (id is null) return string.Empty;
+        var c = _availableConnections.FirstOrDefault(x => x.Id == id);
+        if (c is null) return string.Empty;
+        return $"{c.Name}{(c.IsDefault ? " (default)" : "")}";
+    }
+
+    private bool MatchesSearch(FieldDefinition f) =>
+        string.IsNullOrWhiteSpace(_fieldSearch) ||
+        f.Label.Contains(_fieldSearch, StringComparison.OrdinalIgnoreCase) ||
+        f.Id.Contains(_fieldSearch, StringComparison.OrdinalIgnoreCase);
+
+    private void ToggleField(string fieldId)
+    {
+        if (_selectedFieldIds.Contains(fieldId))
+            _selectedFieldIds.Remove(fieldId);
+        else
+            _selectedFieldIds.Add(fieldId);
+        RebuildOrderedFields();
+    }
+
+    private void ToggleVisibility(string fieldId)
+    {
+        if (!_hiddenColumns.Remove(fieldId))
+            _hiddenColumns.Add(fieldId);
+    }
+
+    private void MoveField(int index, int direction)
+    {
+        var newIndex = index + direction;
+        if (newIndex < 0 || newIndex >= _orderedFields.Count) return;
+        var item = _orderedFields[index];
+        _orderedFields.RemoveAt(index);
+        _orderedFields.Insert(newIndex, item);
+        _selectedFieldIds = _orderedFields.Select(f => f.Id).ToList();
+    }
+
+    private void RebuildOrderedFields()
+    {
+        var allFields = _domains.SelectMany(d => d.Fields).ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+        _orderedFields = _selectedFieldIds
+            .Where(id => allFields.ContainsKey(id))
+            .Select(id => allFields[id])
+            .ToList();
+    }
+
+    private void ReorderFields(List<string> order)
+    {
+        var allFields = _domains.SelectMany(d => d.Fields).ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<FieldDefinition>();
+        foreach (var id in order)
+            if (allFields.TryGetValue(id, out var f) && _selectedFieldIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+                ordered.Add(f);
+        foreach (var id in _selectedFieldIds)
+            if (!ordered.Any(f => f.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) && allFields.TryGetValue(id, out var f))
+                ordered.Add(f);
+        _orderedFields = ordered;
+    }
+
+    private async Task Save()
+    {
+        if (!_template.ConnectionId.HasValue)
+        {
+            Snackbar.Add("Connection is required — pick the schema this template targets.", Severity.Warning);
+            return;
+        }
+
+        _template.OwnerId = _userId;
+        _template.OwnerEmail = _userEmail;
+        _template.FieldIds = System.Text.Json.JsonSerializer.Serialize(_orderedFields.Select(f => f.Id).ToList());
+
+        var state = new Dictionary<string, object?>();
+        var colOrder = _orderedFields.Select(f => f.Id).ToList();
+        if (colOrder.Count > 0) state["TableColumnOrder"] = colOrder;
+        if (_hiddenColumns.Count > 0) state["HiddenColumns"] = _hiddenColumns.ToList();
+        if (!string.IsNullOrEmpty(_defaultSortField))
+        {
+            state["TableSortField"] = _defaultSortField;
+            state["TableSortDirection"] = _defaultSortDir;
+        }
+        _template.ColumnState = state.Count > 0 ? System.Text.Json.JsonSerializer.Serialize(state) : null;
+
+        try
+        {
+            if (_isNew)
+                await TemplateService.SaveTemplateAsync(_template);
+            else
+                await TemplateService.UpdateTemplateAsync(_template);
+
+            Navigation.NavigateTo("/grid-templates");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+        }
+    }
+}

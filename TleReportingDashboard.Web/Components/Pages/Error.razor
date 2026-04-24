@@ -1,0 +1,46 @@
+﻿@page "/Error"
+@using System.Diagnostics
+
+<PageTitle>Error</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">
+        <MudText Typo="Typo.h6">An error occurred while processing your request.</MudText>
+    </MudAlert>
+
+    @if (ShowRequestId)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mb-4">
+            <MudText Typo="Typo.body2">
+                <strong>Request ID:</strong> @requestId
+            </MudText>
+        </MudAlert>
+    }
+
+    <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED;">
+        <MudText Typo="Typo.subtitle1" Class="mb-2">Development Mode</MudText>
+        <MudText Typo="Typo.body2" Class="mb-2">
+            Swapping to the <strong>Development</strong> environment will display more detailed information about the error that occurred.
+        </MudText>
+        <MudText Typo="Typo.body2">
+            For local debugging, set the <strong>ASPNETCORE_ENVIRONMENT</strong> environment variable to <strong>Development</strong> and restart the app.
+        </MudText>
+    </MudPaper>
+
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Href="/" Class="mt-4">
+        Return to Dashboard
+    </MudButton>
+</MudContainer>
+
+@code {
+    [CascadingParameter]
+    public HttpContext? HttpContext { get; set; }
+
+    private string? requestId;
+    private bool ShowRequestId => !string.IsNullOrEmpty(requestId);
+
+    protected override void OnInitialized()
+    {
+        requestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+    }
+}

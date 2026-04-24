@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- CS8669: emitted by the .NET 10 Razor source generator for its own *_razor.g.cs
+         output (it uses nullable annotations without a #nullable directive). Not user code.
+         RZ10012 + MUD0002: false positives from MudBlazor 9.2's analyzer on MudFileUpload's
+         <ActivatorContent> slot — the upload works at runtime; the analyzer doesn't recognize
+         the typed RenderFragment<RenderFragment> pattern. -->
+    <NoWarn>$(NoWarn);CS8669;RZ10012;MUD0002</NoWarn>
+    <!-- OutOfProcess avoids in-process hosting conflicts with Aspire service defaults
+         and SignalR when deployed to IIS. -->
+    <AspNetCoreHostingModel>OutOfProcess</AspNetCoreHostingModel>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TleReportingDashboard.ServiceDefaults\TleReportingDashboard.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.104.2" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.2" />
+    <PackageReference Include="Microsoft.Identity.Web" Version="4.7.0" />
+    <PackageReference Include="Microsoft.Identity.Web.UI" Version="4.7.0" />
+    <PackageReference Include="MudBlazor" Version="9.3.0" />
+    <PackageReference Include="Npgsql" Version="9.0.2" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,68 @@
+@* Tiny menu surfaced on each dashboard totals-row cell. Picks how that
+   column aggregates into the totals row: SUM, AVG, MIN, MAX, MEDIAN, NONE
+   (blank), or a literal string. Positioned as an inline kebab the user can
+   click without opening the whole row-click handler (stopPropagation). *@
+
+<div style="display: inline-block; margin-left: 4px;" @onclick:stopPropagation="true">
+    <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense
+             AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+             Style="padding: 0; min-width: 0;" IconSize="Size.Small">
+        @foreach (var m in Methods)
+        {
+            var mLocal = m;
+            <MudMenuItem OnClick="@(() => OnMethodChanged.InvokeAsync(mLocal))">
+                @if (string.Equals(CurrentMethod, mLocal, StringComparison.OrdinalIgnoreCase))
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Style="margin-right: 4px;" />
+                }
+                @mLocal
+            </MudMenuItem>
+        }
+        <MudDivider />
+        <MudMenuItem OnClick="OpenLiteralEditor">Literal…</MudMenuItem>
+    </MudMenu>
+
+    @if (_editingLiteral)
+    {
+        <MudPopover Open="true" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Style="padding: 8px;">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                <MudTextField T="string" @bind-Value="_literalInput" Placeholder="e.g. 100%"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                              Style="width: 140px;" />
+                <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small"
+                               Color="Color.Primary" OnClick="CommitLiteral"
+                               title="Confirm" />
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                               OnClick="() => _editingLiteral = false"
+                               title="Cancel" />
+            </MudStack>
+        </MudPopover>
+    }
+</div>
+
+@code {
+    [Parameter] public string CurrentMethod { get; set; } = "SUM";
+    [Parameter] public EventCallback<string> OnMethodChanged { get; set; }
+    [Parameter] public EventCallback<string> OnLiteralChanged { get; set; }
+
+    private static readonly string[] Methods = { "SUM", "AVG", "MIN", "MAX", "MEDIAN", "NONE" };
+
+    private bool _editingLiteral;
+    private string _literalInput = string.Empty;
+
+    private void OpenLiteralEditor()
+    {
+        // Seed with the current literal (minus the "LITERAL:" prefix) so the
+        // user can edit it rather than re-type from scratch.
+        _literalInput = CurrentMethod.StartsWith("LITERAL:", StringComparison.OrdinalIgnoreCase)
+            ? CurrentMethod[8..]
+            : string.Empty;
+        _editingLiteral = true;
+    }
+
+    private async Task CommitLiteral()
+    {
+        await OnLiteralChanged.InvokeAsync(_literalInput);
+        _editingLiteral = false;
+    }
+}

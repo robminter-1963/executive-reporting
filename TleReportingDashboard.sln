@@ -1,0 +1,49 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.8.0.0
+MinimumVisualStudioVersion = 17.8.0.0
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TleReportingDashboard.AppHost", "TleReportingDashboard.AppHost\TleReportingDashboard.AppHost.csproj", "{3EE0DDCD-0E9E-4824-BD68-C238692BE41F}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TleReportingDashboard.ServiceDefaults", "TleReportingDashboard.ServiceDefaults\TleReportingDashboard.ServiceDefaults.csproj", "{B1312D1A-4FC2-422E-9331-A19A850334EE}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TleReportingDashboard.Tests", "TleReportingDashboard.Tests\TleReportingDashboard.Tests.csproj", "{30A38005-B24B-44DF-973F-708EB3CABB80}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TleReportingDashboard.Web", "TleReportingDashboard.Web\TleReportingDashboard.Web.csproj", "{A676BBED-DA61-4977-8092-5324D0E39D13}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TleReportingDashboard.Worker", "TleReportingDashboard.Worker\TleReportingDashboard.Worker.csproj", "{D8F2E4A1-3B5C-4D6E-9F1A-2C3D4E5F6A7B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3EE0DDCD-0E9E-4824-BD68-C238692BE41F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3EE0DDCD-0E9E-4824-BD68-C238692BE41F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3EE0DDCD-0E9E-4824-BD68-C238692BE41F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3EE0DDCD-0E9E-4824-BD68-C238692BE41F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B1312D1A-4FC2-422E-9331-A19A850334EE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B1312D1A-4FC2-422E-9331-A19A850334EE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B1312D1A-4FC2-422E-9331-A19A850334EE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B1312D1A-4FC2-422E-9331-A19A850334EE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{30A38005-B24B-44DF-973F-708EB3CABB80}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{30A38005-B24B-44DF-973F-708EB3CABB80}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{30A38005-B24B-44DF-973F-708EB3CABB80}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{30A38005-B24B-44DF-973F-708EB3CABB80}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A676BBED-DA61-4977-8092-5324D0E39D13}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A676BBED-DA61-4977-8092-5324D0E39D13}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A676BBED-DA61-4977-8092-5324D0E39D13}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A676BBED-DA61-4977-8092-5324D0E39D13}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D8F2E4A1-3B5C-4D6E-9F1A-2C3D4E5F6A7B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D8F2E4A1-3B5C-4D6E-9F1A-2C3D4E5F6A7B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D8F2E4A1-3B5C-4D6E-9F1A-2C3D4E5F6A7B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D8F2E4A1-3B5C-4D6E-9F1A-2C3D4E5F6A7B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {A542ACB1-D7E9-48DB-B115-3FAD575C378B}
+	EndGlobalSection
+EndGlobal

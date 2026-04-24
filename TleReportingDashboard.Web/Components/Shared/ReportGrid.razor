@@ -1,0 +1,845 @@
+@inject IJSRuntime JS
+@implements IDisposable
+
+@if (Data is not null && Data.Columns.Any())
+{
+    <MudStack Spacing="1">
+
+<div @key="@ColumnOrderKey" style="width: 100%;" id="@_gridHostId">
+@if (DisableUserSort)
+{
+    @* Read-only fallback: a plain HTML table rendered to match the look of
+       MudDataGrid. Used by the Report Viewer where sort must stay locked
+       to what was saved. MudDataGrid still re-sorts on header clicks even
+       with SortMode.None + Sortable=false, so we sidestep it entirely here. *@
+    <div class="read-only-grid resizable-grid" style="@($"height: {GetGridHeight()}; overflow: auto;")">
+        <table>
+            <thead>
+                <tr>
+                    @foreach (var col in VisibleColumns)
+                    {
+                        var (minWidth, defaultMax) = GetColumnWidths(col);
+                        var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
+                        var align = GetCellAlign(col.DataType);
+                        <th class="mud-table-cell"
+                            style="@($"width: {w}px; max-width: {w}px; min-width: {minWidth}px; {align}")">
+                            @col.Label
+                        </th>
+                    }
+                    <th class="grid-filler" style="width: 100%; padding: 0; border: none;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in PagedSortedRows)
+                {
+                    <tr>
+                        @foreach (var col in VisibleColumns)
+                        {
+                            var (minWidth, defaultMax) = GetColumnWidths(col);
+                            var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
+                            var align = GetCellAlign(col.DataType);
+                            <td class="mud-table-cell"
+                                style="@($"width: {w}px; min-width: {minWidth}px; max-width: {w}px; {align}")"
+                                title="@FormatValue(row, col)">
+                                <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {w}px;")">@FormatValue(row, col)</span>
+                            </td>
+                        }
+                        <td class="grid-filler" style="padding: 0; border: none;"></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween"
+              Class="px-4 py-2" Style="width: 100%;">
+        <MudText Typo="Typo.caption" Color="Color.Secondary">
+            @GetRowCountText()
+        </MudText>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudText Typo="Typo.caption">Rows per page:</MudText>
+            <MudSelect T="int" Value="_pageSize" ValueChanged="OnReadOnlyPageSizeChanged"
+                       Dense Variant="Variant.Text" Style="width: 80px;">
+                @foreach (var opt in new[] { 25, 50, 100, 250, 500 })
+                {
+                    <MudSelectItem T="int" Value="@opt">@opt</MudSelectItem>
+                }
+            </MudSelect>
+            <MudText Typo="Typo.caption">
+                @(((_readOnlyPage - 1) * _pageSize + 1))–@(Math.Min(_readOnlyPage * _pageSize, (Data?.Rows.Count ?? 0))) of @(Data?.Rows.Count ?? 0)
+            </MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small"
+                           Disabled="@(_readOnlyPage <= 1)"
+                           OnClick="() => { _readOnlyPage = Math.Max(1, _readOnlyPage - 1); }" />
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small"
+                           Disabled="@(_readOnlyPage * _pageSize >= (Data?.Rows.Count ?? 0))"
+                           OnClick="() => { _readOnlyPage++; }" />
+        </MudStack>
+    </MudStack>
+}
+else
+{
+        <MudDataGrid @ref="_mudGrid" T="Dictionary<string, object?>" Items="@SortedRows"
+                     Dense Hover Striped
+                     FixedHeader Height="@GetGridHeight()"
+                     SortMode="SortMode.Multiple"
+                     SortChanged="OnSortChangedInternal"
+                     RowsPerPage="_pageSize"
+                     RowsPerPageChanged="OnPageSizeChanged"
+                     Class="resizable-grid">
+            <Columns>
+                @foreach (var col in VisibleColumns)
+                {
+                    var (minWidth, defaultMax) = GetColumnWidths(col);
+                    var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
+                    var align = GetCellAlign(col.DataType);
+                    var c = col;
+                    <TemplateColumn T="Dictionary<string, object?>" Title="@col.Label"
+                                    Field="@col.FieldId"
+                                    PropertyName="@col.FieldId"
+                                    Sortable="true"
+                                    SortBy="@(row => GetSortValue(row, c))"
+                                    HeaderStyle="@($"width: {w}px; max-width: {w}px; white-space: nowrap; overflow: hidden; {align}")"
+                                    CellStyle="@($"width: {w}px; min-width: {minWidth}px; max-width: {w}px; overflow: hidden; text-overflow: ellipsis; {align}")">
+                        <CellTemplate>
+                            <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {w}px;")"
+                                  title="@FormatValue(context.Item, col)">@FormatValue(context.Item, col)</span>
+                        </CellTemplate>
+                    </TemplateColumn>
+                }
+                @* Filler column to absorb remaining width *@
+                <TemplateColumn T="Dictionary<string, object?>" title=""
+                                Sortable="false"
+                                HeaderClass="grid-filler"
+                                CellClass="grid-filler"
+                                HeaderStyle="width: 100%; padding: 0; border: none;"
+                                CellStyle="width: 100%; padding: 0; border: none;">
+                    <CellTemplate>&nbsp;</CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <PagerContent>
+                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween"
+                           Class="px-4 py-2" Style="width: 100%;">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @GetRowCountText()
+                    </MudText>
+                    <MudDataGridPager T="Dictionary<string, object?>" />
+                </MudStack>
+            </PagerContent>
+        </MudDataGrid>
+}
+        </div>
+    </MudStack>
+
+    <style>
+        /* Ensure the grid never overflows its parent — the inner table-container
+           handles horizontal scroll when columns sum wider than the available width. */
+        .resizable-grid {
+            max-width: 100%;
+        }
+        .resizable-grid .mud-table-container {
+            overflow-x: auto;
+        }
+        .resizable-grid table {
+            table-layout: fixed;
+            width: 100%;
+        }
+        .resizable-grid th {
+            position: relative;
+            overflow: visible !important;
+            padding: 4px 4px !important;
+            /* Header floor: column never narrower than its label + sort icon + handle.
+               max-content is the natural width with no wrapping (we have white-space: nowrap),
+               so it includes everything inside the th. */
+            min-width: max-content !important;
+        }
+        /* Read-only fallback table (DisableUserSort=true): styled to match
+           MudDataGrid's dense-striped look without any MudDataGrid machinery. */
+        .read-only-grid table {
+            border-collapse: collapse;
+            table-layout: fixed;
+            width: 100%;
+            font-size: 0.875rem;
+        }
+        .read-only-grid thead th {
+            position: sticky;
+            top: 0;
+            background: #F8F9FA;
+            z-index: 2;
+            font-weight: 600;
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 1px solid #DADCE0;
+            white-space: nowrap;
+            overflow: hidden;
+            user-select: none;
+        }
+        .read-only-grid tbody td {
+            padding: 2px 8px;
+            border-bottom: 1px solid #F1F3F4;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .read-only-grid tbody tr:nth-child(odd) {
+            background: #FAFBFC;
+        }
+        .read-only-grid tbody tr:hover {
+            background: #E8F0FE !important;
+        }
+        .resizable-grid td {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 2px 4px !important;
+        }
+        .col-resize-handle {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 6px;
+            cursor: col-resize;
+            z-index: 10;
+            background: transparent;
+        }
+        .col-resize-handle::after {
+            content: '';
+            position: absolute;
+            right: 0;
+            top: 20%;
+            height: 60%;
+            width: 2px;
+            background: #DADCE0;
+            border-radius: 1px;
+        }
+        .col-resize-handle:hover::after,
+        .col-resize-handle.active::after {
+            background: #1A73E8;
+            top: 0;
+            height: 100%;
+        }
+        .reorder-zone {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            align-items: center;
+            min-height: 36px;
+        }
+        .reorder-chip {
+            position: relative;
+            transition: opacity 0.15s;
+        }
+        .reorder-chip.dragging {
+            opacity: 0.3;
+        }
+        .reorder-chip.hidden-col {
+            opacity: 0.55;
+        }
+        .reorder-chip.hidden-col .mud-chip {
+            text-decoration: line-through;
+        }
+        .reorder-end-zone {
+            width: 20px;
+            min-height: 32px;
+            position: relative;
+        }
+        .drop-indicator {
+            position: absolute;
+            left: -2px;
+            top: 2px;
+            bottom: 2px;
+            width: 3px;
+            background: #1A73E8;
+            border-radius: 2px;
+            z-index: 10;
+        }
+    </style>
+}
+else
+{
+    <MudText Typo="Typo.body2" Color="Color.Secondary">No data to display.</MudText>
+}
+
+@code {
+    [Parameter] public QueryResponse? Data { get; set; }
+    [Parameter] public bool IsTruncated { get; set; }
+    [Parameter] public Dictionary<string, int>? InitialColumnWidths { get; set; }
+    [Parameter] public EventCallback<Dictionary<string, int>> OnColumnWidthsChanged { get; set; }
+    [Parameter] public string? DefaultSortField { get; set; }
+    [Parameter] public string? DefaultSortDirection { get; set; }
+    [Parameter] public EventCallback<(string? Field, string? Direction)> OnDefaultSortChanged { get; set; }
+    [Parameter] public List<string>? InitialColumnOrder { get; set; }
+    [Parameter] public EventCallback<List<string>> OnColumnOrderChanged { get; set; }
+    [Parameter] public List<string>? InitialHiddenColumns { get; set; }
+    [Parameter] public EventCallback<List<string>> OnHiddenColumnsChanged { get; set; }
+    // Columns the Table view must always hide — e.g. aggregate fields whose
+    // values only make sense in the Dashboard view. Not user-toggleable.
+    [Parameter] public List<string>? AlwaysHiddenColumns { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
+    // When true, the grid fills the browser viewport (minus a small allowance
+    // for the page header above it). Once the user picks a specific rows-per-
+    // page value, the grid stops fill-mode and sizes to exactly that many rows.
+    [Parameter] public bool FillViewport { get; set; }
+    // Lets callers seed the initial rows-per-page (e.g. from user preferences).
+    [Parameter] public int? InitialPageSize { get; set; }
+    // Raised when the user picks a new rows-per-page via the pager, so callers
+    // can persist the choice to user preferences.
+    [Parameter] public EventCallback<int> OnPageSizeChangedCallback { get; set; }
+    // Ordered list of (fieldId, direction) pairs to seed the grid's multi-sort.
+    // Index 0 is the primary sort, index 1 the secondary, etc. Applied once
+    // after the grid mounts; user interactions (click + Ctrl-click) take over
+    // from there.
+    [Parameter] public List<(string Field, string Direction)>? InitialSort { get; set; }
+    // Fires whenever the user changes the multi-sort (click or Ctrl-click on
+    // a column header). Callers can show the live sort state or persist it.
+    [Parameter] public EventCallback<List<(string Field, string Direction)>> OnSortChanged { get; set; }
+    // When true, users cannot change the sort: columns are non-sortable and
+    // data comes pre-sorted by InitialSort (or the legacy DefaultSortField
+    // as a fallback). Used by Report Viewer where sort is locked to what
+    // was saved with the report.
+    [Parameter] public bool DisableUserSort { get; set; }
+
+    private int _pageSize = 100;
+    private int _readOnlyPage = 1;
+    private bool _initialPageSizeApplied;
+    private MudDataGrid<Dictionary<string, object?>>? _mudGrid;
+    private bool _initialSortApplied;
+    private bool _widthsLoaded;
+    // Unique wrapper id so the fill-viewport JS can measure exactly this grid
+    // instance (multiple grids could exist on a page in theory).
+    private readonly string _gridHostId = $"rpt-grid-{Guid.NewGuid():N}";
+    // Pixel height set by the fill-viewport JS. Null means "not yet measured"
+    // or "fill mode is off"; the grid falls back to the CSS calc() value.
+    private int? _fillPx;
+    private bool _orderLoaded;
+    private bool _hiddenLoaded;
+    private HashSet<string> _hiddenColumns = new();
+    private List<ColumnMeta> _columnOrder = new();
+    private int _renderCount;
+    private Dictionary<string, int> _customWidths = new();
+    private DotNetObjectReference<ReportGrid>? _dotNetRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Seed multi-sort as soon as the grid, its data, and its ref are all
+        // available. Run OUTSIDE the debounce below — the debounce can skip
+        // when renders fire <100ms apart, which was masking the sort on load.
+        // Skipped when DisableUserSort is on, since SortedRows pre-sorts the
+        // data in that mode and the grid headers aren't clickable anyway.
+        if (!_initialSortApplied
+            && !DisableUserSort
+            && Data is not null && Data.Columns.Any()
+            && InitialSort is { Count: > 0 }
+            && _mudGrid is not null)
+        {
+            _initialSortApplied = true;
+
+            // Seed multi-sort via simulated header clicks. Programmatic paths
+            // (SetSortAsync loop, direct SortDefinitions writes, hybrids) all
+            // either drop entries or leave the priority badges unrendered —
+            // MudDataGrid's per-header "I'm sorted, my index is N" state
+            // only fully wires up via its own click pipeline. Dispatching
+            // real click events from JS exercises that pipeline identically
+            // to the user, so arrows AND priority numbers paint correctly.
+            var specs = new List<object>();
+            foreach (var (field, dir) in InitialSort)
+            {
+                var col = _columnOrder.FirstOrDefault(c =>
+                    string.Equals(c.FieldId, field, StringComparison.OrdinalIgnoreCase));
+                if (col is null) continue;
+                specs.Add(new { label = col.Label, direction = dir });
+            }
+            if (specs.Count > 0)
+                await JS.InvokeVoidAsync("mudGridSort.applyInitial", $"#{_gridHostId}", specs);
+        }
+
+        // Install the click blocker on the header row whenever user sort is
+        // disabled. SortMode.None + Sortable=false aren't enough when SortBy
+        // is also set — MudDataGrid still wires a click handler inside each
+        // th that flips the sort. A capturing-phase JS blocker on <thead>
+        // stops the event before that handler ever sees it.
+        if (DisableUserSort && Data is not null && Data.Columns.Any())
+        {
+            await JS.InvokeVoidAsync("mudGridSort.lockHeaders", $"#{_gridHostId}");
+        }
+
+        if (Data is not null && Data.Columns.Any())
+        {
+            _renderCount++;
+            var currentRender = _renderCount;
+            await Task.Delay(100);
+            if (currentRender == _renderCount)
+            {
+                _dotNetRef ??= DotNetObjectReference.Create(this);
+                await JS.InvokeVoidAsync("initColumnResize", ".resizable-grid", _dotNetRef);
+
+                // Activate the JS-driven dynamic height whenever fill-mode
+                // is on. The grid always fills the viewport; pagination and
+                // internal scrolling handle larger-than-fits row counts.
+                if (FillViewport)
+                {
+                    await JS.InvokeVoidAsync("fillViewportGrid.init", $"#{_gridHostId}", _dotNetRef);
+                }
+            }
+        }
+    }
+
+    // Returns the current multi-sort order from the live grid in priority order
+    // (primary first). Used by callers (e.g. ReportBuilder on save) to persist
+    // the user's interactively-built sort state along with the report.
+    //
+    // MudDataGrid keys SortDefinitions by a per-render column GUID, not the
+    // field name. We translate by matching each SortDefinition key to the
+    // rendered column whose Identifier equals it, then reading that column's
+    // Field — which IS stable across reloads.
+    public List<(string Field, string Direction)> GetCurrentSort()
+    {
+        var result = new List<(string Field, string Direction)>();
+        if (_mudGrid?.SortDefinitions is null) return result;
+
+        var idToField = BuildIdentifierToFieldMap();
+        foreach (var kv in _mudGrid.SortDefinitions.OrderBy(kv => kv.Value.Index))
+        {
+            if (!idToField.TryGetValue(kv.Key, out var field) || string.IsNullOrWhiteSpace(field))
+                continue;
+            var dir = kv.Value.Descending ? "desc" : "asc";
+            result.Add((field, dir));
+        }
+        return result;
+    }
+
+    // Maps the live column PropertyName (per-render GUID — the key MudDataGrid
+    // uses in SortDefinitions) to our stable field id. Identifier is empty on
+    // TemplateColumn in MudBlazor 9.3; PropertyName gets auto-generated to a
+    // GUID even when we try to override it via the Razor attribute. Title
+    // round-trips reliably so we match via Title ↔ ColumnMeta.Label.
+    private Dictionary<string, string> BuildIdentifierToFieldMap()
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (_mudGrid?.RenderedColumns is null) return map;
+
+        var labelToField = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in _columnOrder.Where(c => !_hiddenColumns.Contains(c.FieldId)))
+        {
+            if (!string.IsNullOrEmpty(c.Label))
+                labelToField[c.Label] = c.FieldId;
+        }
+
+        foreach (var rc in _mudGrid.RenderedColumns)
+        {
+            if (string.IsNullOrEmpty(rc.PropertyName) || string.IsNullOrEmpty(rc.Title)) continue;
+            if (labelToField.TryGetValue(rc.Title, out var fieldId))
+                map[rc.PropertyName] = fieldId;
+        }
+        return map;
+    }
+
+    // Helper for SetSortAsync above — same logic as the per-column SortBy.
+    private object? GetSortValueByFieldId(Dictionary<string, object?> row, string fieldId)
+    {
+        var col = _columnOrder.FirstOrDefault(c =>
+            string.Equals(c.FieldId, fieldId, StringComparison.OrdinalIgnoreCase));
+        return col is null ? null : GetSortValue(row, col);
+    }
+
+    // MudDataGrid fires this whenever the user clicks a header. The dict keys
+    // are per-render column GUIDs — we translate to stable field ids using
+    // the RenderedColumns map before relaying to the parent.
+    // MudDataGrid's public SortChanged event — fires on every header click
+    // (and programmatic sort). The dict keys are per-render column
+    // PropertyName GUIDs, which we translate to stable field ids via the
+    // RenderedColumns map before relaying to the parent.
+    //
+    // Note: we intentionally use MudBlazor 9.3's `SortChanged` event (not
+    // `SortDefinitionsChanged`). The latter is the two-way-binding pair for
+    // the `SortDefinitions` property and does not reliably fire as a
+    // standalone event callback.
+    private async Task OnSortChangedInternal(Dictionary<string, SortDefinition<Dictionary<string, object?>>> defs)
+    {
+        if (!OnSortChanged.HasDelegate) return;
+        var idToField = BuildIdentifierToFieldMap();
+        var tuples = defs
+            .OrderBy(kv => kv.Value.Index)
+            .Select(kv => (Id: kv.Key, Dir: kv.Value.Descending ? "desc" : "asc"))
+            .Where(t => idToField.ContainsKey(t.Id))
+            .Select(t => (Field: idToField[t.Id], Direction: t.Dir))
+            .ToList();
+        await OnSortChanged.InvokeAsync(tuples);
+    }
+
+    [JSInvokable]
+    public void SetFillHeight(int px)
+    {
+        if (_fillPx == px) return;
+        _fillPx = px;
+        InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnColumnResized(int colIndex, int newWidth)
+    {
+        var visible = VisibleColumns.ToList();
+        if (colIndex >= 0 && colIndex < visible.Count)
+        {
+            _customWidths[visible[colIndex].FieldId] = newWidth;
+            await OnColumnWidthsChanged.InvokeAsync(new Dictionary<string, int>(_customWidths));
+        }
+    }
+
+    public Dictionary<string, int> GetCustomWidths() => new(_customWidths);
+
+    public void Dispose()
+    {
+        if (FillViewport)
+        {
+            // Best-effort: tell the fill-viewport observer to detach so we don't
+            // leak resize listeners when navigating away from the page.
+            try { _ = JS.InvokeVoidAsync("fillViewportGrid.dispose", $"#{_gridHostId}"); }
+            catch { /* JS runtime may already be gone — ignore */ }
+        }
+        _dotNetRef?.Dispose();
+    }
+
+    private static (int min, int max) GetColumnWidths(ColumnMeta col)
+    {
+        // ~6px per character at body2 font size + padding
+        const int pxPerChar = 6;
+        const int cellPadding = 12;
+
+        // The header-text floor is enforced in CSS via `min-width: max-content` on th
+        // (see .resizable-grid th below) — no character-width estimate needed here.
+        if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
+        {
+            // For percent/currency, the formatted output is wider than raw char count
+            // (e.g., "95.250%" = 7 chars but needs ~80px, "$1,234,567.89" needs ~100px)
+            var typeFloor = col.DataType.ToLowerInvariant() switch
+            {
+                "percent" or "percentage" => 80,
+                "currency" or "money" => 70,
+                "date" => 90,
+                "integer" or "int" => 30,
+                _ => 40
+            };
+
+            var charWidth = col.MaxLength.Value * pxPerChar + cellPadding;
+            var min = Math.Max(typeFloor, Math.Min(charWidth, 100));
+            var max = Math.Max(min, Math.Min(charWidth, 250));
+            return (min, max);
+        }
+
+        // Fallback by data type when MaxLength is not set
+        return col.DataType.ToLowerInvariant() switch
+        {
+            "currency" or "money"       => (70, 100),
+            "percent" or "percentage"   => (80, 100),
+            "date"                      => (90, 100),
+            "datetime"                  => (100, 120),
+            "integer" or "int"          => (35, 50),
+            _                           => (70, 150)
+        };
+    }
+
+    // Numeric fields right-align; dates, text, bool, and everything else stay left.
+    private static string GetCellAlign(string dataType) => IsNumeric(dataType) ? "text-align: right;" : "";
+
+    private static bool IsNumeric(string dataType) => dataType.ToLowerInvariant() switch
+    {
+        "currency" or "money" or "smallmoney" => true,
+        "percent" or "percentage" => true,
+        "integer" or "int" or "bigint" or "smallint" or "tinyint" => true,
+        "decimal" or "float" or "double" or "numeric" or "real" or "number" => true,
+        _ => false
+    };
+
+
+    protected override void OnParametersSet()
+    {
+        // Seed initial page size from the caller's preference, exactly once.
+        if (!_initialPageSizeApplied && InitialPageSize is int size && size > 0)
+        {
+            _pageSize = size;
+            _initialPageSizeApplied = true;
+        }
+
+        // Restore saved column widths on first load
+        if (!_widthsLoaded && InitialColumnWidths is not null && InitialColumnWidths.Count > 0)
+        {
+            _customWidths = new Dictionary<string, int>(InitialColumnWidths);
+            _widthsLoaded = true;
+        }
+
+        // Restore saved hidden columns on first load
+        if (!_hiddenLoaded && InitialHiddenColumns is not null && InitialHiddenColumns.Count > 0)
+        {
+            _hiddenColumns = new HashSet<string>(InitialHiddenColumns, StringComparer.OrdinalIgnoreCase);
+            _hiddenLoaded = true;
+        }
+
+        if (Data?.Columns is not null && Data.Columns.Count > 0)
+        {
+            // First-time seed from the saved column order, if provided
+            if (!_orderLoaded && InitialColumnOrder is not null && InitialColumnOrder.Count > 0)
+            {
+                var byId = Data.Columns.ToDictionary(c => c.FieldId, StringComparer.OrdinalIgnoreCase);
+                _columnOrder.Clear();
+                foreach (var fid in InitialColumnOrder)
+                {
+                    if (byId.TryGetValue(fid, out var col))
+                        _columnOrder.Add(col);
+                }
+                // Append any columns not in the saved order (e.g. fields added since the report was last saved)
+                foreach (var col in Data.Columns)
+                {
+                    if (!_columnOrder.Any(c => c.FieldId.Equals(col.FieldId, StringComparison.OrdinalIgnoreCase)))
+                        _columnOrder.Add(col);
+                }
+                _orderLoaded = true;
+            }
+            else
+            {
+                // Preserve existing order for columns that still exist, append new ones
+                var existingIds = new HashSet<string>(_columnOrder.Select(c => c.FieldId));
+                var newIds = new HashSet<string>(Data.Columns.Select(c => c.FieldId));
+
+                // Remove columns no longer in data
+                _columnOrder.RemoveAll(c => !newIds.Contains(c.FieldId));
+
+                // Add new columns at the end
+                foreach (var col in Data.Columns)
+                {
+                    if (!existingIds.Contains(col.FieldId))
+                    {
+                        _columnOrder.Add(col);
+                    }
+                }
+                _orderLoaded = true;
+            }
+        }
+    }
+
+    // Used as @key on the data grid wrapper so the grid remounts when the column
+    // sequence changes. Without this, MudDataGrid keeps its internally registered
+    // column order and the table headers don't reorder even though _columnOrder did.
+    private string ColumnOrderKey =>
+        string.Join("|", _columnOrder.Select(c => c.FieldId));
+
+    private IEnumerable<ColumnMeta> VisibleColumns =>
+        _columnOrder.Where(c => !_hiddenColumns.Contains(c.FieldId)
+                             && !(AlwaysHiddenColumns?.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase) ?? false)
+                             // Double-underscore prefix reserves column ids for
+                             // internal use (e.g. "__row_count" from server-side
+                             // aggregation). Never show them to the user.
+                             && !c.FieldId.StartsWith("__", StringComparison.Ordinal));
+
+    private async Task ToggleColumnVisibility(string fieldId)
+    {
+        if (!_hiddenColumns.Remove(fieldId))
+        {
+            _hiddenColumns.Add(fieldId);
+        }
+
+        if (OnHiddenColumnsChanged.HasDelegate)
+            await OnHiddenColumnsChanged.InvokeAsync(_hiddenColumns.ToList());
+    }
+
+    public List<string> GetHiddenColumns() => _hiddenColumns.ToList();
+
+    /// <summary>
+    /// Toggle a column's visibility from outside the grid (e.g. from the FieldPicker
+    /// when the report is locked to a template). Mirrors the in-grid menu behavior:
+    /// updates internal state, emits OnHiddenColumnsChanged, and re-renders.
+    /// </summary>
+    public async Task ToggleColumnVisibilityExternal(string fieldId)
+    {
+        await ToggleColumnVisibility(fieldId);
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Reorders the grid's columns to match the supplied field-id list.
+    /// Called from the field chip bar above the grid (the new reorder surface).
+    /// </summary>
+    public void ApplyColumnOrder(List<string> fieldIds)
+    {
+        if (fieldIds is null || fieldIds.Count == 0) return;
+
+        var byId = _columnOrder.ToDictionary(c => c.FieldId, c => c, StringComparer.OrdinalIgnoreCase);
+        var reordered = new List<ColumnMeta>(fieldIds.Count);
+        foreach (var id in fieldIds)
+        {
+            if (byId.TryGetValue(id, out var col)) reordered.Add(col);
+        }
+        // Preserve any columns the caller didn't mention (e.g. a column that
+        // exists in the data but not in the chip bar for some reason).
+        foreach (var col in _columnOrder)
+        {
+            if (!fieldIds.Contains(col.FieldId, StringComparer.OrdinalIgnoreCase))
+                reordered.Add(col);
+        }
+
+        if (reordered.Count == 0) return;
+        // ColumnOrderKey is derived from _columnOrder sequence, so assigning a
+        // new list here is enough to re-key the MudDataGrid and force a header
+        // reorder.
+        _columnOrder = reordered;
+        StateHasChanged();
+    }
+
+    public List<string> GetCurrentColumnOrder() =>
+        _columnOrder.Select(c => c.FieldId).ToList();
+
+    // TEMP DIAGNOSTIC — inspects the rendered columns so the caller can see
+    // which column properties actually round-trip from Razor to the live
+    // Column instance. Remove once multi-sort persistence is verified.
+    public string DumpColumnDiagnostics()
+    {
+        if (_mudGrid?.RenderedColumns is null) return "(no rendered cols)";
+        var cols = _mudGrid.RenderedColumns;
+        var samples = cols.Take(3)
+            .Select(c => $"[id={c.Identifier?[..8]} title='{c.Title}' prop='{c.PropertyName}']")
+            .ToList();
+        return $"{cols.Count} cols; " + string.Join(" ", samples);
+    }
+
+    private async Task OnPageSizeChanged(int newSize)
+    {
+        _pageSize = newSize;
+        if (OnPageSizeChangedCallback.HasDelegate)
+            await OnPageSizeChangedCallback.InvokeAsync(newSize);
+    }
+
+    // Page-size change from the read-only table's own pager. Resets to page 1
+    // so the user doesn't land on an empty page after shrinking the view.
+    private async Task OnReadOnlyPageSizeChanged(int newSize)
+    {
+        _pageSize = newSize;
+        _readOnlyPage = 1;
+        if (OnPageSizeChangedCallback.HasDelegate)
+            await OnPageSizeChangedCallback.InvokeAsync(newSize);
+    }
+
+    // Rows to render in the read-only table for the currently selected page.
+    private IEnumerable<Dictionary<string, object?>> PagedSortedRows =>
+        SortedRows.Skip((_readOnlyPage - 1) * _pageSize).Take(_pageSize);
+
+    // Height MudDataGrid should use given the current mode:
+    //   • not-fill:                 600px (pre-existing behavior)
+    //   • fill + JS has measured:   exact pixel value from the measurer
+    //   • fill + JS hasn't run yet: CSS calc() fallback so the first paint
+    //                               isn't a squashed 0-height grid
+    //
+    // The grid always fills the viewport when FillViewport is true. If the
+    // user picks a page size larger than what fits, the grid scrolls its
+    // body internally and the "Showing xx rows" footer stays visible.
+    private string? GetGridHeight()
+    {
+        if (!FillViewport) return "600px";
+        return _fillPx.HasValue ? $"{_fillPx.Value}px" : "calc(100vh - 250px)";
+    }
+
+    private string GetRowCountText()
+    {
+        if (Data is null) return string.Empty;
+
+        var totalRows = Data.Rows.Count;
+        var totalCount = Data.TotalCount > 0 ? Data.TotalCount : totalRows;
+
+        if (IsTruncated || Data.IsTruncated)
+        {
+            return $"Showing {totalRows:N0} of {totalCount:N0} rows (results truncated)";
+        }
+
+        return $"Showing {totalRows:N0} rows";
+    }
+
+    private IEnumerable<Dictionary<string, object?>> SortedRows
+    {
+        get
+        {
+            if (Data is null) return [];
+
+            // DisableUserSort path: the grid headers aren't clickable, so we
+            // must apply InitialSort ourselves by chaining OrderBy/ThenBy.
+            // Falls back to the legacy DefaultSortField pre-sort below if
+            // InitialSort is empty.
+            if (DisableUserSort && InitialSort is { Count: > 0 })
+            {
+                IOrderedEnumerable<Dictionary<string, object?>>? ordered = null;
+                foreach (var (fieldId, dir) in InitialSort)
+                {
+                    var col = Data.Columns.FirstOrDefault(c =>
+                        string.Equals(c.FieldId, fieldId, StringComparison.OrdinalIgnoreCase));
+                    if (col is null) continue;
+                    Func<Dictionary<string, object?>, object?> keyFn = r => GetSortValue(r, col);
+                    var desc = string.Equals(dir, "desc", StringComparison.OrdinalIgnoreCase);
+                    ordered = ordered is null
+                        ? (desc ? Data.Rows.OrderByDescending(keyFn) : Data.Rows.OrderBy(keyFn))
+                        : (desc ? ordered.ThenByDescending(keyFn) : ordered.ThenBy(keyFn));
+                }
+                if (ordered is not null) return ordered;
+            }
+
+            if (string.IsNullOrEmpty(DefaultSortField)) return Data.Rows;
+
+            var legacyCol = Data.Columns.FirstOrDefault(c => c.FieldId == DefaultSortField);
+            if (legacyCol is null) return Data.Rows;
+
+            Func<Dictionary<string, object?>, object?> legacyKey = r => GetSortValue(r, legacyCol);
+            return string.Equals(DefaultSortDirection, "desc", StringComparison.OrdinalIgnoreCase)
+                ? Data.Rows.OrderByDescending(legacyKey)
+                : Data.Rows.OrderBy(legacyKey);
+        }
+    }
+
+    private object? GetSortValue(Dictionary<string, object?> row, ColumnMeta col)
+    {
+        if (!row.TryGetValue(col.FieldId, out var val) || val is null) return null;
+
+        // If this column has a custom value sort order map, use it
+        if (col.ValueSortOrder is not null)
+        {
+            var key = val.ToString() ?? "";
+            return col.ValueSortOrder.TryGetValue(key, out var rank) ? rank : int.MaxValue;
+        }
+        return val;
+    }
+
+    private string FormatValue(Dictionary<string, object?> row, ColumnMeta col)
+    {
+        if (!row.TryGetValue(col.FieldId, out var val) || val is null)
+            return string.Empty;
+
+        // Per-field Format (mask or .NET format string) wins over the DataType
+        // default when set — lets admins override phone/SSN/currency display.
+        if (!string.IsNullOrWhiteSpace(col.Format))
+            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format, col.DataType);
+
+        return col.DataType.ToLowerInvariant() switch
+        {
+            "currency" or "money" => FormatNumeric(val, "C2"),
+            "percent" or "percentage" => FormatNumeric(val, "N3") + "%",
+            "date" => FormatDate(val, "MM/dd/yyyy"),
+            "datetime" => FormatDate(val, "MM/dd/yyyy HH:mm"),
+            "integer" or "int" => FormatNumeric(val, "N0"),
+            "decimal" or "float" or "double" or "numeric" => FormatNumeric(val, "N2"),
+            _ => val.ToString() ?? string.Empty
+        };
+    }
+
+    private static string FormatNumeric(object val, string format)
+    {
+        if (val is double d) return d.ToString(format);
+        if (val is decimal dec) return dec.ToString(format);
+        if (val is int i) return i.ToString(format);
+        if (val is long l) return l.ToString(format);
+        if (double.TryParse(val.ToString(), out var parsed)) return parsed.ToString(format);
+        return val.ToString() ?? string.Empty;
+    }
+
+    private static string FormatDate(object val, string format)
+    {
+        if (val is DateTime dt) return dt.ToString(format);
+        if (val is DateTimeOffset dto) return dto.ToString(format);
+        if (DateTime.TryParse(val.ToString(), out var parsed)) return parsed.ToString(format);
+        return val.ToString() ?? string.Empty;
+    }
+}

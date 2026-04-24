@@ -1,0 +1,833 @@
+@page "/viewer/{ReportId:guid}/detail"
+@rendermode InteractiveServer
+@inject IReportService ReportService
+@inject ISharingService SharingService
+@inject IQueryService QueryService
+@inject IGridTemplateService GridTemplateService
+@inject IExportService ExportService
+@inject ISchemaService SchemaService
+@inject IUserPreferenceService PreferenceService
+@inject IAdminService AdminService
+@inject IUserManagementService UserManagement
+@inject IQueryScopeResolver ScopeResolver
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject IConfiguration Config
+
+<PageTitle>@_title - Executive Reporting Suite</PageTitle>
+
+@* Suppress the outer viewport scrollbar — the detail grid handles its own
+   internal scrolling. HeadContent is automatically removed when this page
+   unmounts, so other pages keep their normal scrolling. *@
+<HeadContent>
+    <style>
+        html, body { overflow-y: hidden !important; }
+
+        /* Grouped detail render — flat table mirroring the legacy
+           /EmpowerDetails look (group-header / detail-row / group-footer
+           rows interleaved). Kept scoped to the wrapper class so it can't
+           bleed into other pages. */
+        .grouped-detail-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.78rem;
+        }
+        .grouped-detail-table thead th {
+            position: sticky;
+            top: 0;
+            background: #F8F9FA;
+            border-bottom: 1px solid #DADCE0;
+            padding: 6px 8px;
+            text-align: left;
+            font-weight: 600;
+            z-index: 1;
+        }
+        .grouped-detail-table th.num,
+        .grouped-detail-table td.num {
+            text-align: right;
+        }
+        .grouped-detail-table tr.group-header td {
+            background: cornflowerblue;
+            font-weight: 700;
+            padding: 6px 8px;
+        }
+        .grouped-detail-table tr.detail-row td {
+            border-top: 1px solid #F1F3F4;
+            padding: 4px 8px;
+        }
+        .grouped-detail-table tr.group-footer td {
+            background: beige;
+            border-top: 1px solid #DADCE0;
+            border-bottom: 2px solid #BDC1C6;
+            font-weight: 600;
+            padding: 5px 8px;
+        }
+
+        /* Grand-total row pinned to the bottom of the scroll container so
+           it stays visible regardless of how far down the admin has
+           scrolled. Text switched to near-black for contrast against the
+           lighter grey background. */
+        .grouped-detail-table tfoot tr.grand-total td {
+            position: sticky;
+            bottom: 0;
+            background: darkgray;
+            color: #202124;
+            font-weight: 700;
+            padding: 8px;
+            border-top: 2px solid #5F6368;
+        }
+    </style>
+</HeadContent>
+
+<MudMainContent Style="padding: 16px;">
+    @if (_isLoading)
+    {
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+    }
+
+    <MudStack Spacing="3">
+        <MudPaper Elevation="0" Class="pa-4" Style="border-bottom: 1px solid #E8EAED;">
+            <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudStack Spacing="0">
+                    <MudText Typo="Typo.h5" Style="font-weight: 600;">@_title</MudText>
+                    @if (!string.IsNullOrEmpty(_groupLabel) && !string.IsNullOrEmpty(GroupKey))
+                    {
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="mt-1">
+                            <MudChip T="string" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small">
+                                @_groupLabel
+                            </MudChip>
+                            <MudText Typo="Typo.body1" Style="font-weight: 500;">
+                                @GroupKey
+                            </MudText>
+                        </MudStack>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1">All Records</MudText>
+                    }
+                </MudStack>
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                    @if (_detailData is not null)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @_detailData.Rows.Count.ToString("N0") rows
+                        </MudText>
+                    }
+                    <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
+                                Disabled="@(_detailData is null || !_detailData.Rows.Any())" />
+                </MudStack>
+            </MudStack>
+        </MudPaper>
+
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error">@_error</MudAlert>
+        }
+        else if (_detailData is not null && _detailData.Rows.Any())
+        {
+            @* Same sort indicator pattern as the Report Viewer. *@
+            @if (_liveSort is { Count: > 0 })
+            {
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap" Class="mb-1">
+                    <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+                        Sort:
+                    </MudText>
+                    @for (var si = 0; si < _liveSort.Count; si++)
+                    {
+                        var priority = si + 1;
+                        var step = _liveSort[si];
+                        var label = GetFieldLabel(step.Field);
+                        var isDesc = string.Equals(step.Direction, "desc", StringComparison.OrdinalIgnoreCase);
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                 Icon="@(isDesc ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)">
+                            @priority. @label
+                        </MudChip>
+                    }
+                </MudStack>
+            }
+            @if (IsGroupedView)
+            {
+                @* Grouped render — matches the legacy /EmpowerDetails
+                   pattern: flat table with inline group-header and
+                   group-footer rows. Footer shows row count and sum of
+                   every currency column. Export path is unchanged and
+                   strips group rows because they aren't in QueryResponse. *@
+                <div class="grouped-detail-wrap"
+                     style="max-height: calc(100vh - 210px); overflow: auto; border: 1px solid #DADCE0; border-radius: 4px;">
+                    <table class="grouped-detail-table">
+                        <thead>
+                            <tr>
+                                @foreach (var col in GetVisibleColumns())
+                                {
+                                    <th class="@(IsCurrencyColumn(col) ? "num" : "")">@col.Label</th>
+                                }
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var group in BuildGroups())
+                            {
+                                <tr class="group-header">
+                                    <td colspan="@GetVisibleColumns().Count">@group.Label</td>
+                                </tr>
+                                @foreach (var row in group.Rows)
+                                {
+                                    <tr class="detail-row">
+                                        @foreach (var col in GetVisibleColumns())
+                                        {
+                                            <td class="@(IsCurrencyColumn(col) ? "num" : "")">
+                                                @FormatCell(row, col)
+                                            </td>
+                                        }
+                                    </tr>
+                                }
+                                <tr class="group-footer">
+                                    @{ var visibleCols = GetVisibleColumns(); }
+                                    @for (var ci = 0; ci < visibleCols.Count; ci++)
+                                    {
+                                        var col = visibleCols[ci];
+                                        if (ci == 0)
+                                        {
+                                            <td>@group.Rows.Count Loan(s)</td>
+                                        }
+                                        else if (IsCurrencyColumn(col))
+                                        {
+                                            <td class="num">@FormatCurrency(group.Totals[col.FieldId])</td>
+                                        }
+                                        else
+                                        {
+                                            <td></td>
+                                        }
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                        <tfoot>
+                            @{
+                                var grand = ComputeGrandTotals();
+                                var grandVisibleCols = GetVisibleColumns();
+                                var totalRows = _detailData?.Rows.Count ?? 0;
+                            }
+                            <tr class="grand-total">
+                                @for (var ci = 0; ci < grandVisibleCols.Count; ci++)
+                                {
+                                    var col = grandVisibleCols[ci];
+                                    if (ci == 0)
+                                    {
+                                        <td>TOTAL &mdash; @totalRows Loan(s)</td>
+                                    }
+                                    else if (IsCurrencyColumn(col) && grand.TryGetValue(col.FieldId, out var sum))
+                                    {
+                                        <td class="num">@FormatCurrency(sum)</td>
+                                    }
+                                    else
+                                    {
+                                        <td></td>
+                                    }
+                                }
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            }
+            else
+            {
+                <ReportGrid Data="_detailData"
+                            InitialColumnWidths="_columnWidths"
+                            InitialColumnOrder="_columnOrder"
+                            InitialHiddenColumns="_hiddenColumns"
+                            DefaultSortField="@_tableSortField"
+                            DefaultSortDirection="@_tableSortDirection"
+                            InitialSort="@_initialSortTuples"
+                            DisableUserSort="true"
+                            ReadOnly="true"
+                            FillViewport="true"
+                            InitialPageSize="_initialPageSize"
+                            OnPageSizeChangedCallback="HandlePageSizeChanged" />
+            }
+        }
+        else if (!_isLoading)
+        {
+            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                      Style="border: 1px dashed #DADCE0; min-height: 300px;">
+                <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" Color="Color.Default" />
+                <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                    No results found.
+                </MudText>
+            </MudPaper>
+        }
+    </MudStack>
+</MudMainContent>
+
+@code {
+    [Parameter] public Guid ReportId { get; set; }
+    // Group key lives in the query string (?group=...) rather than a path
+    // segment — path segments reject characters like "+" at the request-filter
+    // level (ERR_CONNECTION_RESET), query strings don't.
+    [SupplyParameterFromQuery(Name = "group")]
+    public string? GroupKey { get; set; }
+
+    private string _title = "Detail";
+    private Guid? _connectionId;
+    private string? _primaryTable;
+    private string? _groupLabel;
+    private string? _error;
+    private bool _isLoading;
+    private QueryResponse? _detailData;
+    private DashboardView.DashboardConfig? _dashConfig;
+    private string? _tableSortField;
+    private string? _tableSortDirection;
+    // Multi-column sort read from the report's ColumnState. Same semantics as
+    // in ReportBuilder / ReportViewer — primary first, falls back to the
+    // legacy single-field DefaultSort for reports saved before multi-sort.
+    private List<(string Field, string Direction)>? _initialSortTuples;
+    private List<(string Field, string Direction)> _liveSort = new();
+    // Field id → human label lookup used by the sort indicator strip.
+    private Dictionary<string, string> _fieldLabelsById = new(StringComparer.OrdinalIgnoreCase);
+    private List<string>? _columnOrder;
+    private Dictionary<string, int>? _columnWidths;
+    private List<string>? _hiddenColumns;
+    private List<string>? _customFilterIds;
+    // Advanced (ad-hoc) filter tree hydrated from the report's ColumnState.
+    // Applied to the detail query so drill-down rows match the top-level
+    // report's filtering. Null when the feature flag is off or the report
+    // has no advanced filters configured.
+    private TleReportingDashboard.Web.Models.FilterGroup? _advancedFilters;
+    // Detail-view grouping, set in Report Builder and persisted on the report.
+    // When _detailGroupByFieldId is set, render uses a custom grouped table
+    // with inline header + sub-total rows instead of the MudDataGrid. Direction
+    // sorts the groups themselves ("none", "asc", "desc").
+    private string? _detailGroupByFieldId;
+    private string _detailGroupByDirection = "asc";
+    // Detail default sort. When a group-by field is set, this becomes the
+    // secondary ORDER BY so rows inside each group follow this order.
+    // Otherwise it's the primary ORDER BY.
+    private string? _detailSortFieldId;
+    private string _detailSortDirection = "asc";
+    // Value → sort-index map pulled from the group field's lookup (populated
+    // by SchemaService from the lookup CTE's ORDERBY column). When present,
+    // groups sort by this index instead of alphabetically on the label —
+    // e.g. status picks land in workflow order (Pre-Approval first, Cleared
+    // later) rather than strict A–Z.
+    private Dictionary<string, int>? _groupValueSortOrder;
+    private string _userId = "anonymous";
+    private UserPreference? _prefs;
+    // Null on first load until the user's preferences return; then mirrors
+    // DefaultPageSize so the grid opens at the saved value and persists new
+    // choices back.
+    private int? _initialPageSize;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            _userId = authState.User.FindFirst("oid")?.Value
+                      ?? authState.User.Identity?.Name
+                      ?? "anonymous";
+            var userId = _userId;
+            var userEmail = authState.User.FindFirst("preferred_username")?.Value ?? string.Empty;
+
+            // Load the user's page-size preference for this report. Falls back
+            // to their global DefaultPageSize, then to the grid's own default.
+            try
+            {
+                _prefs = await PreferenceService.GetPreferencesAsync(_userId);
+                if (_prefs.ReportPageSizes.TryGetValue(ReportId, out var reportSize) && reportSize > 0)
+                    _initialPageSize = reportSize;
+                else if (_prefs.DefaultPageSize > 0)
+                    _initialPageSize = _prefs.DefaultPageSize;
+            }
+            catch { /* non-fatal — let the grid use its own default */ }
+
+            // Phase 3 authorization: fetch the report directly, gate by
+            // company access instead of owner/share scoping so users who
+            // can view the company's shared dashboard can drill in.
+            var report = await ReportService.GetReportByIdAsync(ReportId);
+            if (report is null) { _error = "Report not found."; return; }
+
+            var isAdmin = AdminService.IsAdmin(userEmail);
+            if (!isAdmin)
+            {
+                var access = await UserManagement.GetCompanyAccessAsync(userEmail);
+                if (!access.Any(a => a.CompanyId == report.CompanyId))
+                {
+                    _error = "You don't have access to this report.";
+                    return;
+                }
+            }
+
+            _title = report.Name;
+            _connectionId = report.ConnectionId;
+            _primaryTable = report.PrimaryTable;
+
+            // Parse column state
+            if (!string.IsNullOrWhiteSpace(report.ColumnState))
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(report.ColumnState);
+                    if (doc.RootElement.TryGetProperty("TableSortField", out var tsfEl))
+                        _tableSortField = tsfEl.GetString();
+                    if (doc.RootElement.TryGetProperty("TableSortDirection", out var tsdEl))
+                        _tableSortDirection = tsdEl.GetString();
+                    if (doc.RootElement.TryGetProperty("TableColumnOrder", out var coEl))
+                        _columnOrder = System.Text.Json.JsonSerializer.Deserialize<List<string>>(coEl.GetRawText());
+                    if (doc.RootElement.TryGetProperty("ColumnWidths", out var cwEl))
+                        _columnWidths = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, int>>(cwEl.GetRawText());
+                    if (doc.RootElement.TryGetProperty("HiddenColumns", out var hcEl))
+                        _hiddenColumns = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcEl.GetRawText());
+                    if (doc.RootElement.TryGetProperty("DetailGroupByFieldId", out var dgfEl))
+                        _detailGroupByFieldId = dgfEl.GetString();
+                    if (doc.RootElement.TryGetProperty("DetailGroupByDirection", out var dgdEl))
+                        _detailGroupByDirection = dgdEl.GetString() ?? "asc";
+                    if (doc.RootElement.TryGetProperty("DetailSortFieldId", out var dsfEl))
+                        _detailSortFieldId = dsfEl.GetString();
+                    if (doc.RootElement.TryGetProperty("DetailSortDirection", out var dsdEl))
+                        _detailSortDirection = dsdEl.GetString() ?? "asc";
+                    if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
+                        _customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
+
+                    // Advanced (ad-hoc) filters tree. Feature-flagged so a
+                    // rollback in appsettings hides them consistently across
+                    // editor + dashboard + drill-down. Back-compat reader
+                    // wraps the early flat-array shape into a root AND-group.
+                    if (Config.GetValue<bool>("Features:AdvancedFilters", false)
+                        && doc.RootElement.TryGetProperty("AdvancedFilters", out var afEl))
+                    {
+                        if (afEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            _advancedFilters = System.Text.Json.JsonSerializer
+                                .Deserialize<TleReportingDashboard.Web.Models.FilterGroup>(
+                                    afEl.GetRawText(),
+                                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        }
+                        else if (afEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        {
+                            var flat = System.Text.Json.JsonSerializer
+                                .Deserialize<List<TleReportingDashboard.Web.Models.FilterClause>>(afEl.GetRawText())
+                                ?? new();
+                            if (flat.Count > 0)
+                            {
+                                _advancedFilters = new TleReportingDashboard.Web.Models.FilterGroup
+                                {
+                                    Op = TleReportingDashboard.Web.Models.FilterGroupOps.And,
+                                    Items = flat.Select(c => new TleReportingDashboard.Web.Models.FilterItem { Clause = c }).ToList()
+                                };
+                            }
+                        }
+                    }
+
+                    // Multi-column sort (primary first). Wins over the legacy
+                    // single-field TableSortField/Direction when populated.
+                    if (doc.RootElement.TryGetProperty("TableSort", out var tsEl)
+                        && tsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        var list = new List<(string, string)>();
+                        foreach (var item in tsEl.EnumerateArray())
+                        {
+                            var f = item.TryGetProperty("Field", out var fEl) ? fEl.GetString() : null;
+                            var d = item.TryGetProperty("Direction", out var dEl) ? dEl.GetString() : "asc";
+                            if (!string.IsNullOrWhiteSpace(f))
+                                list.Add((f!, d ?? "asc"));
+                        }
+                        if (list.Count > 0) _initialSortTuples = list;
+                    }
+
+                    // Get group-by label from dashboard config
+                    _dashConfig = System.Text.Json.JsonSerializer.Deserialize<DashboardView.DashboardConfig>(
+                        report.ColumnState, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (_dashConfig is not null && !string.IsNullOrEmpty(_dashConfig.GroupByFieldId))
+                    {
+                        var fields = await SchemaService.GetFieldConfigsAsync(_connectionId);
+                        var groupField = fields.FirstOrDefault(f => f.Id == _dashConfig.GroupByFieldId);
+                        _groupLabel = groupField?.Label ?? _dashConfig.GroupByFieldId;
+                    }
+                }
+                catch { }
+            }
+
+            // Fallback: if no multi-sort saved, seed a one-element list from
+            // the legacy DefaultSort pair so pre-multi-sort reports still sort.
+            if (_initialSortTuples is null && !string.IsNullOrEmpty(_tableSortField))
+            {
+                _initialSortTuples = new List<(string, string)>
+                {
+                    (_tableSortField!, _tableSortDirection ?? "asc")
+                };
+            }
+
+            // Prime the indicator strip so it shows the saved sort immediately.
+            if (_initialSortTuples is { Count: > 0 })
+                _liveSort = new List<(string, string)>(_initialSortTuples);
+
+            // Build label lookup for the sort indicator (field id → human label).
+            // Also capture the group field's ValueSortOrder if present —
+            // SchemaService auto-populates this from the lookup's ORDERBY
+            // column, so grouped-view headers can follow the workflow order
+            // (e.g. Pre-Approval → Pre-Docs → Cleared) rather than A–Z.
+            try
+            {
+                var allFields = await SchemaService.GetFieldConfigsAsync(_connectionId);
+                _fieldLabelsById = allFields.ToDictionary(f => f.Id, f => f.Label, StringComparer.OrdinalIgnoreCase);
+
+                if (!string.IsNullOrEmpty(_detailGroupByFieldId))
+                {
+                    var groupField = allFields.FirstOrDefault(f =>
+                        string.Equals(f.Id, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase));
+                    _groupValueSortOrder = groupField?.ValueSortOrder is { Count: > 0 }
+                        ? new Dictionary<string, int>(groupField.ValueSortOrder!, StringComparer.OrdinalIgnoreCase)
+                        : null;
+                }
+            }
+            catch { /* non-fatal — indicator falls back to raw field ids */ }
+
+            // Resolve linked template or parse fields
+            var fieldIds = new List<string>();
+            if (report.GridTemplateId.HasValue)
+            {
+                var resolved = await GridTemplateService.ResolveTemplateAsync(report.GridTemplateId);
+                if (resolved is not null)
+                {
+                    fieldIds = resolved.FieldIds;
+                    // Template-linked: template owns the column order and default sort so the
+                    // detail grid stays in sync with the template. Per-report show/hide is
+                    // preserved but trimmed to fields still in the template.
+                    _columnOrder = resolved.ColumnOrder is { Count: > 0 }
+                        ? new List<string>(resolved.ColumnOrder)
+                        : new List<string>(fieldIds);
+                    if (!string.IsNullOrEmpty(resolved.DefaultSortField))
+                    {
+                        _tableSortField = resolved.DefaultSortField;
+                        _tableSortDirection = resolved.DefaultSortDirection;
+                    }
+                    _hiddenColumns = TleReportingDashboard.Web.Services.GridTemplateService
+                        .FilterHiddenToTemplate(fieldIds, _hiddenColumns ?? resolved.HiddenColumns);
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(report.FieldIds))
+            {
+                fieldIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(report.FieldIds) ?? new();
+            }
+
+            var filters = new Dictionary<string, object?>();
+            if (!string.IsNullOrWhiteSpace(report.Filters))
+                filters = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(report.Filters) ?? new();
+
+            if (!fieldIds.Any()) { _error = "Report has no fields."; return; }
+
+            // Include extra group-by fields (legacy) + extra dimension fields.
+            void AddIds(IEnumerable<string>? ids)
+            {
+                if (ids is null) return;
+                foreach (var extra in ids)
+                    if (!fieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                        fieldIds.Add(extra);
+            }
+            AddIds(_dashConfig?.ExtraGroupByFieldIds);
+            AddIds(_dashConfig?.ExtraDimensionFieldIds);
+
+            // Sort precedence: group-by field first (rows cluster per bucket),
+            // detail default second (each bucket internally ordered). When
+            // no group-by is set, detail default becomes the primary sort.
+            // When neither is set, QueryBuilder falls back to its usual
+            // first-field default to keep OFFSET/FETCH legal.
+            string? primarySort = null, primaryDir = null;
+            string? secondarySort = null, secondaryDir = null;
+            if (!string.IsNullOrEmpty(_detailGroupByFieldId)
+                && fieldIds.Contains(_detailGroupByFieldId, StringComparer.OrdinalIgnoreCase))
+            {
+                primarySort = _detailGroupByFieldId;
+                // Map "none" to asc so SQL gets a legal direction — the
+                // client-side group sort still runs with lookup awareness,
+                // so the user's visual order isn't lost.
+                primaryDir = _detailGroupByDirection == "desc" ? "desc" : "asc";
+                if (!string.IsNullOrEmpty(_detailSortFieldId)
+                    && !string.Equals(_detailSortFieldId, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase)
+                    && fieldIds.Contains(_detailSortFieldId, StringComparer.OrdinalIgnoreCase))
+                {
+                    secondarySort = _detailSortFieldId;
+                    secondaryDir = _detailSortDirection == "desc" ? "desc" : "asc";
+                }
+            }
+            else if (!string.IsNullOrEmpty(_detailSortFieldId)
+                && fieldIds.Contains(_detailSortFieldId, StringComparer.OrdinalIgnoreCase))
+            {
+                primarySort = _detailSortFieldId;
+                primaryDir = _detailSortDirection == "desc" ? "desc" : "asc";
+            }
+
+            var request = new QueryRequest
+            {
+                FieldIds = fieldIds,
+                Filters = filters,
+                PrimaryTable = _primaryTable,
+                CustomFilterIds = _customFilterIds,
+                AdvancedFilters = _advancedFilters,
+                Page = 1,
+                PageSize = 50000,
+                ConnectionId = _connectionId,
+                SortField = primarySort,
+                SortDirection = primaryDir,
+                SecondarySortField = secondarySort,
+                SecondarySortDirection = secondaryDir
+            };
+            request.Scoping = await ScopeResolver.ResolveAsync(userEmail, _connectionId, _primaryTable);
+            var fullData = await QueryService.ExecuteQueryAsync(request);
+
+            // Filter rows by group key if provided
+            var decodedGroup = GroupKey;
+            List<Dictionary<string, object?>> rows;
+            var groupFieldId = _dashConfig?.GroupByFieldId ?? string.Empty;
+
+            if (!string.IsNullOrEmpty(decodedGroup) && !string.IsNullOrEmpty(groupFieldId))
+            {
+                if (decodedGroup == "(empty)")
+                {
+                    rows = fullData.Rows.Where(r =>
+                    {
+                        if (!r.TryGetValue(groupFieldId, out var v)) return true;
+                        if (v is null || v is DBNull) return true;
+                        return string.IsNullOrWhiteSpace(v.ToString());
+                    }).ToList();
+                }
+                else
+                {
+                    rows = fullData.Rows.Where(r =>
+                        r.TryGetValue(groupFieldId, out var v) && v is not null && v is not DBNull &&
+                        string.Equals(v.ToString(), decodedGroup, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                }
+
+            }
+            else
+            {
+                rows = fullData.Rows;
+            }
+
+            _detailData = new QueryResponse
+            {
+                Columns = fullData.Columns,
+                Rows = rows,
+                TotalCount = rows.Count
+            };
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    // Updates the sort indicator strip when the user clicks a header.
+    private Task HandleSortChanged(List<(string Field, string Direction)> sort)
+    {
+        _liveSort = sort;
+        return Task.CompletedTask;
+    }
+
+    private string GetFieldLabel(string fieldId) =>
+        _fieldLabelsById.TryGetValue(fieldId, out var label) ? label : fieldId;
+
+    // ── Grouped detail view helpers ──────────────────────────────────────
+
+    private bool IsGroupedView =>
+        !string.IsNullOrEmpty(_detailGroupByFieldId)
+        && _detailData is not null
+        && _detailData.Rows.Count > 0
+        && _detailData.Columns.Any(c => string.Equals(c.FieldId, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase));
+
+    // Columns visible in the grouped render, honoring saved column order
+    // and hidden-column settings. Mirrors the ReportGrid's visibility rules
+    // so the grouped view lines up with the flat view's expectations.
+    private List<ColumnMeta> GetVisibleColumns()
+    {
+        if (_detailData is null) return new();
+        var byId = _detailData.Columns.ToDictionary(c => c.FieldId, StringComparer.OrdinalIgnoreCase);
+        var hidden = _hiddenColumns is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(_hiddenColumns, StringComparer.OrdinalIgnoreCase);
+
+        IEnumerable<ColumnMeta> ordered;
+        if (_columnOrder is { Count: > 0 })
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new List<ColumnMeta>();
+            foreach (var id in _columnOrder)
+            {
+                if (byId.TryGetValue(id, out var c) && seen.Add(id)) result.Add(c);
+            }
+            // Append any data columns missing from the saved order so nothing
+            // silently disappears (e.g. a new field was added post-save).
+            foreach (var c in _detailData.Columns)
+                if (seen.Add(c.FieldId)) result.Add(c);
+            ordered = result;
+        }
+        else
+        {
+            ordered = _detailData.Columns;
+        }
+
+        return ordered.Where(c => !hidden.Contains(c.FieldId)).ToList();
+    }
+
+    private bool IsCurrencyColumn(ColumnMeta c) =>
+        string.Equals(c.DataType, "currency", StringComparison.OrdinalIgnoreCase);
+
+    // Groups the rows by the picked field. Sorts groups per the direction
+    // setting; within a group, rows keep whatever order the query returned.
+    private IEnumerable<GroupBucket> BuildGroups()
+    {
+        if (_detailData is null || string.IsNullOrEmpty(_detailGroupByFieldId))
+            yield break;
+
+        var fieldId = _detailGroupByFieldId!;
+        var groups = _detailData.Rows
+            .GroupBy(r => GroupKeyFor(r, fieldId), StringComparer.OrdinalIgnoreCase)
+            .Select(g => new GroupBucket(g.Key, g.ToList(), ComputeTotals(g)))
+            .ToList();
+
+        // When the group field has a lookup-backed ValueSortOrder, sort
+        // groups by that integer key (workflow order) with the label as a
+        // tiebreaker. Labels not present in the map get int.MaxValue so
+        // unknown values sink to the end instead of jumbling with the
+        // known ones.
+        var useLookupOrder = _groupValueSortOrder is { Count: > 0 };
+        int LookupOrderOf(string label) =>
+            useLookupOrder && _groupValueSortOrder!.TryGetValue(label, out var o)
+                ? o
+                : int.MaxValue;
+
+        groups = _detailGroupByDirection switch
+        {
+            "asc" when useLookupOrder => groups
+                .OrderBy(g => LookupOrderOf(g.Label))
+                .ThenBy(g => g.Label, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            "desc" when useLookupOrder => groups
+                .OrderByDescending(g => LookupOrderOf(g.Label))
+                .ThenByDescending(g => g.Label, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            "asc"  => groups.OrderBy(g => g.Label, StringComparer.OrdinalIgnoreCase).ToList(),
+            "desc" => groups.OrderByDescending(g => g.Label, StringComparer.OrdinalIgnoreCase).ToList(),
+            _      => groups  // "none" preserves insertion order regardless
+        };
+
+        foreach (var g in groups) yield return g;
+    }
+
+    // Grand totals — sum across every row, not just per-group. Used for the
+    // sticky tfoot row so admins see the roll-up without scrolling.
+    private Dictionary<string, decimal> ComputeGrandTotals()
+    {
+        if (_detailData is null) return new(StringComparer.OrdinalIgnoreCase);
+        return ComputeTotals(_detailData.Rows);
+    }
+
+    private Dictionary<string, decimal> ComputeTotals(IEnumerable<Dictionary<string, object?>> rows)
+    {
+        var totals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        if (_detailData is null) return totals;
+        foreach (var col in _detailData.Columns)
+        {
+            if (!IsCurrencyColumn(col)) continue;
+            decimal sum = 0m;
+            foreach (var row in rows)
+            {
+                if (row.TryGetValue(col.FieldId, out var v) && v is not null && v is not DBNull)
+                {
+                    try { sum += Convert.ToDecimal(v); } catch { /* skip non-numeric */ }
+                }
+            }
+            totals[col.FieldId] = sum;
+        }
+        return totals;
+    }
+
+    private static string GroupKeyFor(Dictionary<string, object?> row, string fieldId)
+    {
+        if (!row.TryGetValue(fieldId, out var v) || v is null || v is DBNull)
+            return "(empty)";
+        return v.ToString() ?? "(empty)";
+    }
+
+    private string FormatCell(Dictionary<string, object?> row, ColumnMeta col)
+    {
+        if (!row.TryGetValue(col.FieldId, out var v) || v is null || v is DBNull)
+            return string.Empty;
+        if (!string.IsNullOrWhiteSpace(col.Format))
+            return FieldFormatter.Format(v, col.Format, col.DataType);
+        if (IsCurrencyColumn(col))
+        {
+            try { return Convert.ToDecimal(v).ToString("C0"); } catch { return v.ToString() ?? string.Empty; }
+        }
+        // DataType-aware default (e.g., date columns drop the time). When no
+        // data-type default applies, falls through to value.ToString().
+        return FieldFormatter.Format(v, format: null, col.DataType);
+    }
+
+    private static string FormatCurrency(decimal value) => value.ToString("C0");
+
+    private sealed record GroupBucket(string Label, List<Dictionary<string, object?>> Rows, Dictionary<string, decimal> Totals);
+
+    // Called when the user picks a new rows-per-page in the grid's pager.
+    // Persists it per-report on the user's preferences so this report opens
+    // at the chosen size next time; other reports keep their own settings.
+    private async Task HandlePageSizeChanged(int newSize)
+    {
+        if (newSize <= 0) return;
+        try
+        {
+            _prefs ??= await PreferenceService.GetPreferencesAsync(_userId);
+            _prefs.UserId = _userId;
+            if (_prefs.ReportPageSizes.TryGetValue(ReportId, out var existing) && existing == newSize)
+                return;  // no change
+            _prefs.ReportPageSizes[ReportId] = newSize;
+            await PreferenceService.SavePreferencesAsync(_prefs);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Could not save rows-per-page preference: {ex.Message}", Severity.Warning);
+        }
+    }
+
+    private async Task ExportExcel()
+    {
+        if (_detailData is null) return;
+        var name = _title ?? "Detail";
+        var bytes = ExportService.ExportToExcel(BuildExportData(_detailData), name);
+        await JS.InvokeVoidAsync("downloadFile", $"{name}-Detail.xlsx",
+            Convert.ToBase64String(bytes),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    }
+
+    private async Task ExportCsv()
+    {
+        if (_detailData is null) return;
+        var name = _title ?? "Detail";
+        var bytes = ExportService.ExportToCsv(BuildExportData(_detailData));
+        await JS.InvokeVoidAsync("downloadFile", $"{name}-Detail.csv",
+            Convert.ToBase64String(bytes), "text/csv");
+    }
+
+    // Mirrors what the grid shows: drops columns hidden in the saved report so
+    // the export reflects visible fields only. Rows are left untouched — the
+    // export loop iterates Columns, so dropped fields never get emitted.
+    private QueryResponse BuildExportData(QueryResponse source)
+    {
+        if (_hiddenColumns is null || _hiddenColumns.Count == 0) return source;
+        var hidden = new HashSet<string>(_hiddenColumns, StringComparer.OrdinalIgnoreCase);
+        var visibleColumns = source.Columns.Where(c => !hidden.Contains(c.FieldId)).ToList();
+        if (visibleColumns.Count == source.Columns.Count) return source;
+        return new QueryResponse
+        {
+            Columns = visibleColumns,
+            Rows = source.Rows,
+            TotalCount = source.TotalCount
+        };
+    }
+}

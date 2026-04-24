@@ -1,0 +1,37 @@
+@* Small single-field prompt dialog. Reused by renamers across admin pages
+   (domains, etc.). Returns the trimmed new value or a Canceled result. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="_value" Label="@Label" Variant="Variant.Outlined"
+                      Margin="Margin.Dense" Immediate
+                      Autofocus OnKeyDown="OnKeyDown" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@string.IsNullOrWhiteSpace(_value)">
+            OK
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public string InitialValue { get; set; } = string.Empty;
+    [Parameter] public string Title { get; set; } = "Rename";
+    [Parameter] public string Label { get; set; } = "Name";
+
+    private string _value = string.Empty;
+
+    protected override void OnInitialized() => _value = InitialValue;
+
+    private void Cancel() => MudDialog?.Cancel();
+    private void Ok() => MudDialog?.Close(DialogResult.Ok(_value.Trim()));
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_value)) Ok();
+        else if (e.Key == "Escape") Cancel();
+    }
+}

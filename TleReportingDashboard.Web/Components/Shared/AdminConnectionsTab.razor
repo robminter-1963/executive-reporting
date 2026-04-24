@@ -1,0 +1,521 @@
+@inject ICompanyConnectionAdminService ConnectionSvc
+@inject ICompanyRegistry CompanyRegistry
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.Data.SqlClient
+@using MudBlazor
+
+@* Scoped scroll on the tab body. The editor stacks a long form (SQL
+   Server + Postgres + certs) that used to clip because no ancestor
+   provides a scroll region — MudTabs' panel doesn't scroll by default,
+   and MudMainContent's default overflow is visible. max-height subtracts
+   the app bar (48px), the Admin page header row (~60px), the tab bar
+   (~50px), and a buffer. *@
+<MudStack Spacing="3" Class="pa-2"
+          Style="max-height: calc(100vh - 180px); overflow-y: auto;">
+    <MudText Typo="Typo.body2" Color="Color.Secondary">
+        Each company can have one or more named data-source connections. Exactly one per company is the default; the <code>ICompanyConnectionResolver</code> picks that row unless a caller asks for a specific name.
+    </MudText>
+
+    @* ── Company picker ────────────────────────────────────────────────── *@
+    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudSelect T="Guid?" Value="_selectedCompanyId" ValueChanged="OnCompanyChanged"
+                       Label="Company" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 280px;">
+                @foreach (var c in _companies)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
+                }
+            </MudSelect>
+            @if (_selectedCompanyId is not null && !_editing)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Add" OnClick="StartNew">
+                    Add Connection
+                </MudButton>
+            }
+            @* Indicator lives here (not inside the editor) so it survives
+               the post-save collapse of the edit panel. *@
+            <SaveStatusIndicator @ref="_saveIndicator" />
+        </MudStack>
+    </MudPaper>
+
+    @* ── Editor or list ────────────────────────────────────────────────── *@
+    @if (_editing && _form is not null)
+    {
+        <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #1A73E8; border-radius: 4px;">
+            <MudStack Spacing="3">
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">
+                        @(_form.Id == Guid.Empty ? "New connection" : "Edit connection")
+                    </MudText>
+                    <MudSpacer />
+                    <MudButton OnClick="CancelEdit">Cancel</MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Info"
+                               StartIcon="@Icons.Material.Filled.PlayArrow"
+                               Disabled="_testing"
+                               OnClick="TestCurrentForm">
+                        @(_testing ? "Testing…" : "Test connection")
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Save" OnClick="SaveEdit">
+                        Save
+                    </MudButton>
+                </MudStack>
+
+                @if (_testResult is not null)
+                {
+                    <MudAlert Severity="@(_testResult.Success ? Severity.Success : Severity.Error)" Dense>
+                        @if (_testResult.Success)
+                        {
+                            @($"Connection OK ({_testResult.LatencyMs} ms)")
+                        }
+                        else
+                        {
+                            @($"Failed after {_testResult.LatencyMs} ms: {_testResult.Error}")
+                        }
+                    </MudAlert>
+                }
+
+                @* Common fields. Explicit widths keep Name from expanding
+                   into the rest of the row, and AlignItems.Center lines up
+                   the label baselines of the two inputs with the switches
+                   (neither input has helper text inline, so their overall
+                   heights match). *@
+                <MudStack Row Spacing="3" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+                    <MudTextField @bind-Value="_form.Name" Label="Name"
+                                  Placeholder="e.g. 'primary', 'warehouse'"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Style="width: 360px;" />
+                    <MudSelect T="string" @bind-Value="_form.ConnectionType" Label="Type"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Style="width: 220px;">
+                        <MudSelectItem Value="@("sqlserver")">SQL Server</MudSelectItem>
+                        <MudSelectItem Value="@("postgres")">Postgres</MudSelectItem>
+                    </MudSelect>
+                    <MudSwitch T="bool" @bind-Value="_form.IsDefault" Color="Color.Primary" Label="Default" />
+                    <MudSwitch T="bool" @bind-Value="_form.IsActive" Color="Color.Success" Label="Active" />
+                </MudStack>
+
+                <MudDivider />
+
+                @* ── Table discovery filters ─────────────────────────────
+                   Schema and table filters are applied independently and
+                   AND'd together after WHERE TABLE_TYPE='BASE TABLE'. Either
+                   blank = no filter on that axis. *@
+                <MudText Typo="Typo.overline" Color="Color.Secondary">Table discovery</MudText>
+                <MudTextField @bind-Value="_form.SchemaFilterSql"
+                              Label="Schema filter (SQL WHERE fragment)"
+                              HelperText="Optional. Narrows which TABLE_SCHEMA values are listed. Dialect-specific. Blank = any schema."
+                              Placeholder="@(_form.ConnectionType == "sqlserver" ? "TABLE_SCHEMA = 'EMPOWER'" : "table_schema IN ('empower', 'rpt')")"
+                              Lines="2"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField @bind-Value="_form.TableFilterSql"
+                              Label="Table filter (SQL WHERE fragment)"
+                              HelperText="Optional. Narrows which TABLE_NAME values are listed. AND'd with the schema filter above. Blank = any table name."
+                              Placeholder="@(_form.ConnectionType == "sqlserver" ? "TABLE_NAME LIKE 'LN[_]%' OR TABLE_NAME LIKE 'U[_]LN[_]%'" : "table_name LIKE 'ln\\_%' OR table_name LIKE 'u\\_ln\\_%'")"
+                              Lines="3"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudAlert Severity="Severity.Warning" Dense Variant="Variant.Outlined" Class="py-1">
+                    <strong>Admin-only:</strong> these fragments are injected into SQL against the target database.
+                    Only users with global admin access can reach these fields.
+                </MudAlert>
+
+                <MudDivider />
+
+                @if (_form.ConnectionType == "sqlserver")
+                {
+                    <MudText Typo="Typo.overline" Color="Color.Secondary">SQL Server settings</MudText>
+                    <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                        <MudTextField @bind-Value="_form.SsDataSource" Label="Data Source"
+                                      HelperText="server host or instance"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 260px;" />
+                        <MudTextField @bind-Value="_form.SsInitialCatalog" Label="Initial Catalog"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 200px;" />
+                        <MudSelect T="string?" @bind-Value="_form.SsApplicationIntent" Label="Application Intent"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;" Clearable>
+                            <MudSelectItem T="string?" Value="@("ReadOnly")">ReadOnly</MudSelectItem>
+                            <MudSelectItem T="string?" Value="@("ReadWrite")">ReadWrite</MudSelectItem>
+                        </MudSelect>
+                    </MudStack>
+                    <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                        <MudSwitch T="bool?" @bind-Value="_form.SsIntegratedSecurity" Color="Color.Primary" Label="Integrated Security" />
+                        <MudSwitch T="bool?" @bind-Value="_form.SsEncrypt" Color="Color.Primary" Label="Encrypt" />
+                        <MudSwitch T="bool?" @bind-Value="_form.SsTrustServerCertificate" Color="Color.Primary" Label="Trust Server Certificate" />
+                        <MudTooltip Text="Appends MultipleActiveResultSets=true to the connection string. Off by default — only needed if the driver throws 'The connection does not support MultipleActiveResultSets.'">
+                            <MudSwitch T="bool?" @bind-Value="_form.SsMultipleActiveResultSets" Color="Color.Primary" Label="MARS" />
+                        </MudTooltip>
+                    </MudStack>
+                    @if (_form.SsIntegratedSecurity != true)
+                    {
+                        <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                            <MudTextField @bind-Value="_form.SsUserId" Label="User Id"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 220px;" />
+                            <MudTextField @bind-Value="_form.SsPassword" Label="Password" InputType="InputType.Password"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 220px;" />
+                        </MudStack>
+                    }
+                }
+                else
+                {
+                    <MudText Typo="Typo.overline" Color="Color.Secondary">Postgres settings</MudText>
+                    <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                        <MudTextField @bind-Value="_form.PgHost" Label="Host"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 260px;" />
+                        <MudNumericField T="int?" @bind-Value="_form.PgPort" Label="Port" Min="0" Max="65535"
+                                         Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px;" />
+                        <MudTextField @bind-Value="_form.PgDatabase" Label="Database"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 200px;" />
+                    </MudStack>
+                    <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                        <MudTextField @bind-Value="_form.PgUsername" Label="Username"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 200px;" />
+                        <MudTextField @bind-Value="_form.PgPassword" Label="Password" InputType="InputType.Password"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 220px;" />
+                    </MudStack>
+                    <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                        <MudSelect T="string?" @bind-Value="_form.PgSslMode" Label="SSL Mode"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;" Clearable>
+                            <MudSelectItem T="string?" Value="@("Disable")">Disable</MudSelectItem>
+                            <MudSelectItem T="string?" Value="@("Prefer")">Prefer</MudSelectItem>
+                            <MudSelectItem T="string?" Value="@("Require")">Require</MudSelectItem>
+                            <MudSelectItem T="string?" Value="@("VerifyCA")">VerifyCA</MudSelectItem>
+                            <MudSelectItem T="string?" Value="@("VerifyFull")">VerifyFull</MudSelectItem>
+                        </MudSelect>
+                        <MudNumericField T="int?" @bind-Value="_form.PgCommandTimeout" Label="Command Timeout (s)"
+                                         Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 180px;" />
+                        <MudNumericField T="int?" @bind-Value="_form.PgTimeout" Label="Connect Timeout (s)"
+                                         Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 180px;" />
+                    </MudStack>
+
+                    @* Display timezone — used by the emitter to wrap date/datetime
+                       field expressions flagged "Apply timezone conversion" with
+                       `AT TIME ZONE '<tz>'`. Clearable; blank (or "(none)") means
+                       no wrapping happens regardless of field flags. *@
+                    <MudSelect T="string?" @bind-Value="_form.PgDisplayTimezone"
+                               Label="Display Timezone (optional)" Clearable
+                               HelperText="When set, date/datetime fields with &quot;Apply timezone conversion&quot; on are wrapped with AT TIME ZONE in queries."
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 320px;">
+                        @foreach (var tz in UsTimezones)
+                        {
+                            <MudSelectItem T="string?" Value="@tz">@tz</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <MudDivider />
+                    <MudText Typo="Typo.overline" Color="Color.Secondary">Certificates (PEM)</MudText>
+                    <MudStack Spacing="2">
+                        <CertRow Label="Root certificate"
+                                 Description="CA chain used to verify the server (SSL Mode = VerifyCA / VerifyFull)."
+                                 Accept=".pem,.crt,.cer"
+                                 Bytes="_form.PgRootCertificate"
+                                 OnUploaded="f => OnCertUploaded(f, CertKind.Root)"
+                                 OnCleared="() => _form.PgRootCertificate = null" />
+                        <CertRow Label="Client certificate"
+                                 Description="Public half of the client cert presented for mutual-TLS auth."
+                                 Accept=".pem,.crt,.cer"
+                                 Bytes="_form.PgSslCertificate"
+                                 OnUploaded="f => OnCertUploaded(f, CertKind.Client)"
+                                 OnCleared="() => _form.PgSslCertificate = null" />
+                        <CertRow Label="Client key"
+                                 Description="Private half of the client cert (plaintext in DB — see TODO)."
+                                 Accept=".pem,.key"
+                                 Bytes="_form.PgSslKey"
+                                 Sensitive="true"
+                                 OnUploaded="f => OnCertUploaded(f, CertKind.Key)"
+                                 OnCleared="() => _form.PgSslKey = null" />
+                    </MudStack>
+                }
+            </MudStack>
+        </MudPaper>
+    }
+    else if (_selectedCompanyId is not null)
+    {
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudTable Items="_connections" Dense Hover Striped Class="pa-0">
+                <HeaderContent>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Type</MudTh>
+                    <MudTh>Target</MudTh>
+                    <MudTh>Default</MudTh>
+                    <MudTh>Active</MudTh>
+                    <MudTh Style="width: 140px;"></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd><strong>@context.Name</strong></MudTd>
+                    <MudTd>@context.ConnectionType</MudTd>
+                    <MudTd>@DescribeTarget(context)</MudTd>
+                    <MudTd>
+                        @if (context.IsDefault)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled">Default</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        @if (context.IsActive)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">Active</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Inactive</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <MudTooltip Text="Test connection">
+                            <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" Color="Color.Info"
+                                           OnClick="@(() => TestRow(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Edit">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                           OnClick="@(() => StartEdit(context))" />
+                        </MudTooltip>
+                        @if (!context.IsDefault)
+                        {
+                            <MudTooltip Text="Make default">
+                                <MudIconButton Icon="@Icons.Material.Filled.Star" Size="Size.Small" Color="Color.Warning"
+                                               OnClick="@(() => MakeDefault(context))" />
+                            </MudTooltip>
+                        }
+                        <MudTooltip Text="Delete">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                           OnClick="@(() => Delete(context))" />
+                        </MudTooltip>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4 d-flex justify-center">
+                        No connections for this company yet.
+                    </MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    }
+</MudStack>
+
+@code {
+    private enum CertKind { Root, Client, Key }
+    private const long MaxCertBytes = 64 * 1024;  // 64 KB — plenty for any PEM
+
+    // Curated list of US timezones for the Display Timezone picker. These
+    // are the legacy pytz / IANA "US/*" zone names — Postgres recognizes
+    // them as aliases for the canonical America/* zones, so either form
+    // works at emission time. The shorter US/* labels are more readable
+    // for admins who aren't deep on IANA geography.
+    private static readonly string[] UsTimezones = new[]
+    {
+        "US/Alaska",
+        "US/Aleutian",
+        "US/Arizona",
+        "US/Central",
+        "US/East-Indiana",
+        "US/Eastern",
+        "US/Hawaii",
+        "US/Indiana-Starke",
+        "US/Michigan",
+        "US/Mountain",
+        "US/Pacific",
+        "US/Samoa"
+    };
+
+    private List<CompanySummary> _companies = new();
+    private List<CompanyConnectionRecord> _connections = new();
+    private Guid? _selectedCompanyId;
+    private bool _editing;
+    private CompanyConnectionRecord? _form;
+    private ConnectionTestResult? _testResult;
+    private bool _testing;
+    private SaveStatusIndicator? _saveIndicator;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _companies = await CompanyRegistry.GetActiveAsync();
+        if (_companies.Count > 0)
+        {
+            _selectedCompanyId = _companies[0].Id;
+            await ReloadConnectionsAsync();
+        }
+    }
+
+    private async Task OnCompanyChanged(Guid? id)
+    {
+        _selectedCompanyId = id;
+        _editing = false;
+        _form = null;
+        await ReloadConnectionsAsync();
+    }
+
+    private async Task ReloadConnectionsAsync()
+    {
+        if (_selectedCompanyId is Guid id)
+            _connections = await ConnectionSvc.GetByCompanyAsync(id);
+        else
+            _connections = new();
+    }
+
+    private void StartNew()
+    {
+        if (_selectedCompanyId is not Guid id) return;
+        _form = new CompanyConnectionRecord
+        {
+            Id = Guid.Empty,
+            CompanyId = id,
+            Name = string.Empty,
+            ConnectionType = "sqlserver",
+            IsDefault = _connections.Count == 0,
+            IsActive = true,
+            SsEncrypt = true,
+            SsIntegratedSecurity = true
+        };
+        _testResult = null;
+        _editing = true;
+    }
+
+    private void StartEdit(CompanyConnectionRecord r)
+    {
+        // Deep copy so Cancel doesn't leave mutated in-place state behind.
+        _form = new CompanyConnectionRecord
+        {
+            Id = r.Id,
+            CompanyId = r.CompanyId,
+            Name = r.Name,
+            ConnectionType = r.ConnectionType,
+            IsDefault = r.IsDefault,
+            IsActive = r.IsActive,
+            SsDataSource = r.SsDataSource, SsInitialCatalog = r.SsInitialCatalog,
+            SsIntegratedSecurity = r.SsIntegratedSecurity, SsUserId = r.SsUserId, SsPassword = r.SsPassword,
+            SsApplicationIntent = r.SsApplicationIntent, SsEncrypt = r.SsEncrypt,
+            SsTrustServerCertificate = r.SsTrustServerCertificate,
+            PgHost = r.PgHost, PgPort = r.PgPort, PgDatabase = r.PgDatabase,
+            PgUsername = r.PgUsername, PgPassword = r.PgPassword,
+            PgSslMode = r.PgSslMode, PgCommandTimeout = r.PgCommandTimeout, PgTimeout = r.PgTimeout,
+            PgRootCertificate = r.PgRootCertificate,
+            PgSslCertificate = r.PgSslCertificate,
+            PgSslKey = r.PgSslKey,
+            PgDisplayTimezone = r.PgDisplayTimezone,
+            TableFilterSql = r.TableFilterSql
+        };
+        _testResult = null;
+        _editing = true;
+    }
+
+    private void CancelEdit()
+    {
+        _editing = false;
+        _form = null;
+        _testResult = null;
+    }
+
+    private async Task TestCurrentForm()
+    {
+        if (_form is null) return;
+        _testing = true;
+        _testResult = null;
+        try
+        {
+            _testResult = await ConnectionSvc.TestAsync(_form);
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private async Task TestRow(CompanyConnectionRecord r)
+    {
+        Snackbar.Add($"Testing '{r.Name}'…", Severity.Info);
+        var result = await ConnectionSvc.TestAsync(r);
+        if (result.Success)
+            Snackbar.Add($"'{r.Name}' OK ({result.LatencyMs} ms)", Severity.Success);
+        else
+            Snackbar.Add($"'{r.Name}' failed: {result.Error}", Severity.Error);
+    }
+
+    private async Task SaveEdit()
+    {
+        if (_form is null) return;
+        try
+        {
+            if (_form.Id == Guid.Empty)
+                await ConnectionSvc.CreateAsync(_form);
+            else
+                await ConnectionSvc.UpdateAsync(_form);
+
+            _editing = false;
+            _form = null;
+            await ReloadConnectionsAsync();
+            if (_saveIndicator is not null) _ = _saveIndicator.Flash("Saved");
+        }
+        catch (SqlException ex) when (ex.Number is 2601 or 2627)
+        {
+            Snackbar.Add("A connection with that name already exists for this company.", Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task MakeDefault(CompanyConnectionRecord r)
+    {
+        try
+        {
+            await ConnectionSvc.SetDefaultAsync(r.CompanyId, r.Id);
+            await ReloadConnectionsAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task Delete(CompanyConnectionRecord r)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = "Delete connection",
+            Message = $"Delete connection '{r.Name}'? This cannot be undone.",
+            YesText = "Delete",
+            CancelText = "Cancel"
+        });
+        if (confirmed != true) return;
+
+        try
+        {
+            await ConnectionSvc.DeleteAsync(r.Id);
+            await ReloadConnectionsAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OnCertUploaded(IBrowserFile? file, CertKind kind)
+    {
+        if (file is null || _form is null) return;
+        try
+        {
+            await using var stream = file.OpenReadStream(MaxCertBytes);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            var bytes = ms.ToArray();
+            switch (kind)
+            {
+                case CertKind.Root:   _form.PgRootCertificate = bytes; break;
+                case CertKind.Client: _form.PgSslCertificate = bytes; break;
+                case CertKind.Key:    _form.PgSslKey = bytes; break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Upload failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private static string DescribeTarget(CompanyConnectionRecord r) =>
+        r.ConnectionType == "sqlserver"
+            ? $"{r.SsDataSource} / {r.SsInitialCatalog}"
+            : $"{r.PgHost}:{r.PgPort} / {r.PgDatabase}";
+}

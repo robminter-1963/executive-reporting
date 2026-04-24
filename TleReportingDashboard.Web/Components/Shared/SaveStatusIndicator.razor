@@ -1,0 +1,52 @@
+@using MudBlazor
+
+@* Small transient "Saved ✓" indicator meant to live next to a save button.
+   Parent calls Flash("Saved") via @ref after a successful write — the chip
+   fades in, holds for ~1.5s, fades out. Replaces the old success-snackbar
+   pattern: the confirmation appears where the user is already looking. *@
+
+<span style="@_style">
+    @if (_visible)
+    {
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Success"
+                 Icon="@Icons.Material.Filled.CheckCircle">
+            @_message
+        </MudChip>
+    }
+</span>
+
+@code {
+    private bool _visible;
+    private string _message = "Saved";
+    private string _style = "opacity: 0; transition: opacity 0.25s ease-in-out;";
+    private CancellationTokenSource? _cts;
+
+    public async Task Flash(string message = "Saved", int holdMs = 1500)
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+
+        _message = message;
+        _visible = true;
+        _style = "opacity: 1; transition: opacity 0.2s ease-in-out;";
+        StateHasChanged();
+
+        try
+        {
+            await Task.Delay(holdMs, token);
+            _style = "opacity: 0; transition: opacity 0.4s ease-in-out;";
+            StateHasChanged();
+
+            await Task.Delay(400, token);
+            _visible = false;
+            StateHasChanged();
+        }
+        catch (TaskCanceledException)
+        {
+            // A newer Flash cancelled us — new one owns the rendering now.
+        }
+    }
+
+    public void Dispose() => _cts?.Cancel();
+}

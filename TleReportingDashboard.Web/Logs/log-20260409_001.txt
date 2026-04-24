@@ -1,0 +1,306 @@
+2026-04-09 20:14:57.146 -07:00 [INF] Now listening on: https://localhost:63036
+2026-04-09 20:14:57.188 -07:00 [INF] Now listening on: http://localhost:63038
+2026-04-09 20:14:57.209 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 20:14:57.209 -07:00 [INF] Hosting environment: Development
+2026-04-09 20:14:57.209 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 20:17:37.112 -07:00 [INF] Application is shutting down...
+2026-04-09 20:21:25.948 -07:00 [INF] Now listening on: https://localhost:52580
+2026-04-09 20:21:25.975 -07:00 [INF] Now listening on: http://localhost:52582
+2026-04-09 20:21:25.978 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 20:21:25.979 -07:00 [INF] Hosting environment: Development
+2026-04-09 20:21:25.979 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 20:22:02.474 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_BORRINFO.BORR_LAST AS [borrower_last], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.LOCKINDATE AS [lock_date], EMPOWER.LN_MTGTERMS.LOCKINEXPIRES AS [lock_expiration], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_1.CODEDESC AS [loan_type], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_BORRINFO.LNKEY AND EMPOWER.LN_BORRINFO.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_1 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_1.LNKEY AND LN_CODES_1.IDX=1
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-09 20:22:02.715 -07:00 [INF] Query executed: Fields=[loan_number, borrower_last, application_date, lock_date, lock_expiration, loan_amount, loan_plan_name, loan_purpose, loan_type, milestone], RowCount=610, Duration=266ms
+2026-04-09 20:23:35.148 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_BORRINFO.BORR_LAST AS [borrower_last], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.LOCKINDATE AS [lock_date], EMPOWER.LN_MTGTERMS.LOCKINEXPIRES AS [lock_expiration], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_1.CODEDESC AS [loan_type], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_BORRINFO.LNKEY AND EMPOWER.LN_BORRINFO.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_1 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_1.LNKEY AND LN_CODES_1.IDX=1
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Appraisal Issue, @filter_0_1=Cleared, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Docs Rev, @filter_0_5=In Proc, @filter_0_6=Pre-Approval, @filter_0_7=Pre-Docs, @filter_0_8=Subordination, @_offset=0, @_pageSize=50000
+2026-04-09 20:23:35.214 -07:00 [INF] Query executed: Fields=[loan_number, borrower_last, application_date, lock_date, lock_expiration, loan_amount, loan_plan_name, loan_purpose, loan_type, milestone], RowCount=36, Duration=67ms
+2026-04-09 20:23:42.138 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_BORRINFO.BORR_LAST AS [borrower_last], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.LOCKINDATE AS [lock_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_1.CODEDESC AS [loan_type], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_BORRINFO.LNKEY AND EMPOWER.LN_BORRINFO.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_1 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_1.LNKEY AND LN_CODES_1.IDX=1
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Appraisal Issue, @filter_0_1=Cleared, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Docs Rev, @filter_0_5=In Proc, @filter_0_6=Pre-Approval, @filter_0_7=Pre-Docs, @filter_0_8=Subordination, @_offset=0, @_pageSize=50000
+2026-04-09 20:23:42.205 -07:00 [INF] Query executed: Fields=[loan_number, borrower_last, application_date, lock_date, loan_amount, loan_plan_name, loan_purpose, loan_type, milestone], RowCount=36, Duration=68ms
+2026-04-09 20:24:34.130 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_BORRINFO.BORR_LAST AS [borrower_last], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.LOCKINDATE AS [lock_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_1.CODEDESC AS [loan_type], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_BORRINFO.LNKEY AND EMPOWER.LN_BORRINFO.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_1 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_1.LNKEY AND LN_CODES_1.IDX=1
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Appraisal Issue, @filter_0_1=Cleared, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Docs Rev, @filter_0_5=In Proc, @filter_0_6=Pre-Approval, @filter_0_7=Pre-Docs, @filter_0_8=Subordination, @_offset=0, @_pageSize=50000
+2026-04-09 20:24:34.193 -07:00 [INF] Query executed: Fields=[loan_number, borrower_last, application_date, lock_date, loan_amount, loan_plan_name, loan_purpose, loan_type, milestone], RowCount=36, Duration=63ms
+2026-04-09 20:24:54.220 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_BORRINFO.BORR_LAST AS [borrower_last], EMPOWER.LN_MTGTERMS.APP_DATE AS [application_date], EMPOWER.LN_MTGTERMS.LOCKINDATE AS [lock_date], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_1.CODEDESC AS [loan_type], LN_CODES_30.CODEDESC AS [milestone]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_BORRINFO.LNKEY AND EMPOWER.LN_BORRINFO.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_1 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_1.LNKEY AND LN_CODES_1.IDX=1
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Appraisal Issue, @filter_0_1=Cleared, @filter_0_2=Docs In, @filter_0_3=Docs Out, @filter_0_4=Docs Rev, @filter_0_5=In Proc, @filter_0_6=Pre-Approval, @filter_0_7=Pre-Docs, @filter_0_8=Subordination, @_offset=0, @_pageSize=50000
+2026-04-09 20:24:54.254 -07:00 [INF] Query executed: Fields=[loan_number, borrower_last, application_date, lock_date, loan_amount, loan_plan_name, loan_purpose, loan_type, milestone], RowCount=36, Duration=35ms
+2026-04-09 20:28:54.645 -07:00 [INF] Application is shutting down...
+2026-04-09 20:29:39.739 -07:00 [INF] Now listening on: https://localhost:52809
+2026-04-09 20:29:39.771 -07:00 [INF] Now listening on: http://localhost:52810
+2026-04-09 20:29:39.774 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 20:29:39.774 -07:00 [INF] Hosting environment: Development
+2026-04-09 20:29:39.774 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 20:29:42.905 -07:00 [ERR] Health check EmpowerDbContext with status "Unhealthy" completed after 1181.4333ms with message 'Operation cancelled by user.'
+System.InvalidOperationException: Operation cancelled by user.
+   at Microsoft.Data.SqlClient.SqlCommand.GetStateObject(TdsParser parser)
+   at Microsoft.Data.SqlClient.SqlCommand.RunExecuteNonQueryTds(String methodName, Boolean isAsync, Int32 timeout, Boolean asyncWrite)
+   at Microsoft.Data.SqlClient.SqlCommand.InternalExecuteNonQuery(TaskCompletionSource`1 completion, Boolean sendToPipe, Int32 timeout, Boolean& usedCache, Boolean asyncWrite, Boolean inRetry, String methodName)
+   at Microsoft.Data.SqlClient.SqlCommand.BeginExecuteNonQueryInternal(CommandBehavior behavior, AsyncCallback callback, Object stateObject, Int32 timeout, Boolean inRetry, Boolean asyncWrite)
+   at Microsoft.Data.SqlClient.SqlCommand.BeginExecuteNonQueryAsync(AsyncCallback callback, Object stateObject)
+   at Microsoft.Data.SqlClient.SqlCommand.<>c.<InternalExecuteNonQueryAsync>b__193_0(AsyncCallback callback, Object stateObject)
+   at System.Threading.Tasks.TaskFactory`1.FromAsyncImpl(Func`3 beginMethod, Func`2 endFunction, Action`1 endAction, Object state, TaskCreationOptions creationOptions)
+   at System.Threading.Tasks.TaskFactory`1.FromAsync(Func`3 beginMethod, Func`2 endMethod, Object state)
+   at Microsoft.Data.SqlClient.SqlCommand.InternalExecuteNonQueryAsync(CancellationToken cancellationToken)
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteNonQueryAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteNonQueryAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteNonQueryAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.SqlServer.Storage.Internal.SqlServerDatabaseCreator.<>c__DisplayClass20_0.<<ExistsAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.SqlServer.Storage.Internal.SqlServerDatabaseCreator.<>c__DisplayClass20_0.<<ExistsAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.<>c__DisplayClass30_0`2.<<ExecuteAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalDatabaseCreator.CanConnectAsync(CancellationToken cancellationToken)
+   at Microsoft.Extensions.Diagnostics.HealthChecks.DbContextHealthCheck`1.CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken)
+2026-04-09 20:38:02.891 -07:00 [INF] Application is shutting down...
+2026-04-09 20:38:44.064 -07:00 [INF] Now listening on: https://localhost:60129
+2026-04-09 20:38:44.095 -07:00 [INF] Now listening on: http://localhost:60130
+2026-04-09 20:38:44.098 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 20:38:44.098 -07:00 [INF] Hosting environment: Development
+2026-04-09 20:38:44.098 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 20:39:06.853 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_BORRINFO.BORR_LAST AS [borrower_last], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_1.CODEDESC AS [loan_type]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_BORRINFO.LNKEY AND EMPOWER.LN_BORRINFO.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_1 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_1.LNKEY AND LN_CODES_1.IDX=1
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-09 20:39:07.067 -07:00 [INF] Query executed: Fields=[loan_number, borrower_last, loan_amount, milestone, loan_plan_name, loan_purpose, loan_type], RowCount=610, Duration=229ms
+2026-04-09 20:39:58.544 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_BORRINFO.BORR_LAST AS [borrower_last], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_1.CODEDESC AS [loan_type]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_BORRINFO.LNKEY AND EMPOWER.LN_BORRINFO.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_1 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_1.LNKEY AND LN_CODES_1.IDX=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8, @filter_0_9)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Appraisal Issue, @filter_0_1=Cleared, @filter_0_2=Docs Rev, @filter_0_3=Docs In, @filter_0_4=Docs Out, @filter_0_5=In Proc, @filter_0_6=Pending Cancel, @filter_0_7=Pre-Approval, @filter_0_8=Pre-Docs, @filter_0_9=Subordination, @_offset=0, @_pageSize=50000
+2026-04-09 20:39:58.607 -07:00 [INF] Query executed: Fields=[loan_number, borrower_last, loan_amount, milestone, loan_plan_name, loan_purpose, loan_type], RowCount=39, Duration=64ms
+2026-04-09 20:40:12.477 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], EMPOWER.LN_BORRINFO.BORR_LAST AS [borrower_last], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount], LN_CODES_30.CODEDESC AS [milestone], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], LN_CODES_4.CODEDESC AS [loan_purpose], LN_CODES_1.CODEDESC AS [loan_type]
+FROM EMPOWER.LN_MTGTERMS
+INNER JOIN EMPOWER.LN_BORRINFO ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_BORRINFO.LNKEY AND EMPOWER.LN_BORRINFO.WHICHBORR=1
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_1 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_1.LNKEY AND LN_CODES_1.IDX=1
+WHERE LN_CODES_30.CODEDESC IN (@filter_0_0, @filter_0_1, @filter_0_2, @filter_0_3, @filter_0_4, @filter_0_5, @filter_0_6, @filter_0_7, @filter_0_8, @filter_0_9)
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @filter_0_0=Appraisal Issue, @filter_0_1=Cleared, @filter_0_2=Docs Rev, @filter_0_3=Docs In, @filter_0_4=Docs Out, @filter_0_5=In Proc, @filter_0_6=Pending Cancel, @filter_0_7=Pre-Approval, @filter_0_8=Pre-Docs, @filter_0_9=Subordination, @_offset=0, @_pageSize=50000
+2026-04-09 20:40:12.557 -07:00 [INF] Query executed: Fields=[loan_number, borrower_last, loan_amount, milestone, loan_plan_name, loan_purpose, loan_type], RowCount=39, Duration=82ms
+2026-04-09 20:42:08.503 -07:00 [INF] Application is shutting down...
+2026-04-09 21:00:47.898 -07:00 [INF] Now listening on: https://localhost:58972
+2026-04-09 21:00:47.924 -07:00 [INF] Now listening on: http://localhost:58973
+2026-04-09 21:00:47.927 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:00:47.927 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:00:47.927 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:01:23.993 -07:00 [INF] Executing query SELECT EMPOWER.LN_MTGTERMS.LNKEY AS [loan_number], LN_CODES_30.CODEDESC AS [milestone], LN_CODES_4.CODEDESC AS [loan_purpose], EMPOWER.LN_PLANDAT.LPLANDESC AS [loan_plan_name], EMPOWER.LN_MTGTERMS.LOANAMT AS [loan_amount]
+FROM EMPOWER.LN_MTGTERMS
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_30 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_30.LNKEY AND LN_CODES_30.IDX=30
+LEFT JOIN EMPOWER.LN_CODES AS LN_CODES_4 ON EMPOWER.LN_MTGTERMS.LNKEY = LN_CODES_4.LNKEY AND LN_CODES_4.IDX=4
+LEFT JOIN EMPOWER.LN_PLANDAT ON EMPOWER.LN_MTGTERMS.LNKEY = EMPOWER.LN_PLANDAT.LNKEY
+ORDER BY EMPOWER.LN_MTGTERMS.LNKEY ASC
+OFFSET @_offset ROWS
+FETCH NEXT @_pageSize ROWS ONLY
+ with parameters: @_offset=0, @_pageSize=50000
+2026-04-09 21:01:24.176 -07:00 [INF] Query executed: Fields=[loan_number, milestone, loan_purpose, loan_plan_name, loan_amount], RowCount=610, Duration=201ms
+2026-04-09 21:06:04.784 -07:00 [INF] Application is shutting down...
+2026-04-09 21:06:45.263 -07:00 [INF] Now listening on: https://localhost:49683
+2026-04-09 21:06:45.297 -07:00 [INF] Now listening on: http://localhost:49684
+2026-04-09 21:06:45.301 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:06:45.301 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:06:45.301 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:06:48.831 -07:00 [ERR] Health check EmpowerDbContext with status "Unhealthy" completed after 1018.8218ms with message 'A task was canceled.'
+System.Threading.Tasks.TaskCanceledException: A task was canceled.
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)
+   at Microsoft.EntityFrameworkCore.SqlServer.Storage.Internal.SqlServerDatabaseCreator.<>c__DisplayClass20_0.<<ExistsAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.SqlServer.Storage.Internal.SqlServerDatabaseCreator.<>c__DisplayClass20_0.<<ExistsAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.<>c__DisplayClass30_0`2.<<ExecuteAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalDatabaseCreator.CanConnectAsync(CancellationToken cancellationToken)
+   at Microsoft.Extensions.Diagnostics.HealthChecks.DbContextHealthCheck`1.CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken)
+2026-04-09 21:09:46.297 -07:00 [WRN] Unhandled exception rendering component: Object reference not set to an instance of an object.
+System.NullReferenceException: Object reference not set to an instance of an object.
+   at TleReportingDashboard.Web.Components.Pages.SchemaBuilder.<BuildRenderTree>b__0_21(RenderTreeBuilder __builder8) in D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web\Components\Pages\SchemaBuilder.razor:line 43
+   at Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder.AddContent(Int32 sequence, RenderFragment fragment)
+   at MudBlazor.MudChip`1.<BuildRenderTree>b__144_0(RenderTreeBuilder __builder2)
+   at MudBlazor.MudElement.BuildRenderTree(RenderTreeBuilder builder)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+2026-04-09 21:09:46.330 -07:00 [ERR] Unhandled exception in circuit '3ffzrb9MOdVMzmc-ZPjTbGqHyD0gcIn-xiI8Lzpkj3E'.
+System.NullReferenceException: Object reference not set to an instance of an object.
+   at TleReportingDashboard.Web.Components.Pages.SchemaBuilder.<BuildRenderTree>b__0_21(RenderTreeBuilder __builder8) in D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web\Components\Pages\SchemaBuilder.razor:line 43
+   at Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder.AddContent(Int32 sequence, RenderFragment fragment)
+   at MudBlazor.MudChip`1.<BuildRenderTree>b__144_0(RenderTreeBuilder __builder2)
+   at MudBlazor.MudElement.BuildRenderTree(RenderTreeBuilder builder)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+2026-04-09 21:11:38.259 -07:00 [INF] Application is shutting down...
+2026-04-09 21:12:55.813 -07:00 [INF] Now listening on: https://localhost:58078
+2026-04-09 21:12:55.840 -07:00 [INF] Now listening on: http://localhost:58079
+2026-04-09 21:12:55.843 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:12:55.843 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:12:55.843 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:16:22.226 -07:00 [INF] Application is shutting down...
+2026-04-09 21:18:54.103 -07:00 [INF] Now listening on: https://localhost:56601
+2026-04-09 21:18:54.131 -07:00 [INF] Now listening on: http://localhost:56603
+2026-04-09 21:18:54.134 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:18:54.134 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:18:54.134 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:25:23.999 -07:00 [INF] Application is shutting down...
+2026-04-09 21:28:10.273 -07:00 [INF] Now listening on: https://localhost:63518
+2026-04-09 21:28:10.299 -07:00 [INF] Now listening on: http://localhost:63520
+2026-04-09 21:28:10.302 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:28:10.302 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:28:10.302 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:28:14.118 -07:00 [ERR] Health check EmpowerDbContext with status "Unhealthy" completed after 577.9854ms with message 'The operation was canceled.'
+System.OperationCanceledException: The operation was canceled.
+   at System.Threading.CancellationToken.ThrowOperationCanceledException()
+   at System.Threading.CancellationToken.ThrowIfCancellationRequested()
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalDatabaseCreator.CanConnectAsync(CancellationToken cancellationToken)
+   at Microsoft.Extensions.Diagnostics.HealthChecks.DbContextHealthCheck`1.CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken)
+2026-04-09 21:33:48.135 -07:00 [INF] Application is shutting down...
+2026-04-09 21:34:42.552 -07:00 [INF] Now listening on: https://localhost:54311
+2026-04-09 21:34:42.577 -07:00 [INF] Now listening on: http://localhost:54313
+2026-04-09 21:34:42.580 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:34:42.580 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:34:42.581 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:34:43.743 -07:00 [ERR] Health check EmpowerDbContext with status "Unhealthy" completed after 243.4974ms with message 'The operation was canceled.'
+System.OperationCanceledException: The operation was canceled.
+   at System.Threading.CancellationToken.ThrowOperationCanceledException()
+   at System.Threading.CancellationToken.ThrowIfCancellationRequested()
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalDatabaseCreator.CanConnectAsync(CancellationToken cancellationToken)
+   at Microsoft.Extensions.Diagnostics.HealthChecks.DbContextHealthCheck`1.CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken)
+2026-04-09 21:38:21.868 -07:00 [INF] Application is shutting down...
+2026-04-09 21:42:04.059 -07:00 [INF] Now listening on: https://localhost:63620
+2026-04-09 21:42:04.076 -07:00 [INF] Now listening on: http://localhost:63622
+2026-04-09 21:42:04.078 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:42:04.079 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:42:04.079 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:44:31.227 -07:00 [INF] Application is shutting down...
+2026-04-09 21:45:18.066 -07:00 [INF] Now listening on: https://localhost:64589
+2026-04-09 21:45:18.093 -07:00 [INF] Now listening on: http://localhost:64591
+2026-04-09 21:45:18.096 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:45:18.097 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:45:18.097 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:47:21.654 -07:00 [INF] Application is shutting down...
+2026-04-09 21:48:16.278 -07:00 [INF] Now listening on: https://localhost:49682
+2026-04-09 21:48:16.305 -07:00 [INF] Now listening on: http://localhost:49683
+2026-04-09 21:48:16.309 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:48:16.309 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:48:16.309 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:48:19.784 -07:00 [ERR] Health check EmpowerDbContext with status "Unhealthy" completed after 1484.1323ms with message 'A task was canceled.'
+System.Threading.Tasks.TaskCanceledException: A task was canceled.
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)
+   at Microsoft.EntityFrameworkCore.SqlServer.Storage.Internal.SqlServerDatabaseCreator.<>c__DisplayClass20_0.<<ExistsAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.SqlServer.Storage.Internal.SqlServerDatabaseCreator.<>c__DisplayClass20_0.<<ExistsAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.<>c__DisplayClass30_0`2.<<ExecuteAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalDatabaseCreator.CanConnectAsync(CancellationToken cancellationToken)
+   at Microsoft.Extensions.Diagnostics.HealthChecks.DbContextHealthCheck`1.CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken)
+2026-04-09 21:50:02.530 -07:00 [INF] Application is shutting down...
+2026-04-09 21:50:45.223 -07:00 [INF] Now listening on: https://localhost:51931
+2026-04-09 21:50:45.250 -07:00 [INF] Now listening on: http://localhost:51933
+2026-04-09 21:50:45.254 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:50:45.254 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:50:45.254 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:52:30.368 -07:00 [INF] Application is shutting down...
+2026-04-09 21:53:10.657 -07:00 [INF] Now listening on: https://localhost:62831
+2026-04-09 21:53:10.674 -07:00 [INF] Now listening on: http://localhost:62833
+2026-04-09 21:53:10.715 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-09 21:53:10.715 -07:00 [INF] Hosting environment: Development
+2026-04-09 21:53:10.715 -07:00 [INF] Content root path: D:\MyProjects\TLE-Reporting-Dashboard\src\TleReportingDashboard.Web
+2026-04-09 21:53:13.539 -07:00 [ERR] Health check EmpowerDbContext with status "Unhealthy" completed after 1259.8304ms with message 'A task was canceled.'
+System.Threading.Tasks.TaskCanceledException: A task was canceled.
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenInternalAsync(Boolean errorsExpected, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalConnection.OpenAsync(CancellationToken cancellationToken, Boolean errorsExpected)
+   at Microsoft.EntityFrameworkCore.SqlServer.Storage.Internal.SqlServerDatabaseCreator.<>c__DisplayClass20_0.<<ExistsAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.SqlServer.Storage.Internal.SqlServerDatabaseCreator.<>c__DisplayClass20_0.<<ExistsAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.<>c__DisplayClass30_0`2.<<ExecuteAsync>b__0>d.MoveNext()
+--- End of stack trace from previous location ---
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteImplementationAsync[TState,TResult](Func`4 operation, Func`4 verifySucceeded, TState state, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.ExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalDatabaseCreator.CanConnectAsync(CancellationToken cancellationToken)
+   at Microsoft.Extensions.Diagnostics.HealthChecks.DbContextHealthCheck`1.CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken)
+2026-04-09 21:55:06.656 -07:00 [INF] Application is shutting down...

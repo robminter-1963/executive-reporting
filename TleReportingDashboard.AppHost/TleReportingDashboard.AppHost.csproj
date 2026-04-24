@@ -1,0 +1,16 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.2.1">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>e7ca5b2b-5735-472a-b945-8abafefbb8fd</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TleReportingDashboard.Web\TleReportingDashboard.Web.csproj" />
+    <ProjectReference Include="..\TleReportingDashboard.Worker\TleReportingDashboard.Worker.csproj" />
+  </ItemGroup>
+
+</Project>

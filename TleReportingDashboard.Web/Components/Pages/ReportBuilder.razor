@@ -1,0 +1,2446 @@
+@page "/builder"
+@page "/builder/{ReportId:guid?}"
+@rendermode InteractiveServer
+@inject ISchemaService SchemaService
+@inject IQueryService QueryService
+@inject IReportService ReportService
+@inject IExportService ExportService
+@inject ISharingService SharingService
+@inject IScheduleService ScheduleService
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IGridTemplateService GridTemplateService
+@inject IAdminService AdminService
+@inject IUserManagementService UserManagement
+@inject IQueryScopeResolver ScopeResolver
+@inject ICompanyConnectionAdminService ConnectionAdminSvc
+@inject ICompanyRegistry CompanyRegistry
+@inject IUserPreferenceService PreferenceService
+@inject ISchemaConfigStore SchemaStore
+@inject ICustomPrimaryTableService CustomPrimaryTableSvc
+@inject TleReportingDashboard.Web.Services.QueryPipeline.ISqlDialectFactory DialectFactory
+@inject ILogger<ReportBuilder> Logger
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject IConfiguration Config
+
+<PageTitle>Report Builder - Executive Reporting Suite</PageTitle>
+
+@* ── Left drawer: Field Picker (resizable) ── *@
+@if (_drawerOpen)
+{
+    @* Offset by the 48px MudAppBar in MainLayout so the top of the picker (banner / search) isn't clipped. *@
+    <div style="display: flex; height: calc(100vh - 48px); position: fixed; top: 48px; left: 0; z-index: 100;">
+        <div style="width: @(_drawerWidth)px; min-width: 180px; max-width: 500px;
+                    background: #FFFFFF; border-right: 1px solid #DADCE0;
+                    overflow: hidden; display: flex; flex-direction: column;">
+            <FieldPicker Domains="_domains" SelectedFieldIds="_selectedFieldIds"
+                         OnFieldAdded="HandleFieldAdded" OnFieldRemoved="HandleFieldRemoved"
+                         TemplateLocked="_linkedTemplateId.HasValue"
+                         TemplateName="@_linkedTemplateName"
+                         HiddenFieldIds="@(_currentConfig.HiddenColumns ?? new List<string>())"
+                         OnFieldVisibilityToggled="HandleFieldVisibilityToggled" />
+        </div>
+        <div style="width: 5px; cursor: col-resize; background: transparent; flex-shrink: 0;"
+             @onmousedown="StartResize" @onmousedown:stopPropagation="true">
+            <div style="width: 1px; height: 100%; margin: 0 auto; background: #DADCE0;"></div>
+        </div>
+    </div>
+}
+
+<MudMainContent Style="@($"padding: 0 16px 16px 16px; margin-left: {(_drawerOpen ? _drawerWidth + 5 : 0)}px; transition: margin-left 0.15s; height: calc(100vh - 48px); overflow-y: auto;")">
+    @* ── Loading indicator ── *@
+    @if (_isLoading)
+    {
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+    }
+
+    <MudStack Spacing="3">
+        @* ── Top action bar (sticky) ── Pinned to the top of the scroll
+           container (no gap above — the app bar ends at the viewport top
+           48px and the action bar picks up from there). *@
+        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween"
+                   Style="position: sticky; top: 0; z-index: 100; background: var(--mud-palette-background); padding: 8px 0; margin: 0; border-bottom: 1px solid var(--mud-palette-lines-default);">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                <MudTooltip Text="@(_drawerOpen ? "Hide column list" : "Show column list")">
+                    <MudIconButton Icon="@(_drawerOpen ? Icons.Material.Filled.MenuOpen : Icons.Material.Filled.Menu)"
+                                   OnClick="() => _drawerOpen = !_drawerOpen" />
+                </MudTooltip>
+                <MudTooltip Text="Back to Report Library">
+                    <MudIconButton Icon="@Icons.Material.Filled.Home" OnClick="NavigateBackToLibrary" />
+                </MudTooltip>
+                @if (_editingName)
+                {
+                    <MudTextField @bind-Value="_loadedReportName" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Style="max-width: 300px; font-size: 1.1rem;"
+                                  Placeholder="Report Name" Immediate
+                                  OnKeyDown="OnNameKeyDown"
+                                  Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Check"
+                                  OnAdornmentClick="() => _editingName = false" />
+                }
+                else
+                {
+                    <MudText Typo="Typo.h6" Style="cursor: pointer;" @ondblclick="() => _editingName = true"
+                             title="Double-click to rename">
+                        @(_loadedReportName ?? "New Report")
+                    </MudText>
+                    <MudTooltip Text="Rename report">
+                        <MudIconButton Icon="@Icons.Material.Filled.EditNote" Size="Size.Small" Color="Color.Default"
+                                       OnClick="() => _editingName = true" />
+                    </MudTooltip>
+                }
+            </MudStack>
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                @* ── Connection picker ── Editable for new reports only.
+                   Once the report is saved, the connection is immutable
+                   (swapping connections silently invalidates field refs). *@
+                <MudTooltip Text="@(_loadedReportId is not null ? "Connection is locked after first save" : "Which data-source this report queries against")">
+                    <MudSelect T="Guid?" Value="_currentConfig.ConnectionId" ValueChanged="OnConnectionChanged"
+                               Label="Connection" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               ToStringFunc="@ConnectionToLabel"
+                               Disabled="@(_loadedReportId is not null)" Style="min-width: 260px;">
+                        @* Flat list. Each row shows its company as a leading
+                           label so users can tell connections apart across
+                           companies without a subheader tree. Sorted by
+                           company then connection name so rows for the same
+                           company still sit together visually. *@
+                        @foreach (var c in _availableConnections
+                            .Where(c => c.IsActive)
+                            .OrderBy(c => CompanyNameFor(c.CompanyId), StringComparer.OrdinalIgnoreCase)
+                            .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">
+                                <span style="color: #5F6368; font-weight: 500;">@CompanyNameFor(c.CompanyId)</span>
+                                <span style="margin: 0 6px; color: #BDC1C6;">·</span>
+                                <span>@c.Name@(c.IsDefault ? " (default)" : "")</span>
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudTooltip>
+
+                @* ── Primary Table ──
+                   One dropdown, always. Options come from Schema Builder's
+                   Table Aliases catalog plus the schema default. There's no
+                   custom / free-text mode anymore; if a legacy report was
+                   saved against a table that isn't in the catalog, that
+                   value is injected as a "(off catalog)" option so the
+                   report still opens — the user then picks a catalog entry
+                   from the same dropdown. *@
+                <MudTooltip Text="Root table this report queries against. Options come from the connection's Table Aliases catalog.">
+                    <MudSelect T="string" Value="_currentConfig.PrimaryTable"
+                               ValueChanged="OnPrimaryTableChanged"
+                               Label="Primary Table" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               ToStringFunc="@PrimaryTableLabelFor"
+                               Required RequiredError="Primary Table is required"
+                               Style="min-width: 320px;">
+                        @{
+                            var primaryOpts = BuildPrimaryTableOptions().ToList();
+                            var suggested = primaryOpts.Where(o => o.IsSuggested).ToList();
+                            var legacy = primaryOpts.Where(o => o.IsLegacy).ToList();
+                        }
+                        @* Only curated "Suggested primaries" show, plus any
+                           existing legacy value so old reports keep working
+                           and the user can re-pick a curated row. Non-
+                           eligible catalog tables are hidden on purpose. *@
+                        @foreach (var opt in suggested)
+                        {
+                            <MudSelectItem T="string" Value="@opt.Value">
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudIcon Icon="@(opt.IsDefault ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                             Size="Size.Small"
+                                             Color="@(opt.IsDefault ? Color.Primary : Color.Default)" />
+                                    <span>@opt.Label@(opt.IsDefault ? " (default)" : "")</span>
+                                </MudStack>
+                            </MudSelectItem>
+                        }
+                        @if (legacy.Count > 0)
+                        {
+                            @if (suggested.Count > 0)
+                            {
+                                <MudDivider />
+                            }
+                            <div style="padding: 6px 16px; font-size: 0.7rem; font-weight: 600;
+                                        text-transform: uppercase; letter-spacing: 0.5px; color: #5F6368;">
+                                Off catalog
+                            </div>
+                            @foreach (var opt in legacy)
+                            {
+                                <MudSelectItem T="string" Value="@opt.Value">
+                                    @opt.Label (off catalog)
+                                </MudSelectItem>
+                            }
+                        }
+                    </MudSelect>
+                </MudTooltip>
+
+                @* ── Primary actions ── *@
+                <MudTooltip Text="@(!_selectedFieldIds.Any() ? "Pick at least one column to enable" : "Fetch fresh data using the current columns and filters")">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.PlayArrow"
+                               OnClick="HandleRunQuery" Disabled="@(!_selectedFieldIds.Any() || _isLoading)">
+                        Run Report
+                    </MudButton>
+                </MudTooltip>
+                <MudTooltip Text="@GetSaveTooltip()">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Save"
+                               OnClick="HandleSave" Disabled="@(!CanSave())">
+                        Save
+                    </MudButton>
+                </MudTooltip>
+
+                <MudDivider Vertical FlexItem Style="margin: 4px 4px;" />
+
+                @* ── Download (kept visible — frequent post-run action) ── *@
+                <MudMenu Variant="Variant.Outlined" Color="Color.Default" Dense
+                         Icon="@Icons.Material.Filled.Download"
+                         Disabled="@(_queryData is null || !_queryData.Rows.Any())"
+                         title="Download the current results">
+                    <MudMenuItem OnClick="ExportExcel">Excel (.xlsx)</MudMenuItem>
+                    <MudMenuItem OnClick="ExportCsv">CSV</MudMenuItem>
+                </MudMenu>
+
+                @* ── "More" overflow menu ── Template, Schedule, Share, and
+                   admin-only tools. Keeps the main bar readable on narrow
+                   screens where ~13 controls used to wrap and clip. *@
+                <MudTooltip Text="More actions">
+                    <MudMenu Icon="@Icons.Material.Filled.MoreVert" Dense
+                             AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                        @if (_linkedTemplateId.HasValue)
+                        {
+                            <MudMenuItem Disabled>
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudIcon Icon="@Icons.Material.Filled.GridView" Size="Size.Small" Color="Color.Info" />
+                                    <MudText Typo="Typo.body2">Linked: @_linkedTemplateName</MudText>
+                                </MudStack>
+                            </MudMenuItem>
+                            <MudMenuItem OnClick="UnlinkTemplate"
+                                         Icon="@Icons.Material.Filled.LinkOff" IconColor="Color.Warning">
+                                Unlink template
+                            </MudMenuItem>
+                        }
+                        else
+                        {
+                            <MudMenuItem OnClick="ApplyTemplate"
+                                         Icon="@Icons.Material.Filled.GridView">
+                                Apply template…
+                            </MudMenuItem>
+                        }
+                        <MudMenuItem OnClick="HandleSchedule"
+                                     Disabled="@(_loadedReportId is null)"
+                                     Icon="@Icons.Material.Filled.Schedule">
+                            @(_loadedReportId is null ? "Schedule (save report first)" : "Schedule…")
+                        </MudMenuItem>
+                        <MudMenuItem OnClick="HandleShare"
+                                     Disabled="@(_loadedReportId is null)"
+                                     Icon="@Icons.Material.Filled.Share">
+                            @(_loadedReportId is null ? "Share (save report first)" : "Share…")
+                        </MudMenuItem>
+                        @if (_isAdmin)
+                        {
+                            <MudDivider />
+                            <MudMenuItem OnClick="HandleSaveAsTemplate"
+                                         Disabled="@(!_selectedFieldIds.Any())"
+                                         Icon="@Icons.Material.Filled.ContentCopy">
+                                Save as template
+                            </MudMenuItem>
+                            <MudMenuItem OnClick="ShowQuery"
+                                         Disabled="@(!_selectedFieldIds.Any())"
+                                         Icon="@Icons.Material.Filled.Code">
+                                Show generated SQL
+                            </MudMenuItem>
+                        }
+                    </MudMenu>
+                </MudTooltip>
+                @if (_isAdmin)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
+                             Icon="@Icons.Material.Filled.Shield"
+                             Style="font-size: 0.65rem; height: 22px;">
+                        ADMIN
+                    </MudChip>
+                }
+            </MudStack>
+        </MudStack>
+
+        @* Saved-roots chip bar removed — the Primary Table dropdown above
+           now surfaces catalog entries inline with their aliases, so a
+           second list of the same data was redundant. Managing the
+           catalog (add/edit/delete) lives in Schema Builder → Table Aliases. *@
+
+        @* ── Primary Table warning ── Fires only while the current root is
+           off-catalog (legacy value from an older report). Picking any
+           catalog-backed entry from the dropdown clears it. *@
+        @if (IsSelectedPrimaryOffCatalog())
+        {
+            <MudAlert Severity="Severity.Warning" Dense Variant="Variant.Outlined"
+                      Icon="@Icons.Material.Filled.ReportProblem">
+                <strong>@_currentConfig.PrimaryTable</strong> isn't in this connection's Table Aliases catalog.
+                Reports rooted here may or may not work — any field from a different table will fail unless
+                a join is defined. Pick a catalog entry from the dropdown, or register this one in
+                Schema Builder → Table Aliases.
+            </MudAlert>
+        }
+
+        @* ── Filters ── One visual band: preset chips grouped by GroupName,
+           ad-hoc filter builder below. Filters without a GroupName fall into
+           a "Misc" bucket that sorts last. *@
+        <MudStack Spacing="1">
+            <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">Filters</MudText>
+            @if (_customFilters.Any())
+            {
+                // Group by normalized GroupName (case-insensitive). Misc
+                // (blank) is rendered last regardless of alphabetical
+                // position. Inside each group, preserve schema order.
+                const string MiscGroup = "Misc";
+                var filterGroups = _customFilters
+                    .GroupBy(cf => string.IsNullOrWhiteSpace(cf.GroupName) ? MiscGroup : cf.GroupName!.Trim(),
+                             StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(g => g.Key.Equals(MiscGroup, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                    .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                @foreach (var group in filterGroups)
+                {
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                 Style="min-width: 80px; font-weight: 600;">
+                            @group.Key
+                        </MudText>
+                        @foreach (var cf in group)
+                        {
+                            var id = cf.Id;
+                            var isActive = _currentConfig.CustomFilterIds?.Contains(id) == true;
+                            var tip = !string.IsNullOrWhiteSpace(cf.Description)
+                                ? (isActive ? $"Active — click to turn off. {cf.Description}" : $"Click to apply. {cf.Description}")
+                                : (isActive ? "Active — click to turn off" : "Click to apply");
+                            <MudTooltip Text="@tip">
+                                <MudChip T="string" Variant="@(isActive ? Variant.Filled : Variant.Outlined)"
+                                         Color="@(isActive ? Color.Primary : Color.Default)" Size="Size.Small"
+                                         OnClick="() => ToggleCustomFilter(id)"
+                                         Style="cursor: pointer;">
+                                    @cf.Label
+                                </MudChip>
+                            </MudTooltip>
+                        }
+                    </MudStack>
+                }
+            }
+            <HeaderFilters Filters="_currentConfig.Filters" Domains="_domains"
+                           OnFiltersChanged="HandleFiltersChanged" />
+        </MudStack>
+
+        @* ── Advanced (ad-hoc) Filters ──
+           Experimental — gated on Features:AdvancedFilters (appsettings).
+           Each row is { field, operator, value(s) } and is ANDed with every
+           other filter source at query time. Persisted under
+           ColumnState.AdvancedFilters so existing reports without advanced
+           filters stay untouched. *@
+        @if (_advancedFiltersEnabled)
+        {
+            <MudExpansionPanels Elevation="0" Class="mt-1"
+                                Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudExpansionPanel>
+                    <TitleContent>
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                Advanced Filters
+                            </MudText>
+                            @{
+                                var leafCount = CountAdvancedFilterLeaves(_filterRoot);
+                            }
+                            @if (leafCount > 0)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined"
+                                         Style="height: 20px;">@leafCount</MudChip>
+                            }
+                        </MudStack>
+                    </TitleContent>
+                    <ChildContent>
+                        @if (_advancedFilterFields.Count == 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+                                Pick a connection first to load the field catalog.
+                            </MudAlert>
+                        }
+                        else
+                        {
+                            <AdvancedFilterGroup Group="_filterRoot"
+                                                 AvailableFields="_advancedFilterFields"
+                                                 IsRoot="true"
+                                                 OnChanged="MarkDirty" />
+                        }
+                    </ChildContent>
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+
+        @* ── Selected field chips — also the column reorder bar ── *@
+        @if (_selectedFieldIds.Any())
+        {
+            <FieldChipBar SelectedFields="_selectedFieldDefinitions"
+                          OnFieldRemoved="HandleFieldRemoved"
+                          OnClearAll="HandleClearAllFields"
+                          OnFieldOrderChanged="HandleFieldOrderChanged"
+                          TemplateLocked="_linkedTemplateId.HasValue" />
+        }
+
+        @* ── Group By chips ── Shown only when at least one selected field has
+           an aggregate SQL expression. Defaults to all selected non-aggregate
+           fields in pick order; user can toggle individual fields off via the
+           close chip X. *@
+        @if (HasAggregateField())
+        {
+            <MudStack Spacing="1">
+                <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+                    Group By
+                </MudText>
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+                    @foreach (var fid in EffectiveGroupByFieldIds)
+                    {
+                        var fidRef = fid;
+                        <MudChip T="string" Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                                 OnClose="() => ToggleGroupByField(fidRef)">
+                            @GetSelectedFieldLabel(fidRef)
+                        </MudChip>
+                    }
+                    @{
+                        var excluded = SelectedNonAggregateFieldIds
+                            .Where(id => !EffectiveGroupByFieldIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+                            .ToList();
+                    }
+                    @if (excluded.Any())
+                    {
+                        <MudMenu Icon="@Icons.Material.Filled.AddCircleOutline" Variant="Variant.Text"
+                                 Color="Color.Info" Dense Size="Size.Small" Label="+ Field"
+                                 AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
+                            @foreach (var fid in excluded)
+                            {
+                                var fidRef = fid;
+                                <MudMenuItem OnClick="() => ToggleGroupByField(fidRef)">@GetSelectedFieldLabel(fidRef)</MudMenuItem>
+                            }
+                        </MudMenu>
+                    }
+                </MudStack>
+            </MudStack>
+        }
+
+        @* ── Truncation notice ── *@
+        @if (_queryData is not null && _queryData.IsTruncated)
+        {
+            <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined"
+                      Icon="@Icons.Material.Filled.FilterAlt">
+                Showing the first @_queryData.Rows.Count.ToString("N0") of @_queryData.TotalCount.ToString("N0") results.
+                Add filters above to narrow to the rows you need.
+            </MudAlert>
+        }
+
+        @* ── Results area ── *@
+        @if (_queryData is not null)
+        {
+            <KpiBar Data="_queryData" ActiveKpiIds="_activeKpiIds"
+                    OnKpiAdded="HandleKpiAdded" OnKpiRemoved="HandleKpiRemoved" />
+
+            <MudTabs @bind-ActivePanelIndex="_activeTabIndex" Elevation="0" Rounded ApplyEffectsToContainer>
+                <MudTabPanel Text="Table" Icon="@Icons.Material.Filled.TableChart">
+                    @* Aggregate-hidden hint — the Table view hides any field
+                       whose SqlExpression is an aggregate (they only make
+                       sense when grouped). Without this banner users think
+                       their field disappeared. *@
+                    @if (AggregateFieldIds.Count > 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined" Class="mb-2"
+                                  Icon="@Icons.Material.Filled.Functions">
+                            @AggregateFieldIds.Count aggregated @(AggregateFieldIds.Count == 1 ? "column is" : "columns are") hidden in the Table view.
+                            <MudButton Variant="Variant.Text" Color="Color.Info" Size="Size.Small"
+                                       Class="ml-2" OnClick="() => _activeTabIndex = 2">
+                                Switch to Dashboard
+                            </MudButton>
+                        </MudAlert>
+                    }
+                    @* Live sort indicator — reflects whatever's currently
+                       applied via column-header clicks. Updates in real time. *@
+                    @if (_liveSort is { Count: > 0 } || IsSortDeviated())
+                    {
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap" Class="mb-1">
+                            <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+                                Sort:
+                            </MudText>
+                            @for (var si = 0; si < _liveSort.Count; si++)
+                            {
+                                // Capture per-iteration locals so the MudChip
+                                // RenderFragment doesn't close over the final
+                                // value of `si` and show the same number on
+                                // every chip.
+                                var priority = si + 1;
+                                var step = _liveSort[si];
+                                var label = GetFieldLabel(step.Field);
+                                var isDesc = string.Equals(step.Direction, "desc", StringComparison.OrdinalIgnoreCase);
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                         Icon="@(isDesc ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)">
+                                    @priority. @label
+                                </MudChip>
+                            }
+                            @if (IsSortDeviated())
+                            {
+                                <MudTooltip Text="Restore the sort saved with this report">
+                                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Warning"
+                                               StartIcon="@Icons.Material.Filled.Undo"
+                                               OnClick="RevertSort">
+                                        Revert
+                                    </MudButton>
+                                </MudTooltip>
+                            }
+                        </MudStack>
+                    }
+                    @* Detail-view grouping + default sort. Only affects the
+                       drill-down (DetailViewer) render — the Table tab's grid
+                       and the Dashboard view both ignore these. When group-by
+                       is set, the default sort becomes the secondary ORDER BY
+                       so rows cluster by group first. *@
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+                            Group By
+                        </MudText>
+                        <MudSelect T="string" Value="_detailGroupByFieldId ?? string.Empty"
+                                   ValueChanged="OnDetailGroupByChanged"
+                                   ToStringFunc="@DetailGroupLabelFor"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="min-width: 240px;">
+                            <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
+                            @foreach (var f in _selectedFieldDefinitions
+                                .Where(f => string.IsNullOrWhiteSpace(f.SqlExpression)))
+                            {
+                                <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="string" @bind-Value="_detailGroupByDirection"
+                                   Label="Direction"
+                                   Disabled="@string.IsNullOrEmpty(_detailGroupByFieldId)"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="width: 150px;">
+                            <MudSelectItem T="string" Value="@("none")">None</MudSelectItem>
+                            <MudSelectItem T="string" Value="@("asc")">Ascending</MudSelectItem>
+                            <MudSelectItem T="string" Value="@("desc")">Descending</MudSelectItem>
+                        </MudSelect>
+                        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px; margin-left: 16px;">
+                            Sort By
+                        </MudText>
+                        <MudSelect T="string" Value="_detailSortFieldId ?? string.Empty"
+                                   ValueChanged="OnDetailSortChanged"
+                                   ToStringFunc="@DetailSortLabelFor"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="min-width: 240px;">
+                            <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
+                            @foreach (var f in _selectedFieldDefinitions)
+                            {
+                                <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="string" @bind-Value="_detailSortDirection"
+                                   Label="Direction"
+                                   Disabled="@string.IsNullOrEmpty(_detailSortFieldId)"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="width: 150px;">
+                            <MudSelectItem T="string" Value="@("asc")">Ascending</MudSelectItem>
+                            <MudSelectItem T="string" Value="@("desc")">Descending</MudSelectItem>
+                        </MudSelect>
+                    </MudStack>
+                    @* Execution summary — intentionally rendered above the
+                       grid, not below. When the grid has FillViewport on,
+                       anything placed after it is pushed past the
+                       MudMainContent's bottom boundary and triggers a second
+                       outer scrollbar alongside the grid's own internal
+                       one. Sitting above costs one row of height and
+                       eliminates the double-scrollbar symptom entirely. *@
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween"
+                              Class="mb-1"
+                              Style="padding: 2px 0;">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @_queryData.Rows.Count of @_queryData.TotalCount rows
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            Executed in @_queryData.ExecutionMs ms
+                        </MudText>
+                    </MudStack>
+                    <ReportGrid @ref="_reportGrid" @key="_gridRenderKey" Data="_queryData" IsTruncated="@(_queryData?.IsTruncated ?? false)"
+                                InitialColumnWidths="_currentConfig.ColumnWidths"
+                                OnColumnWidthsChanged="w => _currentConfig.ColumnWidths = w"
+                                InitialColumnOrder="_currentConfig.ColumnOrder"
+                                OnColumnOrderChanged="o => _currentConfig.ColumnOrder = o"
+                                InitialHiddenColumns="_currentConfig.HiddenColumns"
+                                OnHiddenColumnsChanged="h => _currentConfig.HiddenColumns = h"
+                                AlwaysHiddenColumns="@AggregateFieldIds"
+                                DefaultSortField="@_currentConfig.DefaultSortField"
+                                DefaultSortDirection="@_currentConfig.DefaultSortDirection"
+                                InitialSort="@_initialSortTuples"
+                                OnSortChanged="HandleSortChanged"
+                                FillViewport="true" />
+                </MudTabPanel>
+                <MudTabPanel Text="Chart" Icon="@Icons.Material.Filled.BarChart">
+                    <ChartBuilder Data="_queryData" AvailableColumns="_queryData.Columns" />
+                </MudTabPanel>
+                <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
+                    <DashboardView @ref="_dashboardView" Data="_queryData"
+                                   InitialConfig="_dashboardConfig"
+                                   TableSortField="@_currentConfig.DefaultSortField"
+                                   TableSortDirection="@_currentConfig.DefaultSortDirection"
+                                   ColumnWidths="_currentConfig.ColumnWidths"
+                                   ColumnOrder="_currentConfig.ColumnOrder"
+                                   AllDimensionFields="_allDimensionFields"
+                                   OnExtraFieldRequired="HandleExtraFieldRequired" />
+                </MudTabPanel>
+            </MudTabs>
+        }
+        else if (!_isLoading && _selectedFieldIds.Any())
+        {
+            @* Columns chosen, but query hasn't run yet *@
+            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                      Style="border: 1px dashed #DADCE0; min-height: 300px;">
+                <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Large" Color="Color.Primary" Style="font-size: 64px;" />
+                <MudText Typo="Typo.h6" Class="mt-3">Ready to go</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1" Style="max-width: 420px; text-align: center;">
+                    Your columns and filters are set. Click <strong>Run Report</strong> to pull the data.
+                </MudText>
+                <MudButton Class="mt-4" Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.PlayArrow"
+                           OnClick="HandleRunQuery" Disabled="@_isLoading">
+                    Run Report
+                </MudButton>
+            </MudPaper>
+        }
+        else if (!_isLoading)
+        {
+            @* First-time onboarding card *@
+            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                      Style="border: 1px dashed #DADCE0; min-height: 340px;">
+                <MudIcon Icon="@Icons.Material.Filled.Assessment" Size="Size.Large" Color="Color.Primary" Style="font-size: 64px;" />
+                <MudText Typo="Typo.h6" Class="mt-3">Build your report in three steps</MudText>
+                <MudStack Spacing="1" Class="mt-3" Style="max-width: 520px;">
+                    <MudStack Row AlignItems="AlignItems.Start" Spacing="2">
+                        <MudAvatar Color="Color.Primary" Size="Size.Small" Style="font-size: 0.85rem;">1</MudAvatar>
+                        <MudText Typo="Typo.body2">
+                            <strong>Pick columns</strong> from the panel on the left — loan number, borrower name, dates, dollars, anything you need.
+                        </MudText>
+                    </MudStack>
+                    <MudStack Row AlignItems="AlignItems.Start" Spacing="2">
+                        <MudAvatar Color="Color.Primary" Size="Size.Small" Style="font-size: 0.85rem;">2</MudAvatar>
+                        <MudText Typo="Typo.body2">
+                            <strong>Add filters</strong> to narrow the data to the rows that matter — a date range, a status, a branch.
+                        </MudText>
+                    </MudStack>
+                    <MudStack Row AlignItems="AlignItems.Start" Spacing="2">
+                        <MudAvatar Color="Color.Primary" Size="Size.Small" Style="font-size: 0.85rem;">3</MudAvatar>
+                        <MudText Typo="Typo.body2">
+                            Click <strong>Run Report</strong> to see results. You can also chart, create a dashboard, schedule emails, and share.
+                        </MudText>
+                    </MudStack>
+                </MudStack>
+                @if (!_drawerOpen)
+                {
+                    <MudButton Class="mt-4" Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.ViewColumn"
+                               OnClick="() => _drawerOpen = true">
+                        Show column list
+                    </MudButton>
+                }
+                else
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
+                        Tip: drag the right edge of the column panel to make it wider.
+                    </MudText>
+                }
+            </MudPaper>
+        }
+    </MudStack>
+</MudMainContent>
+
+@code {
+    [Parameter] public Guid? ReportId { get; set; }
+    [SupplyParameterFromQuery(Name = "tab")] public int? ReturnTab { get; set; }
+
+    // ── UI state ──
+    private bool _drawerOpen = true;
+    private bool _isLoading;
+    private bool _hasRunOnce;
+    private int _activeTabIndex;
+    private bool _editingName;
+    private int _drawerWidth = 240;
+
+    // ── Custom filters ──
+    private List<TleReportingDashboard.Web.Configuration.CustomFilterDefinition> _customFilters = new();
+
+    // ── Advanced (ad-hoc) filters — experimental, feature-flagged ──
+    // _advancedFiltersEnabled gates the entire section (UI hidden when
+    // Features:AdvancedFilters=false in appsettings). _filterRoot is the
+    // root of the filter tree — a FilterGroup with AND/OR operator and
+    // nested clauses + sub-groups. Always non-null (empty group = no
+    // filters). _advancedFilterFields is the field catalog that populates
+    // each row's Field picker; reloaded whenever the schema changes
+    // (connection swap, fresh report load).
+    private bool _advancedFiltersEnabled;
+    private TleReportingDashboard.Web.Models.FilterGroup _filterRoot = new()
+    {
+        Op = TleReportingDashboard.Web.Models.FilterGroupOps.And,
+        Items = new List<TleReportingDashboard.Web.Models.FilterItem>()
+    };
+    private List<TleReportingDashboard.Web.Models.FieldConfig> _advancedFilterFields = new();
+
+    // ── All dimension fields for dashboard group-by ──
+    private List<ColumnMeta> _allDimensionFields = new();
+    private HashSet<string> _extraGroupByFieldIds = new();
+
+    // ── Primary Table picker state ──
+    // _customEntries holds the connection's Table Aliases catalog — the only
+    // source of dropdown options. _defaultPrimaryTable comes from
+    // SchemaSettings.PrimaryTable and seeds new reports. _primaryTable +
+    // _primaryAlias stay as separate state fields so the emitter + JoinResolver
+    // still get the two parts they need; the UI just consolidates them into
+    // one dropdown Value.
+    private string? _defaultPrimaryTable;
+    private string? _primaryTable;
+    private string? _primaryAlias;
+    private List<CustomPrimaryTableRecord> _customEntries = new();
+
+    // ── User identity ──
+    private string _userId = "anonymous";
+    private string _userEmail = string.Empty;
+    private bool _isAdmin;
+
+    // ── Schema & data ──
+    private List<DomainGroup> _domains = new();
+    private List<string> _selectedFieldIds = new();
+    private ReportConfig _currentConfig = new();
+    private QueryResponse? _queryData;
+    private List<string> _activeKpiIds = new() { "total_volume", "funded_count", "avg_loan_amount" };
+    private DashboardView? _dashboardView;
+    private ReportGrid? _reportGrid;
+    // Materialized list passed to ReportGrid.InitialSort. Built from
+    // _currentConfig.TableSort on report load, and also when a template's
+    // default sort resolves to a multi-sort. Rebuilt rather than bound live so
+    // the grid only seeds once on first mount.
+    private List<(string Field, string Direction)>? _initialSortTuples;
+    // Live sort, refreshed from ReportGrid every time the user clicks a
+    // header. Drives the "Sort: …" indicator above the grid and mirrors into
+    // _currentConfig.TableSort so save captures whatever is currently applied
+    // without having to also query the grid at save time.
+    private List<(string Field, string Direction)> _liveSort = new();
+    // Rotated on Revert so the ReportGrid remounts and its first-render
+    // InitialSort-seeding path runs again from scratch — cheaper and more
+    // reliable than trying to surgically reset MudDataGrid's sort state.
+    private string _gridRenderKey = Guid.NewGuid().ToString();
+    private DashboardView.DashboardConfig? _dashboardConfig;
+
+    // Drill-down detail view grouping. When set, the DetailViewer renders
+    // rows as a flat table with inline group-header / group-footer rows
+    // keyed on this field id. Null = ungrouped (default). Direction sorts
+    // the groups themselves (not rows within a group). Persisted to
+    // ColumnState JSON under "DetailGroupByFieldId" + "DetailGroupByDirection".
+    private string? _detailGroupByFieldId;
+    private string _detailGroupByDirection = "asc";
+    // Detail-view default sort. Picked by the user in the editor and
+    // persisted alongside the group-by pair. Applied by DetailViewer as
+    // either the primary ORDER BY (when there's no group-by) or as a
+    // secondary ORDER BY (when group-by is set) so rows inside each group
+    // fall into the intended order.
+    private string? _detailSortFieldId;
+    private string _detailSortDirection = "asc";
+
+    // ── Linked template ──
+    private Guid? _linkedTemplateId;
+    private string? _linkedTemplateName;
+
+    // ── Loaded report state ──
+    private Guid? _loadedReportId;
+    private string? _loadedReportName;
+
+    // Active companies — used to group the Connection dropdown and resolve
+    // each connection's owning company for the label.
+    private List<CompanySummary> _companies = new();
+    // connectionId → companyId lookup. Lets us label a connection with its
+    // company without re-querying the DB on every render.
+    private Dictionary<Guid, Guid> _connectionCompanyIdByConnectionId = new();
+    // Connections available across every active company. Loaded in OnInitializedAsync.
+    // The picker is enabled only for new (unsaved) reports; once the report
+    // has an id, the connection is locked to prevent silent schema mismatches.
+    private List<CompanyConnectionRecord> _availableConnections = new();
+
+    // The chip bar IS the column reorder surface, so it must render chips in
+    // the same sequence as the grid columns. ColumnOrder is the source of truth
+    // when present; fall back to _selectedFieldIds insertion order otherwise.
+    private List<FieldDefinition> _selectedFieldDefinitions
+    {
+        get
+        {
+            var fieldById = _domains
+                .SelectMany(d => d.Fields)
+                .ToDictionary(f => f.Id, f => f, StringComparer.OrdinalIgnoreCase);
+
+            var order = _currentConfig.ColumnOrder is { Count: > 0 }
+                ? _currentConfig.ColumnOrder
+                : _selectedFieldIds;
+
+            var selected = new HashSet<string>(_selectedFieldIds, StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new List<FieldDefinition>(_selectedFieldIds.Count);
+
+            foreach (var id in order)
+            {
+                if (!selected.Contains(id)) continue;
+                if (!seen.Add(id)) continue;
+                if (fieldById.TryGetValue(id, out var f)) result.Add(f);
+            }
+            // Catch any selected field that's missing from ColumnOrder (e.g.
+            // just added) — render it at the end.
+            foreach (var id in _selectedFieldIds)
+            {
+                if (seen.Add(id) && fieldById.TryGetValue(id, out var f)) result.Add(f);
+            }
+            return result;
+        }
+    }
+
+    private void NavigateBackToLibrary()
+    {
+        var url = ReturnTab.HasValue ? $"/reports?tab={ReturnTab.Value}" : "/reports";
+        Navigation.NavigateTo(url);
+    }
+
+    // ── Lifecycle ──
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            _userId = user.FindFirst("oid")?.Value ?? user.Identity?.Name ?? "anonymous";
+            _userEmail = user.FindFirst("preferred_username")?.Value ?? string.Empty;
+            _isAdmin = AdminService.IsAdmin(_userEmail);
+            // Feature flag read once on init. Flip it off in appsettings to
+            // hide the Advanced Filters panel entirely and ignore any
+            // persisted filters from previous experimental saves.
+            _advancedFiltersEnabled = Config.GetValue<bool>("Features:AdvancedFilters", false);
+
+            // Load connections across every active company — not just TLE.
+            // Reports belonging to other companies (e.g. when the user filters
+            // Report Library by company and opens one of those reports) need
+            // their connection present in the picker so MudSelect can map the
+            // saved ConnectionId back to a label instead of showing a raw GUID.
+            _companies = await CompanyRegistry.GetActiveAsync();
+
+            // Non-admins only see companies they've been granted access to.
+            // Matches the filter on Report Library / picker so a user can't
+            // create a report scoped to a company they couldn't view.
+            if (!_isAdmin && !string.IsNullOrEmpty(_userEmail))
+            {
+                var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
+                var allowed = access.Select(a => a.CompanyId).ToHashSet();
+                _companies = _companies.Where(c => allowed.Contains(c.Id)).ToList();
+            }
+
+            _availableConnections = new();
+            _connectionCompanyIdByConnectionId = new();
+            foreach (var comp in _companies)
+            {
+                var conns = await ConnectionAdminSvc.GetByCompanyAsync(comp.Id);
+                foreach (var conn in conns)
+                {
+                    _availableConnections.Add(conn);
+                    _connectionCompanyIdByConnectionId[conn.Id] = comp.Id;
+                }
+            }
+
+            // New report: pick a sensible default connection. Preference order:
+            //   1. The default (or first active) connection of the user's Report
+            //      Library company pick (RPT_user_preferences.report_library_company_id).
+            //      Keeps "filter library by a company → New Report" anchored to
+            //      that company's world.
+            //   2. Any connection flagged is_default across the whole registry.
+            //   3. Any active connection at all. If there are none, ConnectionId
+            //      stays null — the picker renders required-red until the user
+            //      either configures a connection or opens an existing report.
+            if (!ReportId.HasValue)
+            {
+                Guid? targetCompanyId = null;
+                try
+                {
+                    var prefs = await PreferenceService.GetPreferencesAsync(_userId);
+                    targetCompanyId = prefs.ReportLibraryCompanyId;
+                }
+                catch { /* preferences unavailable — fall through to registry-wide default */ }
+
+                CompanyConnectionRecord? defaultConn = null;
+                if (targetCompanyId is Guid cid)
+                {
+                    defaultConn = _availableConnections.FirstOrDefault(c => c.CompanyId == cid && c.IsDefault && c.IsActive)
+                               ?? _availableConnections.FirstOrDefault(c => c.CompanyId == cid && c.IsActive);
+                }
+                defaultConn ??= _availableConnections.FirstOrDefault(c => c.IsDefault && c.IsActive)
+                              ?? _availableConnections.FirstOrDefault(c => c.IsActive);
+                _currentConfig.ConnectionId = defaultConn?.Id;
+            }
+
+            // Schema (domains/fields/custom filters/dimension fields) is per-connection.
+            // For a saved report, _currentConfig.ConnectionId gets set later in
+            // LoadSavedReport, which calls ReloadSchemaForConnectionAsync again.
+            await ReloadSchemaForConnectionAsync();
+
+            // If opened with a report ID, load the saved report
+            if (ReportId.HasValue)
+            {
+                await LoadSavedReport(ReportId.Value);
+            }
+            else
+            {
+                // New report — prompt the user to name it inline immediately,
+                // so Save can be a single click later (no modal on first save).
+                _editingName = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to initialize: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task LoadSavedReport(Guid reportId)
+    {
+        try
+        {
+            // Phase 3 authorization: fetch directly and gate by company
+            // access. Matches DetailViewer / ReportViewer. Owner/share
+            // scoping doesn't work anymore (admins editing cross-company
+            // via the library, Editors using shared dashboards, etc).
+            var report = await ReportService.GetReportByIdAsync(reportId);
+            if (report is null)
+            {
+                Snackbar.Add("Report not found.", Severity.Warning);
+                return;
+            }
+            if (!_isAdmin)
+            {
+                var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
+                if (!access.Any(a => a.CompanyId == report.CompanyId))
+                {
+                    Snackbar.Add("You don't have access to this report.", Severity.Warning);
+                    return;
+                }
+            }
+
+            _loadedReportId = report.Id;
+            _loadedReportName = report.Name;
+            _currentConfig.ConnectionId = report.ConnectionId;
+            _currentConfig.PrimaryTable = report.PrimaryTable;
+            // Reload the field catalog to match this report's connection.
+            await ReloadSchemaForConnectionAsync();
+
+            // Resolve linked template if present (kept for the post-snapshot reconciliation below)
+            ResolvedTemplate? resolvedTemplate = null;
+            if (report.GridTemplateId.HasValue)
+            {
+                _linkedTemplateId = report.GridTemplateId;
+                var tmpl = await GridTemplateService.GetTemplateAsync(report.GridTemplateId.Value);
+                _linkedTemplateName = tmpl?.Name;
+                resolvedTemplate = await GridTemplateService.ResolveTemplateAsync(report.GridTemplateId);
+                if (resolvedTemplate is not null)
+                {
+                    _selectedFieldIds = new List<string>(resolvedTemplate.FieldIds);
+                    _currentConfig.SelectedFieldIds = new List<string>(resolvedTemplate.FieldIds);
+                    _currentConfig.ColumnOrder = resolvedTemplate.ColumnOrder;
+                    _currentConfig.HiddenColumns = resolvedTemplate.HiddenColumns;
+                    _currentConfig.DefaultSortField = resolvedTemplate.DefaultSortField;
+                    _currentConfig.DefaultSortDirection = resolvedTemplate.DefaultSortDirection;
+                }
+            }
+            else
+            {
+                // Parse field IDs from report JSON (no linked template)
+                if (!string.IsNullOrWhiteSpace(report.FieldIds))
+                {
+                    var fieldIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(report.FieldIds);
+                    if (fieldIds is not null)
+                    {
+                        _selectedFieldIds = fieldIds;
+                        _currentConfig.SelectedFieldIds = new List<string>(fieldIds);
+                    }
+                }
+            }
+
+            // Parse filters
+            if (!string.IsNullOrWhiteSpace(report.Filters))
+            {
+                var filters = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(report.Filters);
+                if (filters is not null)
+                {
+                    _currentConfig.Filters = filters;
+                }
+            }
+
+            // Parse dashboard config if saved
+            if (!string.IsNullOrWhiteSpace(report.ColumnState))
+            {
+                try
+                {
+                    // Parse ColumnState as a combined object containing dashboard config + column widths
+                    var stateDoc = System.Text.Json.JsonDocument.Parse(report.ColumnState);
+                    var root = stateDoc.RootElement;
+
+                    // Extract column widths if present
+                    if (root.TryGetProperty("ColumnWidths", out var cwElement))
+                    {
+                        _currentConfig.ColumnWidths = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, int>>(cwElement.GetRawText());
+                    }
+
+                    // Extract table column order if present (uses distinct key from DashboardConfig.ColumnOrder)
+                    if (root.TryGetProperty("TableColumnOrder", out var coElement))
+                    {
+                        _currentConfig.ColumnOrder = System.Text.Json.JsonSerializer.Deserialize<List<string>>(coElement.GetRawText());
+                    }
+
+                    // Extract detail-view grouping pair if present.
+                    if (root.TryGetProperty("DetailGroupByFieldId", out var dgfEl))
+                        _detailGroupByFieldId = dgfEl.GetString();
+                    if (root.TryGetProperty("DetailGroupByDirection", out var dgdEl))
+                        _detailGroupByDirection = dgdEl.GetString() ?? "asc";
+                    // Extract detail-view default sort pair if present.
+                    if (root.TryGetProperty("DetailSortFieldId", out var dsfEl))
+                        _detailSortFieldId = dsfEl.GetString();
+                    if (root.TryGetProperty("DetailSortDirection", out var dsdEl))
+                        _detailSortDirection = dsdEl.GetString() ?? "asc";
+
+                    // Extract hidden columns
+                    if (root.TryGetProperty("HiddenColumns", out var hcElement))
+                    {
+                        _currentConfig.HiddenColumns = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcElement.GetRawText());
+                    }
+
+                    // Extract custom filter IDs
+                    if (root.TryGetProperty("CustomFilterIds", out var cfElement))
+                    {
+                        _currentConfig.CustomFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfElement.GetRawText());
+                    }
+
+                    // Extract Advanced (ad-hoc) filters. Only honored when
+                    // the feature flag is on; when flipped off, persisted
+                    // filters are silently ignored (rollback-friendly —
+                    // re-enabling the flag restores them).
+                    //
+                    // Back-compat: older experimental saves stored a flat
+                    // array of FilterClause. Detect the array shape and
+                    // wrap into a root AND-group so the tree-based UI
+                    // renders them unchanged. New saves always emit the
+                    // object shape {op,items:[…]}.
+                    if (_advancedFiltersEnabled
+                        && root.TryGetProperty("AdvancedFilters", out var afElement))
+                    {
+                        try
+                        {
+                            if (afElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                            {
+                                var flat = System.Text.Json.JsonSerializer
+                                    .Deserialize<List<TleReportingDashboard.Web.Models.FilterClause>>(afElement.GetRawText())
+                                    ?? new();
+                                _filterRoot = new TleReportingDashboard.Web.Models.FilterGroup
+                                {
+                                    Op = TleReportingDashboard.Web.Models.FilterGroupOps.And,
+                                    Items = flat
+                                        .Select(c => new TleReportingDashboard.Web.Models.FilterItem { Clause = c })
+                                        .ToList()
+                                };
+                            }
+                            else if (afElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                            {
+                                _filterRoot = System.Text.Json.JsonSerializer
+                                    .Deserialize<TleReportingDashboard.Web.Models.FilterGroup>(afElement.GetRawText(),
+                                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                                    ?? NewEmptyFilterRoot();
+                            }
+                        }
+                        catch { _filterRoot = NewEmptyFilterRoot(); }
+                    }
+
+                    // Extract table view default sort
+                    if (root.TryGetProperty("TableSortField", out var tsfElement))
+                        _currentConfig.DefaultSortField = tsfElement.GetString();
+                    if (root.TryGetProperty("TableSortDirection", out var tsdElement))
+                        _currentConfig.DefaultSortDirection = tsdElement.GetString();
+
+                    // Extract multi-column sort (primary first). When present,
+                    // takes precedence over DefaultSortField/Direction for the
+                    // grid's initial sort seeding.
+                    if (root.TryGetProperty("TableSort", out var tsElement)
+                        && tsElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        try
+                        {
+                            _currentConfig.TableSort = System.Text.Json.JsonSerializer
+                                .Deserialize<List<TableSortSpec>>(tsElement.GetRawText()) ?? new();
+                        }
+                        catch { _currentConfig.TableSort = new(); }
+                    }
+
+                    // The rest is dashboard config — deserialize the whole thing
+                    // (DashboardConfig ignores unknown properties like ColumnWidths)
+                    _dashboardConfig = System.Text.Json.JsonSerializer.Deserialize<DashboardView.DashboardConfig>(report.ColumnState,
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    _currentConfig.DashboardConfigJson = report.ColumnState;
+
+                    // Restore extra group-by field IDs. Both the legacy
+                    // ExtraGroupByFieldIds (picker-required fields) and the
+                    // new ExtraDimensionFieldIds (composite group-by) need to
+                    // be included in the next query's SELECT.
+                    if (_dashboardConfig?.ExtraGroupByFieldIds is not null)
+                        _extraGroupByFieldIds = new HashSet<string>(_dashboardConfig.ExtraGroupByFieldIds, StringComparer.OrdinalIgnoreCase);
+                    if (_dashboardConfig?.ExtraDimensionFieldIds is not null)
+                        foreach (var fid in _dashboardConfig.ExtraDimensionFieldIds)
+                            _extraGroupByFieldIds.Add(fid);
+                }
+                catch { /* not valid JSON, ignore */ }
+            }
+
+            // When a template is linked, the template owns the column order and default sort
+            // so the report stays consistent with the template (matching the "fields locked
+            // to template" lock on the FieldPicker). Per-report show/hide is preserved but
+            // filtered to fields that still exist in the template.
+            if (report.GridTemplateId.HasValue && resolvedTemplate is not null)
+            {
+                _currentConfig.ColumnOrder = resolvedTemplate.ColumnOrder is { Count: > 0 }
+                    ? new List<string>(resolvedTemplate.ColumnOrder)
+                    : new List<string>(_selectedFieldIds);
+                // Default sort: keep the per-report sort if the user saved one;
+                // only fall back to the template's sort when the report has none.
+                if (string.IsNullOrEmpty(_currentConfig.DefaultSortField)
+                    && !string.IsNullOrEmpty(resolvedTemplate.DefaultSortField))
+                {
+                    _currentConfig.DefaultSortField = resolvedTemplate.DefaultSortField;
+                    _currentConfig.DefaultSortDirection = resolvedTemplate.DefaultSortDirection;
+                }
+                _currentConfig.HiddenColumns = TleReportingDashboard.Web.Services.GridTemplateService
+                    .FilterHiddenToTemplate(_selectedFieldIds, _currentConfig.HiddenColumns);
+            }
+
+            // Seed ReportGrid's multi-sort from persisted state (TableSort wins
+            // if populated; otherwise fall back to the legacy single Default
+            // Sort pair so pre-multi-sort reports still open with their sort).
+            if (_currentConfig.TableSort is { Count: > 0 })
+            {
+                _initialSortTuples = _currentConfig.TableSort
+                    .Select(s => (s.Field, s.Direction))
+                    .ToList();
+            }
+            else if (!string.IsNullOrEmpty(_currentConfig.DefaultSortField))
+            {
+                _initialSortTuples = new List<(string, string)>
+                {
+                    (_currentConfig.DefaultSortField!, _currentConfig.DefaultSortDirection ?? "asc")
+                };
+            }
+
+            // If we have an initial sort, mirror it into _liveSort so the
+            // indicator strip shows the correct state before the user
+            // interacts — otherwise it'd only populate after the first click.
+            if (_initialSortTuples is { Count: > 0 })
+                _liveSort = new List<(string, string)>(_initialSortTuples);
+
+            // Auto-run the query after loading
+            if (_selectedFieldIds.Any())
+            {
+                await HandleRunQuery();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load report: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ── Field management ──
+
+    private async Task HandleFieldAdded(string fieldId)
+    {
+        if (!_selectedFieldIds.Contains(fieldId))
+        {
+            _selectedFieldIds.Add(fieldId);
+            _currentConfig.SelectedFieldIds = new List<string>(_selectedFieldIds);
+            // Keep ColumnOrder in sync so the chip bar sequence matches the
+            // grid. New fields append to the end of the existing order.
+            if (_currentConfig.ColumnOrder is { Count: > 0 } && !_currentConfig.ColumnOrder.Contains(fieldId))
+                _currentConfig.ColumnOrder.Add(fieldId);
+            if (_hasRunOnce) await HandleRunQuery();
+        }
+    }
+
+    private async Task HandleFieldRemoved(string fieldId)
+    {
+        _selectedFieldIds.Remove(fieldId);
+        _currentConfig.SelectedFieldIds = new List<string>(_selectedFieldIds);
+        _currentConfig.ColumnOrder?.Remove(fieldId);
+        if (_hasRunOnce && _selectedFieldIds.Any()) await HandleRunQuery();
+        else if (!_selectedFieldIds.Any()) _queryData = null;
+    }
+
+    // Used only when the report is linked to a template — flips a column's hide state.
+    // If the grid is mounted, route through it so the table updates immediately and the
+    // grid emits OnHiddenColumnsChanged, which keeps _currentConfig.HiddenColumns in sync.
+    // If no grid yet (query hasn't run), just mutate the config so the picker re-renders.
+    private async Task HandleFieldVisibilityToggled(string fieldId)
+    {
+        if (_reportGrid is not null)
+        {
+            await _reportGrid.ToggleColumnVisibilityExternal(fieldId);
+            return;
+        }
+
+        var hidden = _currentConfig.HiddenColumns ?? new List<string>();
+        if (!hidden.Remove(fieldId))
+            hidden.Add(fieldId);
+        _currentConfig.HiddenColumns = hidden;
+        StateHasChanged();
+    }
+
+    private Task HandleClearAllFields()
+    {
+        _selectedFieldIds.Clear();
+        _currentConfig.SelectedFieldIds.Clear();
+        _queryData = null;
+        return Task.CompletedTask;
+    }
+
+    // Called from FieldChipBar drag-drop. The chip bar owns the column order
+    // now — user drags chips to reorder the report table. Persist the new
+    // order and rebuild _selectedFieldIds so subsequent picker changes and
+    // query runs respect it.
+    private Task HandleSortChanged(List<(string Field, string Direction)> sort)
+    {
+        _liveSort = sort;
+        _currentConfig.TableSort = sort
+            .Select(t => new TableSortSpec { Field = t.Field, Direction = t.Direction })
+            .ToList();
+        return Task.CompletedTask;
+    }
+
+    // True when the user's interactive sort differs from the one saved on the
+    // report. Used to toggle visibility of the Revert button.
+    private bool IsSortDeviated()
+    {
+        var initial = _initialSortTuples ?? new List<(string, string)>();
+        if (initial.Count != _liveSort.Count) return true;
+        for (var i = 0; i < initial.Count; i++)
+        {
+            if (!string.Equals(initial[i].Field, _liveSort[i].Field, StringComparison.OrdinalIgnoreCase)) return true;
+            if (!string.Equals(initial[i].Direction, _liveSort[i].Direction, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    // Restore the saved sort by forcing ReportGrid to remount. Its first-
+    // render path re-applies InitialSort from scratch, which also refreshes
+    // _liveSort via the OnSortChanged callback once the grid settles.
+    private void RevertSort()
+    {
+        _gridRenderKey = Guid.NewGuid().ToString();
+        _liveSort = _initialSortTuples is { Count: > 0 }
+            ? new List<(string, string)>(_initialSortTuples)
+            : new List<(string, string)>();
+    }
+
+    // Resolves a field id to its human-readable label for the sort indicator,
+    // falling back to the raw id if the field isn't in the currently-loaded
+    // domain list.
+    private string GetFieldLabel(string fieldId)
+    {
+        foreach (var dom in _domains)
+        {
+            var match = dom.Fields.FirstOrDefault(f =>
+                string.Equals(f.Id, fieldId, StringComparison.OrdinalIgnoreCase));
+            if (match is not null) return match.Label;
+        }
+        return fieldId;
+    }
+
+    private Task HandleFieldOrderChanged(List<string> newOrder)
+    {
+        _selectedFieldIds = new List<string>(newOrder);
+        _currentConfig.SelectedFieldIds = new List<string>(newOrder);
+        _currentConfig.ColumnOrder = new List<string>(newOrder);
+        // If the grid is mounted, push the new order through so it re-lays-out.
+        _reportGrid?.ApplyColumnOrder(newOrder);
+        return Task.CompletedTask;
+    }
+
+    private Task HandleFiltersChanged(Dictionary<string, object?> filters)
+    {
+        _currentConfig.Filters = filters;
+        return Task.CompletedTask;
+    }
+
+    // ── Group By helpers (shown only when an aggregate field is selected) ──
+
+    private bool HasAggregateField() =>
+        _selectedFieldDefinitions.Any(f => !string.IsNullOrWhiteSpace(f.SqlExpression)
+            && TleReportingDashboard.Web.Services.QueryBuilder.IsAggregateField(ToFieldConfig(f)));
+
+    private IEnumerable<string> SelectedNonAggregateFieldIds =>
+        _selectedFieldDefinitions
+            .Where(f => !(!string.IsNullOrWhiteSpace(f.SqlExpression)
+                && TleReportingDashboard.Web.Services.QueryBuilder.IsAggregateField(ToFieldConfig(f))))
+            .Select(f => f.Id);
+
+    // Resolves the effective GROUP BY set: user's custom list if set,
+    // otherwise all non-aggregate selected fields in pick order.
+    private List<string> EffectiveGroupByFieldIds =>
+        _currentConfig.GroupByFieldIds is { Count: > 0 }
+            ? _currentConfig.GroupByFieldIds
+                .Where(id => SelectedNonAggregateFieldIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+                .ToList()
+            : SelectedNonAggregateFieldIds.ToList();
+
+    private void ToggleGroupByField(string fieldId)
+    {
+        var list = _currentConfig.GroupByFieldIds is { Count: > 0 }
+            ? new List<string>(_currentConfig.GroupByFieldIds)
+            : SelectedNonAggregateFieldIds.ToList();
+        if (list.Contains(fieldId, StringComparer.OrdinalIgnoreCase))
+            list.RemoveAll(id => string.Equals(id, fieldId, StringComparison.OrdinalIgnoreCase));
+        else
+            list.Add(fieldId);
+        _currentConfig.GroupByFieldIds = list;
+    }
+
+    private string GetSelectedFieldLabel(string fieldId) =>
+        _selectedFieldDefinitions.FirstOrDefault(f => f.Id == fieldId)?.Label ?? fieldId;
+
+    // Drill-down group-by picker. Empty string in the dropdown means "(None)";
+    // we normalize to null for persistence so the ColumnState JSON doesn't
+    // carry an empty key.
+    private void OnDetailGroupByChanged(string? value)
+    {
+        _detailGroupByFieldId = string.IsNullOrEmpty(value) ? null : value;
+    }
+
+    // Resolves a field id back to its label for the picker's display — keeps
+    // MudSelect's closed label correct when the items list rebuilds (same
+    // pattern used by the Primary Table and Connection pickers elsewhere).
+    private string DetailGroupLabelFor(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return "(None)";
+        return _selectedFieldDefinitions.FirstOrDefault(f => f.Id == value)?.Label ?? value;
+    }
+
+    // Detail default sort — same pattern as the group-by picker.
+    private void OnDetailSortChanged(string? value)
+    {
+        _detailSortFieldId = string.IsNullOrEmpty(value) ? null : value;
+    }
+
+    private string DetailSortLabelFor(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return "(None)";
+        return _selectedFieldDefinitions.FirstOrDefault(f => f.Id == value)?.Label ?? value;
+    }
+
+    // ── Advanced Filters helpers ──
+    // Factory for a fresh empty root group — used on load failures and
+    // when resetting state. Always an AND root with zero items.
+    private static TleReportingDashboard.Web.Models.FilterGroup NewEmptyFilterRoot() => new()
+    {
+        Op = TleReportingDashboard.Web.Models.FilterGroupOps.And,
+        Items = new List<TleReportingDashboard.Web.Models.FilterItem>()
+    };
+
+    // Counts every leaf clause in the tree, across all nesting levels.
+    // Drives the chip count shown next to the panel title.
+    private static int CountAdvancedFilterLeaves(TleReportingDashboard.Web.Models.FilterGroup? g)
+    {
+        if (g?.Items is null) return 0;
+        var count = 0;
+        foreach (var item in g.Items)
+        {
+            if (item?.Clause is not null) count++;
+            else if (item?.Group is not null) count += CountAdvancedFilterLeaves(item.Group);
+        }
+        return count;
+    }
+
+    // Tree-walk helper: returns true when at least one leaf clause exists.
+    // Empty root or group-of-only-empty-groups both count as "no filters".
+    private static bool HasAdvancedFilterLeaves(TleReportingDashboard.Web.Models.FilterGroup? g)
+    {
+        if (g?.Items is null) return false;
+        foreach (var item in g.Items)
+        {
+            if (item?.Clause is not null) return true;
+            if (item?.Group is not null && HasAdvancedFilterLeaves(item.Group)) return true;
+        }
+        return false;
+    }
+
+    // Deep-clones a FilterGroup tree so the QueryRequest we send off
+    // doesn't share mutable state with the UI. Same pattern the legacy
+    // flat-list path used.
+    private static TleReportingDashboard.Web.Models.FilterGroup CloneFilterGroup(TleReportingDashboard.Web.Models.FilterGroup source)
+    {
+        var copy = new TleReportingDashboard.Web.Models.FilterGroup
+        {
+            Op = source.Op,
+            Items = new List<TleReportingDashboard.Web.Models.FilterItem>()
+        };
+        if (source.Items is null) return copy;
+        foreach (var item in source.Items)
+        {
+            if (item is null) continue;
+            var c = new TleReportingDashboard.Web.Models.FilterItem();
+            if (item.Clause is not null)
+            {
+                c.Clause = new TleReportingDashboard.Web.Models.FilterClause
+                {
+                    FieldId = item.Clause.FieldId,
+                    Op = item.Clause.Op,
+                    Values = new List<string>(item.Clause.Values ?? new())
+                };
+            }
+            else if (item.Group is not null)
+            {
+                c.Group = CloneFilterGroup(item.Group);
+            }
+            copy.Items.Add(c);
+        }
+        return copy;
+    }
+
+    // Shared marker for "something changed, re-render". The
+    // AdvancedFilterGroup component + row component call back into this
+    // so any place that reads the filter tree during render sees fresh
+    // state (e.g. chip count in the panel header).
+    private void MarkDirty() => StateHasChanged();
+
+    // Ids of selected fields whose SqlExpression contains an aggregate —
+    // Table view hides these; Dashboard view shows them as measures.
+    private List<string> AggregateFieldIds =>
+        _selectedFieldDefinitions
+            .Where(f => !string.IsNullOrWhiteSpace(f.SqlExpression)
+                && TleReportingDashboard.Web.Services.QueryBuilder.IsAggregateField(ToFieldConfig(f)))
+            .Select(f => f.Id)
+            .ToList();
+
+    // Adapter so QueryBuilder.IsAggregateField (which takes FieldConfig) works
+    // against the FieldDefinition instances the UI holds.
+    private static FieldConfig ToFieldConfig(FieldDefinition f) =>
+        new() { Id = f.Id, SqlExpression = f.SqlExpression };
+
+    private void OnNameKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or "Escape")
+            _editingName = false;
+    }
+
+    // Save is gated on: at least one column picked, and (for new reports) a
+    // non-empty name in the inline rename field. Existing reports already have
+    // a name so the name check only applies when _loadedReportId is null.
+    private bool CanSave()
+    {
+        if (!_selectedFieldIds.Any()) return false;
+        if (_loadedReportId is null && string.IsNullOrWhiteSpace(_loadedReportName)) return false;
+        return true;
+    }
+
+    private string GetSaveTooltip()
+    {
+        if (!_selectedFieldIds.Any()) return "Pick at least one column to enable";
+        if (_loadedReportId is null && string.IsNullOrWhiteSpace(_loadedReportName))
+            return "Name your report first (click the title to type a name)";
+        return "Save your changes";
+    }
+
+    private async Task HandleExtraFieldRequired(string fieldId)
+    {
+        _extraGroupByFieldIds.Add(fieldId);
+        await HandleRunQuery();
+    }
+
+    private void ToggleCustomFilter(string filterId)
+    {
+        _currentConfig.CustomFilterIds ??= new();
+        if (!_currentConfig.CustomFilterIds.Remove(filterId))
+            _currentConfig.CustomFilterIds.Add(filterId);
+    }
+
+    // ── Run Query ──
+
+    private async Task OnConnectionChanged(Guid? newId)
+    {
+        // Saved reports ignore the picker (it's disabled anyway). New reports
+        // update the pending config AND reload the schema so the field picker
+        // reflects the newly-selected connection.
+        if (_loadedReportId is not null) return;
+        _currentConfig.ConnectionId = newId;
+        await ReloadSchemaForConnectionAsync();
+    }
+
+    private async Task ReloadSchemaForConnectionAsync()
+    {
+        _domains = await SchemaService.GetDomainGroupsAsync(connectionId: _currentConfig.ConnectionId);
+        _customFilters = await SchemaService.GetCustomFiltersAsync(_currentConfig.ConnectionId);
+
+        // Dashboard group-by dropdown pulls from this list. Must rebuild on every
+        // connection change or a saved-report load — otherwise it stays pinned to
+        // whichever connection was active at page init (typically TLE).
+        var allFields = await SchemaService.GetFieldConfigsAsync(_currentConfig.ConnectionId);
+        _allDimensionFields = allFields
+            .Where(f => f.DataType.Equals("text", StringComparison.OrdinalIgnoreCase) ||
+                         f.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
+                         f.DataType.Equals("int", StringComparison.OrdinalIgnoreCase))
+            .Select(f => new ColumnMeta { FieldId = f.Id, Label = f.Label, DataType = f.DataType, MaxLength = f.MaxLength, ValueSortOrder = f.ValueSortOrder, Format = f.Format })
+            .OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Advanced Filters picker — shares the same field catalog. Copy
+        // so the expansion panel's <AdvancedFilterRow> binds against a
+        // stable list. Filter out aggregate-expression fields: filtering
+        // by an outer aggregate makes no sense at the row level.
+        _advancedFilterFields = allFields
+            .Where(f => !QueryBuilder.IsAggregateField(f))
+            .OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Primary Table dropdown now draws from the Schema Builder's Table
+        // Aliases catalog only — the raw DB table listing is out. Admins
+        // decide what's a valid root by registering it in Schema Builder →
+        // Table Aliases; the Report Builder surfaces that curated set here.
+        _defaultPrimaryTable = null;
+        if (_currentConfig.ConnectionId.HasValue)
+        {
+            try
+            {
+                var schemaCfg = SchemaStore.GetForConnection(_currentConfig.ConnectionId.Value);
+                _defaultPrimaryTable = string.IsNullOrWhiteSpace(schemaCfg?.Settings?.PrimaryTable)
+                    ? null
+                    : schemaCfg.Settings.PrimaryTable;
+            }
+            catch { /* no schema row yet — fall through */ }
+        }
+
+        _customEntries = new();
+        if (_currentConfig.ConnectionId.HasValue)
+        {
+            try
+            {
+                _customEntries = await CustomPrimaryTableSvc.GetByConnectionAsync(_currentConfig.ConnectionId.Value);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to load custom primary tables for connection {Cid}",
+                    _currentConfig.ConnectionId);
+            }
+        }
+
+        // Always split the stored value into (table, alias). The two parts
+        // stay as independent state; the UI just consolidates them into one
+        // dropdown Value for display.
+        var (parsedTable, parsedAlias) = PrimaryTableRef.Parse(_currentConfig.PrimaryTable);
+        _primaryTable = string.IsNullOrWhiteSpace(parsedTable) ? null : parsedTable;
+        _primaryAlias = string.IsNullOrWhiteSpace(parsedAlias) ? null : parsedAlias;
+
+        // New report: auto-fill the Primary Table. Preference order:
+        //   1. The catalog row marked IsDefaultPrimary (admin-curated default
+        //      for this connection — carries the connection's table+alias pair).
+        //   2. The schema-level default (Settings.PrimaryTable), kept as a
+        //      fallback so connections without a curated catalog still work.
+        if (_loadedReportId is null && string.IsNullOrWhiteSpace(_currentConfig.PrimaryTable))
+        {
+            var catalogDefault = _customEntries.FirstOrDefault(e => e.IsDefaultPrimary);
+            if (catalogDefault is not null)
+            {
+                var combined = PrimaryTableRef.Format(
+                    catalogDefault.TableName,
+                    string.IsNullOrEmpty(catalogDefault.Alias) ? null : catalogDefault.Alias);
+                _currentConfig.PrimaryTable = combined;
+                _primaryTable = catalogDefault.TableName;
+                _primaryAlias = string.IsNullOrEmpty(catalogDefault.Alias) ? null : catalogDefault.Alias;
+            }
+            else if (!string.IsNullOrWhiteSpace(_defaultPrimaryTable))
+            {
+                _currentConfig.PrimaryTable = _defaultPrimaryTable;
+                _primaryTable = _defaultPrimaryTable;
+                _primaryAlias = null;
+            }
+        }
+
+    }
+
+    // Dropdown pick handler. Value is the combined "table AS alias" form
+    // for catalog entries, or a bare "table" for the schema default /
+    // legacy off-catalog rows. We parse the selection back into
+    // (_primaryTable, _primaryAlias) so the rest of the app has the two
+    // parts it needs for FROM emission and JoinResolver.
+    private void OnPrimaryTableChanged(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            _primaryTable = null;
+            _primaryAlias = null;
+            RecombinePrimaryTable();
+            return;
+        }
+        var (table, alias) = PrimaryTableRef.Parse(value);
+        _primaryTable = string.IsNullOrWhiteSpace(table) ? null : table;
+        _primaryAlias = string.IsNullOrWhiteSpace(alias) ? null : alias;
+        RecombinePrimaryTable();
+    }
+
+    // Single source of truth for _currentConfig.PrimaryTable. Called whenever
+    // either part changes so the persisted/queried string stays in sync.
+    // _primaryTable and _primaryAlias remain the authoritative two-part
+    // state; the combined string is just what the emitter + DB store need.
+    private void RecombinePrimaryTable()
+    {
+        _currentConfig.PrimaryTable = string.IsNullOrWhiteSpace(_primaryTable)
+            ? null
+            : PrimaryTableRef.Format(_primaryTable!, _primaryAlias);
+    }
+
+    // One option in the Primary Table dropdown. Value is the combined
+    // "table AS alias" string that round-trips into _currentConfig.PrimaryTable.
+    // Group flags place it in "Suggested primaries" (IsSuggested=true) vs
+    // "Other tables". IsDefault tags the connection's designated default
+    // so it renders with "(default)"; IsLegacy tags a saved value that
+    // isn't in the catalog so users know to re-pick it.
+    private record PrimaryTableOption(
+        string Value, string Label,
+        bool IsDefault, bool IsSuggested,
+        bool IsLegacy = false);
+
+    // Maps a ConnectionId back to its display label — wired to the
+    // Connection MudSelect's ToStringFunc. Without it, MudBlazor falls back
+    // to value.ToString() (a raw GUID) for a beat after the items list
+    // rebuilds, and permanently when the saved ConnectionId belongs to a
+    // connection that isn't in the current list (which previously happened
+    // whenever the report's company didn't match the hardcoded load).
+    // Format mirrors the open dropdown: "Company · Connection (default)".
+    private string ConnectionToLabel(Guid? id)
+    {
+        if (id is null) return string.Empty;
+        var c = _availableConnections.FirstOrDefault(x => x.Id == id);
+        if (c is null) return string.Empty;
+        var company = CompanyNameFor(c.CompanyId);
+        var connLabel = $"{c.Name}{(c.IsDefault ? " (default)" : "")}";
+        return string.IsNullOrEmpty(company) ? connLabel : $"{company} · {connLabel}";
+    }
+
+    // Resolves a connection's owning company name. Returns empty string
+    // when the company isn't in the active list (shouldn't happen, but
+    // keeps the label rendering safe).
+    private string CompanyNameFor(Guid companyId)
+    {
+        var comp = _companies.FirstOrDefault(x => x.Id == companyId);
+        return comp?.Name ?? string.Empty;
+    }
+
+    // Maps the selected Value back to its display label — wired to
+    // MudSelect.ToStringFunc. Without this, MudBlazor re-renders the
+    // options list on every tick and can associate the selected value
+    // with the wrong MudSelectItem's rendered ChildContent, so the closed
+    // control shows one row while the backing state holds another.
+    private string PrimaryTableLabelFor(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        var match = BuildPrimaryTableOptions()
+            .FirstOrDefault(o => string.Equals(o.Value, value, StringComparison.OrdinalIgnoreCase));
+        if (match is null) return value;
+        var suffix = match.IsDefault ? " (default)" : match.IsLegacy ? " (off catalog)" : string.Empty;
+        return match.Label + suffix;
+    }
+
+    // Dropdown options = the *curated* subset of Schema Builder's Table
+    // Aliases catalog for this connection — only rows flagged "Eligible as
+    // primary" are surfaced. Non-eligible catalog rows are intentionally
+    // hidden so end users don't see every join/reference table as a root
+    // candidate. Two exceptions are still included so the dropdown is
+    // always valid:
+    //   * The schema's Settings.PrimaryTable when nothing in the catalog
+    //     carries a flag yet (fresh connection, pre-curation).
+    //   * Any saved report's existing Primary Table, even if it's no
+    //     longer eligible — tagged IsLegacy so the existing report keeps
+    //     working and the user gets nudged to re-pick from the curated
+    //     list.
+    private IEnumerable<PrimaryTableOption> BuildPrimaryTableOptions()
+    {
+        var byValue = new Dictionary<string, PrimaryTableOption>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var e in _customEntries)
+        {
+            // Skip non-eligible rows entirely. Admins curate the list via
+            // the "Eligible as primary" checkbox in Table Aliases; anything
+            // unchecked is a supporting table (lookup, join target, etc.)
+            // and shouldn't clutter the Primary Table picker.
+            if (!e.IsPrimary && !e.IsDefaultPrimary) continue;
+
+            var alias = string.IsNullOrEmpty(e.Alias) ? null : e.Alias;
+            var combined = PrimaryTableRef.Format(e.TableName, alias);
+            var label = string.IsNullOrEmpty(alias) ? e.TableName : $"{e.TableName} AS {alias}";
+            // Primary source of truth for "default": the catalog's
+            // IsDefaultPrimary flag. Legacy schema-level default still
+            // honored as a fallback when no row carries the flag.
+            var isDefault = e.IsDefaultPrimary
+                            || (string.Equals(e.TableName, _defaultPrimaryTable, StringComparison.OrdinalIgnoreCase)
+                                && string.IsNullOrEmpty(alias));
+            byValue[combined] = new PrimaryTableOption(combined, label, isDefault, IsSuggested: true);
+        }
+
+        // Surface the schema's default (Settings.PrimaryTable) even if no
+        // Table Aliases entry has been created for it yet — keeps new
+        // connections usable before an admin opens the catalog.
+        if (!string.IsNullOrWhiteSpace(_defaultPrimaryTable)
+            && !byValue.ContainsKey(_defaultPrimaryTable))
+        {
+            byValue[_defaultPrimaryTable] = new PrimaryTableOption(
+                _defaultPrimaryTable, _defaultPrimaryTable,
+                IsDefault: true, IsSuggested: true);
+        }
+
+        // Legacy / off-catalog value: when a saved report's Primary Table
+        // isn't in the curated list (legacy report, or someone unchecked
+        // Eligible after the report was built), surface it anyway so the
+        // dropdown stays valid and the report keeps running. Tagged
+        // IsLegacy so the UI hints "(off catalog)" and nudges the user
+        // toward a curated pick.
+        var savedValue = _currentConfig.PrimaryTable;
+        if (!string.IsNullOrWhiteSpace(savedValue) && !byValue.ContainsKey(savedValue))
+        {
+            byValue[savedValue] = new PrimaryTableOption(
+                savedValue, savedValue,
+                IsDefault: false, IsSuggested: false, IsLegacy: true);
+        }
+
+        // Order: Suggested first (default at top within Suggested), then
+        // any legacy off-catalog values. No "Other tables" group — those
+        // rows are hidden by design.
+        return byValue.Values
+            .OrderByDescending(o => o.IsSuggested)
+            .ThenByDescending(o => o.IsDefault)
+            .ThenBy(o => o.Label, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // True when the currently-selected Primary Table isn't backed by a
+    // catalog entry — i.e., the option we surfaced as IsLegacy because the
+    // saved value didn't match anything in the Table Aliases catalog or
+    // the schema default. Blank selection returns false so the warning
+    // doesn't shout at users who haven't picked anything yet (the
+    // "Required" error on the dropdown already does that).
+    private bool IsSelectedPrimaryOffCatalog()
+    {
+        if (string.IsNullOrWhiteSpace(_currentConfig.PrimaryTable)) return false;
+        var match = BuildPrimaryTableOptions()
+            .FirstOrDefault(o => string.Equals(o.Value, _currentConfig.PrimaryTable, StringComparison.OrdinalIgnoreCase));
+        return match?.IsLegacy == true;
+    }
+
+    private async Task HandleRunQuery()
+    {
+        if (!_selectedFieldIds.Any()) return;
+
+        // Primary Table is required — surface the error inline rather than
+        // letting the query pipeline throw a cryptic SQL error mid-execution.
+        if (string.IsNullOrWhiteSpace(_currentConfig.PrimaryTable))
+        {
+            Snackbar.Add("Primary Table is required. Enter the root table (e.g. salesforce.lead) next to the Connection picker.", Severity.Warning);
+            return;
+        }
+
+        _isLoading = true;
+        // Snapshot the DashboardView's current config BEFORE nulling _queryData, because
+        // null _queryData unmounts the entire MudTabs block (including DashboardView).
+        // Without this, the user's dashboard edits (group-by, measure, chart, etc.) are
+        // lost on every Run Query.
+        var liveConfig = _dashboardView?.GetCurrentConfig();
+        if (liveConfig is not null)
+            _dashboardConfig = liveConfig;
+
+        // Force grid to unmount so stale DOM is cleared before new columns render
+        _queryData = null;
+        StateHasChanged();
+        await Task.Yield();
+
+        try
+        {
+            // Include extra group-by fields not in the selected field list
+            var queryFieldIds = new List<string>(_selectedFieldIds);
+            foreach (var extra in _extraGroupByFieldIds)
+            {
+                if (!queryFieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                    queryFieldIds.Add(extra);
+            }
+
+            var request = new QueryRequest
+            {
+                FieldIds = queryFieldIds,
+                Filters = new Dictionary<string, object?>(_currentConfig.Filters),
+                CustomFilterIds = _currentConfig.CustomFilterIds?.Count > 0 ? new List<string>(_currentConfig.CustomFilterIds) : null,
+                AdvancedFilters = _advancedFiltersEnabled && HasAdvancedFilterLeaves(_filterRoot)
+                    ? CloneFilterGroup(_filterRoot)
+                    : null,
+                SortField = _currentConfig.SortField ?? _currentConfig.DefaultSortField,
+                SortDirection = _currentConfig.SortDirection ?? _currentConfig.DefaultSortDirection,
+                Page = 1,
+                PageSize = 50000,
+                ConnectionId = _currentConfig.ConnectionId,
+                PrimaryTable = _currentConfig.PrimaryTable,
+                GroupByFieldIds = _currentConfig.GroupByFieldIds
+            };
+            request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _currentConfig.ConnectionId, _currentConfig.PrimaryTable);
+            _queryData = await QueryService.ExecuteQueryAsync(request);
+            _hasRunOnce = true;
+            _activeTabIndex = 0;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Query failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    // ── Save ──
+
+    private async Task ApplyTemplate()
+    {
+        if (!_currentConfig.ConnectionId.HasValue)
+        {
+            Snackbar.Add("Pick a connection first — templates are scoped to a connection.", Severity.Warning);
+            return;
+        }
+
+        List<GridTemplate> templates;
+        try
+        {
+            // Scope the list to templates built against this report's connection
+            // so applying one never drops field ids from a different schema.
+            templates = await GridTemplateService.GetTemplatesAsync(_userId, _currentConfig.ConnectionId);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load templates: {ex.Message}", Severity.Error);
+            return;
+        }
+
+        if (!templates.Any())
+        {
+            Snackbar.Add("No grid templates for this connection. Create one from the Grid Templates page.", Severity.Info);
+            return;
+        }
+
+        var parameters = new DialogParameters { { "Templates", templates } };
+        var dialog = await DialogService.ShowAsync<ApplyTemplateDialog>("Apply Grid Template", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not GridTemplate selected) return;
+
+        // Link the template
+        _linkedTemplateId = selected.Id;
+        _linkedTemplateName = selected.Name;
+        await ApplyResolvedTemplate(await GridTemplateService.ResolveTemplateAsync(selected.Id));
+        StateHasChanged();
+    }
+
+    private async Task UnlinkTemplate()
+    {
+        if (!_linkedTemplateId.HasValue) return;
+
+        // Three-way message box: Clone (Yes) / Don't clone (No) / Cancel.
+        // Returns true, false, or null respectively.
+        var cloneFields = await DialogService.ShowMessageBoxAsync(
+            title: "Unlink grid template",
+            message: $"Unlinking \"{_linkedTemplateName}\". Clone its fields to this report so you can modify them?\n\n"
+                     + "Clone — keep the current fields and edit freely.\n"
+                     + "Don't clone — start with no fields; pick your own.",
+            yesText: "Clone",
+            noText: "Don't clone",
+            cancelText: "Cancel");
+
+        if (cloneFields is null) return;  // user hit Cancel
+
+        if (cloneFields == false)
+        {
+            _selectedFieldIds.Clear();
+            _currentConfig.SelectedFieldIds.Clear();
+            _currentConfig.ColumnOrder = null;
+            _currentConfig.HiddenColumns = null;
+            _currentConfig.DefaultSortField = null;
+            _currentConfig.DefaultSortDirection = null;
+            _queryData = null;
+        }
+        // When cloning, the existing _selectedFieldIds / ColumnOrder / etc. remain
+        // as-is — they become the report's own fields once the template id is cleared.
+
+        _linkedTemplateId = null;
+        _linkedTemplateName = null;
+        Snackbar.Add(cloneFields == true
+            ? "Template unlinked. Fields cloned — edit freely."
+            : "Template unlinked. Fields cleared.", Severity.Info);
+    }
+
+    private Task ApplyResolvedTemplate(ResolvedTemplate? resolved)
+    {
+        if (resolved is null) return Task.CompletedTask;
+        _selectedFieldIds = new List<string>(resolved.FieldIds);
+        _currentConfig.SelectedFieldIds = new List<string>(resolved.FieldIds);
+        _currentConfig.ColumnOrder = resolved.ColumnOrder;
+        _currentConfig.HiddenColumns = resolved.HiddenColumns;
+        _currentConfig.DefaultSortField = resolved.DefaultSortField;
+        _currentConfig.DefaultSortDirection = resolved.DefaultSortDirection;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleSave()
+    {
+        // Primary Table is required — don't let a report be saved in a
+        // non-runnable state. We validate here (not just at run-time) so users
+        // get feedback as soon as they try to persist.
+        if (string.IsNullOrWhiteSpace(_currentConfig.PrimaryTable))
+        {
+            Snackbar.Add("Primary Table is required. Enter the root table (e.g. salesforce.lead) next to the Connection picker.", Severity.Warning);
+            return;
+        }
+
+        // Always capture the latest dashboard + column width state before saving.
+        // Also write the config back to _dashboardConfig so that if DashboardView
+        // remounts later (e.g. after a re-run) it gets the user's latest edits,
+        // not the original loaded config.
+        var dashConfig = _dashboardView?.GetCurrentConfig() ?? _dashboardConfig;
+        if (dashConfig is not null)
+        {
+            // Inject extra group-by field IDs into the config
+            if (_extraGroupByFieldIds.Count > 0)
+                dashConfig = dashConfig with { ExtraGroupByFieldIds = _extraGroupByFieldIds.ToList() };
+            _dashboardConfig = dashConfig;
+            _currentConfig.DashboardConfigJson = System.Text.Json.JsonSerializer.Serialize(dashConfig);
+        }
+
+        // Capture column widths from the grid
+        var widths = _reportGrid?.GetCustomWidths();
+        if (widths is not null && widths.Count > 0)
+            _currentConfig.ColumnWidths = widths;
+
+        // Capture the live multi-sort (primary + any Ctrl-click secondaries)
+        // from the grid so it persists with the report's ColumnState.
+        var liveSort = _reportGrid?.GetCurrentSort();
+        if (liveSort is not null)
+        {
+            _currentConfig.TableSort = liveSort
+                .Select(t => new TableSortSpec { Field = t.Field, Direction = t.Direction })
+                .ToList();
+        }
+
+
+        try
+        {
+            if (_loadedReportId.HasValue)
+            {
+                // Direct by-id fetch (Phase 3). UpdateReportAsync still
+                // enforces owner_id match at the SQL layer — admins editing
+                // someone else's report hit the "not owned" guard and see a
+                // clear error instead of a silent no-op.
+                var existing = await ReportService.GetReportByIdAsync(_loadedReportId.Value);
+                if (existing is not null)
+                {
+                    existing.Name = _loadedReportName ?? existing.Name;
+                    existing.FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds);
+                    existing.Filters = _currentConfig.Filters.Any()
+                        ? System.Text.Json.JsonSerializer.Serialize(_currentConfig.Filters)
+                        : null;
+                    existing.ColumnState = BuildColumnStateJson();
+                    existing.GridTemplateId = _linkedTemplateId;
+                    // ConnectionId is locked after first save — don't touch it here.
+                    existing.PrimaryTable = _currentConfig.PrimaryTable;
+                    existing.UpdatedAt = DateTime.UtcNow;
+                    existing.LastRunAt = DateTime.UtcNow;
+                    await ReportService.UpdateReportAsync(existing);
+                    Snackbar.Add($"Report \"{existing.Name}\" saved.", Severity.Success);
+                    return;
+                }
+            }
+
+            // New report — use the inline-rename name from the action bar.
+            // CanSave() already gates the button on a non-empty name, but belt-
+            // and-suspenders: if they got here with a blank name, drop into
+            // inline rename mode and prompt.
+            if (string.IsNullOrWhiteSpace(_loadedReportName))
+            {
+                _editingName = true;
+                Snackbar.Add("Name your report before saving.", Severity.Warning);
+                return;
+            }
+
+            var report = new SavedReport
+            {
+                Id = Guid.NewGuid(),
+                Name = _loadedReportName.Trim(),
+                OwnerId = _userId,
+                OwnerEmail = _userEmail,
+                FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds),
+                Filters = _currentConfig.Filters.Any()
+                    ? System.Text.Json.JsonSerializer.Serialize(_currentConfig.Filters)
+                    : null,
+                ColumnState = BuildColumnStateJson(),
+                GridTemplateId = _linkedTemplateId,
+                ConnectionId = _currentConfig.ConnectionId,
+                PrimaryTable = _currentConfig.PrimaryTable,
+                LastRunAt = DateTime.UtcNow,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var saved = await ReportService.SaveReportAsync(report);
+            _loadedReportId = saved.Id;
+            _loadedReportName = saved.Name;
+            Snackbar.Add($"Report \"{saved.Name}\" saved.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // Admin-only: save current report config as a new template.
+    // Saves a NEW GridTemplate from the current report's column layout. Column
+    // scaffolding only — field ids, order, widths, hidden, and default sort.
+    // Filters, primary table, and dashboard config are intentionally excluded.
+    private async Task HandleSaveAsTemplate()
+    {
+        if (!_isAdmin || !_selectedFieldIds.Any()) return;
+
+        if (!_currentConfig.ConnectionId.HasValue)
+        {
+            Snackbar.Add("Pick a connection first — templates are scoped to a connection.", Severity.Warning);
+            return;
+        }
+
+        // Pull latest column widths from the grid before serializing.
+        var widths = _reportGrid?.GetCustomWidths();
+        if (widths is not null && widths.Count > 0)
+            _currentConfig.ColumnWidths = widths;
+
+        var defaultName = string.IsNullOrWhiteSpace(_loadedReportName)
+            ? "New Template"
+            : $"{_loadedReportName} (Template)";
+
+        var parameters = new DialogParameters<SaveAsTemplateDialog>
+        {
+            { x => x.DefaultName, defaultName }
+        };
+        var dialog = await DialogService.ShowAsync<SaveAsTemplateDialog>("Save as Template", parameters);
+        var dialogResult = await dialog.Result;
+        if (dialogResult is null || dialogResult.Canceled || dialogResult.Data is not string templateName) return;
+
+        try
+        {
+            // Build the GridTemplate-shaped ColumnState: only the grid layout
+            // keys the grid-template editor/ResolveTemplateAsync know about.
+            var columnState = new Dictionary<string, object?>();
+            if (_currentConfig.ColumnOrder is { Count: > 0 })
+                columnState["TableColumnOrder"] = _currentConfig.ColumnOrder;
+            if (_currentConfig.HiddenColumns is { Count: > 0 })
+                columnState["HiddenColumns"] = _currentConfig.HiddenColumns;
+            if (_currentConfig.ColumnWidths is { Count: > 0 })
+                columnState["ColumnWidths"] = _currentConfig.ColumnWidths;
+            if (!string.IsNullOrWhiteSpace(_currentConfig.DefaultSortField))
+            {
+                columnState["TableSortField"] = _currentConfig.DefaultSortField;
+                columnState["TableSortDirection"] = _currentConfig.DefaultSortDirection ?? "asc";
+            }
+
+            var template = new GridTemplate
+            {
+                Id = Guid.NewGuid(),
+                Name = templateName,
+                OwnerId = _userId,
+                OwnerEmail = _userEmail,
+                IsShared = true,
+                FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds),
+                ColumnState = columnState.Count > 0
+                    ? System.Text.Json.JsonSerializer.Serialize(columnState)
+                    : null,
+                ConnectionId = _currentConfig.ConnectionId,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            await GridTemplateService.SaveTemplateAsync(template);
+            Snackbar.Add($"Grid template \"{template.Name}\" saved.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Save as Template failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ── Export ──
+
+    private async Task ExportExcel()
+    {
+        if (_queryData is null || !_queryData.Rows.Any()) return;
+
+        try
+        {
+            var reportName = _loadedReportName ?? "Report";
+            var bytes = ExportService.ExportToExcel(BuildExportData(_queryData), reportName);
+            var fileName = $"{reportName}-{DateTime.Now:yyyyMMdd-HHmmss}.xlsx";
+            await JS.InvokeVoidAsync("downloadFile", fileName,
+                Convert.ToBase64String(bytes),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ExportCsv()
+    {
+        if (_queryData is null || !_queryData.Rows.Any()) return;
+
+        try
+        {
+            var reportName = _loadedReportName ?? "Report";
+            var bytes = ExportService.ExportToCsv(BuildExportData(_queryData));
+            var fileName = $"{reportName}-{DateTime.Now:yyyyMMdd-HHmmss}.csv";
+            await JS.InvokeVoidAsync("downloadFile", fileName,
+                Convert.ToBase64String(bytes),
+                "text/csv");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // Mirrors what the grid shows: drops user-hidden columns (HiddenColumns) and
+    // always-hidden aggregate columns (AggregateFieldIds, which the Table view
+    // hides because they're only meaningful in Dashboard view). Rows are left
+    // untouched — the export loop iterates Columns, so dropped fields never get
+    // emitted.
+    private QueryResponse BuildExportData(QueryResponse source)
+    {
+        var hidden = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_currentConfig.HiddenColumns is { Count: > 0 })
+            foreach (var id in _currentConfig.HiddenColumns) hidden.Add(id);
+        foreach (var id in AggregateFieldIds) hidden.Add(id);
+
+        if (hidden.Count == 0) return source;
+        var visibleColumns = source.Columns.Where(c => !hidden.Contains(c.FieldId)).ToList();
+        if (visibleColumns.Count == source.Columns.Count) return source;
+        return new QueryResponse
+        {
+            Columns = visibleColumns,
+            Rows = source.Rows,
+            TotalCount = source.TotalCount
+        };
+    }
+
+    // ── Share ──
+
+    private async Task HandleShare()
+    {
+        if (_loadedReportId is null) return;
+
+        var parameters = new DialogParameters<ShareDialog>
+        {
+            { x => x.ReportId, _loadedReportId.Value },
+            { x => x.ReportName, _loadedReportName ?? "Report" },
+            { x => x.CurrentUserId, _userId }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, options);
+    }
+
+    // ── Schedule ──
+
+    private async Task HandleSchedule()
+    {
+        if (_loadedReportId is null) return;
+
+        var parameters = new DialogParameters<SchedulesDialog>
+        {
+            { x => x.ReportId, _loadedReportId.Value },
+            { x => x.ReportName, _loadedReportName ?? "Report" },
+            { x => x.UserId, _userId },
+            { x => x.UserEmail, _userEmail }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<SchedulesDialog>("Schedules", parameters, options);
+    }
+
+    // ── KPI management ──
+
+    private void HandleKpiAdded(string kpiId)
+    {
+        if (!_activeKpiIds.Contains(kpiId))
+            _activeKpiIds.Add(kpiId);
+    }
+
+    private void HandleKpiRemoved(string kpiId)
+    {
+        _activeKpiIds.Remove(kpiId);
+    }
+
+    private string? BuildColumnStateJson()
+    {
+        var state = new Dictionary<string, object?>();
+
+        // Dashboard config
+        if (!string.IsNullOrEmpty(_currentConfig.DashboardConfigJson))
+        {
+            try
+            {
+                var dash = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(_currentConfig.DashboardConfigJson);
+                if (dash is not null)
+                {
+                    foreach (var kvp in dash)
+                        state[kvp.Key] = kvp.Value;
+                }
+            }
+            catch { }
+        }
+
+        // Column widths
+        if (_currentConfig.ColumnWidths is not null && _currentConfig.ColumnWidths.Count > 0)
+            state["ColumnWidths"] = _currentConfig.ColumnWidths;
+
+        // Column order (table view) — uses distinct key to avoid colliding with
+        // DashboardConfig.ColumnOrder which stores dashboard summary column keys.
+        if (_currentConfig.ColumnOrder is not null && _currentConfig.ColumnOrder.Count > 0)
+            state["TableColumnOrder"] = _currentConfig.ColumnOrder;
+
+        // Hidden columns
+        if (_currentConfig.HiddenColumns is not null && _currentConfig.HiddenColumns.Count > 0)
+            state["HiddenColumns"] = _currentConfig.HiddenColumns;
+
+        // Custom filter IDs
+        if (_currentConfig.CustomFilterIds is not null && _currentConfig.CustomFilterIds.Count > 0)
+            state["CustomFilterIds"] = _currentConfig.CustomFilterIds;
+
+        // Multi-column sort — ordered list of {Field, Direction}. Primary first.
+        // This is the only sort source new saves emit. The legacy TableSortField
+        // / TableSortDirection pair is still read on load for backward compat,
+        // but isn't written anymore now that the Default Sort dropdown is gone.
+        if (_currentConfig.TableSort is { Count: > 0 })
+            state["TableSort"] = _currentConfig.TableSort;
+
+        // Detail-view grouping (drill-down). Direction is persisted even when
+        // "none" so the user's pick round-trips exactly.
+        if (!string.IsNullOrEmpty(_detailGroupByFieldId))
+        {
+            state["DetailGroupByFieldId"] = _detailGroupByFieldId;
+            state["DetailGroupByDirection"] = _detailGroupByDirection;
+        }
+        // Detail-view default sort (applied as either primary or secondary
+        // ORDER BY by DetailViewer depending on whether group-by is set).
+        if (!string.IsNullOrEmpty(_detailSortFieldId))
+        {
+            state["DetailSortFieldId"] = _detailSortFieldId;
+            state["DetailSortDirection"] = _detailSortDirection;
+        }
+
+        // Advanced (ad-hoc) filters. Only emitted when the feature is on
+        // AND the user has defined at least one. Keeps existing reports
+        // clean of phantom empty arrays.
+        if (_advancedFiltersEnabled && HasAdvancedFilterLeaves(_filterRoot))
+            state["AdvancedFilters"] = _filterRoot;
+
+        return state.Count > 0
+            ? System.Text.Json.JsonSerializer.Serialize(state)
+            : null;
+    }
+
+    // ── Show Query ──
+    private async Task ShowQuery()
+    {
+        if (string.IsNullOrWhiteSpace(_currentConfig.PrimaryTable))
+        {
+            Snackbar.Add("Primary Table is required. Enter the root table (e.g. salesforce.lead) next to the Connection picker.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            // Schema lookups must match the report's connection — otherwise
+            // Postgres field ids get validated against the TLE schema and
+            // the builder rejects them as "unknown fields".
+            var cid = _currentConfig.ConnectionId;
+            var fieldConfigs = await SchemaService.GetFieldConfigsAsync(cid);
+            var joinConfigs = await SchemaService.GetJoinConfigsAsync(cid);
+            var customFilters = await SchemaService.GetCustomFiltersAsync(cid);
+            var lookups = await SchemaService.GetLookupsAsync(cid);
+            // Include extra group-by fields not in the selected field list
+            var queryFieldIds = new List<string>(_selectedFieldIds);
+            foreach (var extra in _extraGroupByFieldIds)
+            {
+                if (!queryFieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                    queryFieldIds.Add(extra);
+            }
+
+            var request = new QueryRequest
+            {
+                FieldIds = queryFieldIds,
+                Filters = new Dictionary<string, object?>(_currentConfig.Filters),
+                CustomFilterIds = _currentConfig.CustomFilterIds?.Count > 0 ? new List<string>(_currentConfig.CustomFilterIds) : null,
+                AdvancedFilters = _advancedFiltersEnabled && HasAdvancedFilterLeaves(_filterRoot)
+                    ? CloneFilterGroup(_filterRoot)
+                    : null,
+                SortField = _currentConfig.SortField ?? _currentConfig.DefaultSortField,
+                SortDirection = _currentConfig.SortDirection ?? _currentConfig.DefaultSortDirection,
+                Page = 1,
+                PageSize = 50000,
+                ConnectionId = _currentConfig.ConnectionId,
+                PrimaryTable = _currentConfig.PrimaryTable,
+                GroupByFieldIds = _currentConfig.GroupByFieldIds
+            };
+            request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _currentConfig.ConnectionId, _currentConfig.PrimaryTable);
+            // Pick the dialect that matches the report's connection so the
+            // preview SQL (TOP vs LIMIT, [brackets] vs "quotes") reflects
+            // what will actually run.
+            var currentConn = _availableConnections.FirstOrDefault(c => c.Id == _currentConfig.ConnectionId);
+            var dialect = DialectFactory.Get(currentConn?.ConnectionType ?? "sqlserver");
+            var (sql, parameters) = QueryBuilder.BuildQuery(
+                request, fieldConfigs, joinConfigs, customFilters, lookups, dialect,
+                _currentConfig.PrimaryTable);
+
+            // If the user is viewing the Dashboard tab (_activeTabIndex == 2),
+            // wrap the row-level SQL as an aggregated GROUP BY query so the
+            // preview matches what the dashboard summary displays.
+            if (_activeTabIndex == 2)
+            {
+                var liveDashConfig = _dashboardView?.GetCurrentConfig() ?? _dashboardConfig;
+                if (liveDashConfig is not null && !string.IsNullOrWhiteSpace(liveDashConfig.GroupByFieldId))
+                {
+                    var dims = new List<string> { liveDashConfig.GroupByFieldId };
+                    if (liveDashConfig.ExtraDimensionFieldIds is { Count: > 0 })
+                        dims.AddRange(liveDashConfig.ExtraDimensionFieldIds);
+
+                    var measures = new List<(string FieldId, string Aggregation)>();
+                    if (!string.IsNullOrWhiteSpace(liveDashConfig.MeasureFieldId)
+                        && !string.Equals(liveDashConfig.Aggregation, "COUNT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        measures.Add((liveDashConfig.MeasureFieldId, liveDashConfig.Aggregation));
+                    }
+                    if (liveDashConfig.ExtraColumns is { Count: > 0 })
+                        foreach (var ec in liveDashConfig.ExtraColumns)
+                            measures.Add((ec.FieldId, ec.Aggregation));
+
+                    sql = QueryBuilder.BuildDashboardPreviewSql(
+                        sql, dims, measures, fieldConfigs, dialect,
+                        liveDashConfig.DefaultSortColumn, liveDashConfig.DefaultSortDirection);
+                }
+            }
+
+            var paramDict = parameters.ToDictionary(p => p.ParameterName, p => (object?)p.Value);
+
+            // Also build the SQL the DetailViewer would execute so the
+            // admin can inspect both in one dialog. DetailViewer's request
+            // shape: same fields/filters/custom-filters/primary/connection,
+            // Page 1 with a much higher PageSize (50k), and sort precedence
+            // mirroring DetailViewer's logic — group-by first, detail
+            // default second. GroupByFieldIds is intentionally omitted
+            // (detail view groups client-side, not via SQL aggregation).
+            string? detailPrimary = null, detailPrimaryDir = null;
+            string? detailSecondary = null, detailSecondaryDir = null;
+            if (!string.IsNullOrEmpty(_detailGroupByFieldId)
+                && queryFieldIds.Contains(_detailGroupByFieldId, StringComparer.OrdinalIgnoreCase))
+            {
+                detailPrimary = _detailGroupByFieldId;
+                detailPrimaryDir = _detailGroupByDirection == "desc" ? "desc" : "asc";
+                if (!string.IsNullOrEmpty(_detailSortFieldId)
+                    && !string.Equals(_detailSortFieldId, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase)
+                    && queryFieldIds.Contains(_detailSortFieldId, StringComparer.OrdinalIgnoreCase))
+                {
+                    detailSecondary = _detailSortFieldId;
+                    detailSecondaryDir = _detailSortDirection == "desc" ? "desc" : "asc";
+                }
+            }
+            else if (!string.IsNullOrEmpty(_detailSortFieldId)
+                && queryFieldIds.Contains(_detailSortFieldId, StringComparer.OrdinalIgnoreCase))
+            {
+                detailPrimary = _detailSortFieldId;
+                detailPrimaryDir = _detailSortDirection == "desc" ? "desc" : "asc";
+            }
+
+            var detailRequest = new QueryRequest
+            {
+                FieldIds = queryFieldIds,
+                Filters = new Dictionary<string, object?>(_currentConfig.Filters),
+                CustomFilterIds = _currentConfig.CustomFilterIds?.Count > 0 ? new List<string>(_currentConfig.CustomFilterIds) : null,
+                AdvancedFilters = _advancedFiltersEnabled && HasAdvancedFilterLeaves(_filterRoot)
+                    ? CloneFilterGroup(_filterRoot)
+                    : null,
+                Page = 1,
+                PageSize = 50000,
+                ConnectionId = _currentConfig.ConnectionId,
+                PrimaryTable = _currentConfig.PrimaryTable,
+                SortField = detailPrimary,
+                SortDirection = detailPrimaryDir,
+                SecondarySortField = detailSecondary,
+                SecondarySortDirection = detailSecondaryDir
+            };
+            var (detailSql, detailParams) = QueryBuilder.BuildQuery(
+                detailRequest, fieldConfigs, joinConfigs, customFilters, lookups, dialect,
+                _currentConfig.PrimaryTable);
+            var detailParamDict = detailParams.ToDictionary(p => p.ParameterName, p => (object?)p.Value);
+
+            var dlgParams = new DialogParameters
+            {
+                { "Sql", sql },
+                { "Parameters", paramDict },
+                { "DetailSql", detailSql },
+                { "DetailParameters", detailParamDict }
+            };
+            await DialogService.ShowAsync<ShowQueryDialog>("Generated SQL Query", dlgParams,
+                new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "ShowQuery failed to build SQL");
+            Snackbar.Add($"Failed to build query: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ── Drawer resize ──
+    private async Task StartResize(MouseEventArgs e)
+    {
+        await JS.InvokeVoidAsync("eval", $@"
+            (function() {{
+                const onMove = function(e) {{
+                    const w = Math.min(500, Math.max(180, e.clientX));
+                    DotNet.invokeMethodAsync('TleReportingDashboard.Web', 'SetDrawerWidth', w);
+                }};
+                const onUp = function() {{
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                }};
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+            }})();
+        ");
+    }
+
+    [JSInvokable]
+    public static Task SetDrawerWidth(int width)
+    {
+        _staticDrawerWidth = width;
+        _staticInstance?.InvokeAsync(() =>
+        {
+            _staticInstance._drawerWidth = width;
+            _staticInstance.StateHasChanged();
+        });
+        return Task.CompletedTask;
+    }
+
+    private static ReportBuilder? _staticInst

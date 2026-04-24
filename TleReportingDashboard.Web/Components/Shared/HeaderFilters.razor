@@ -1,0 +1,278 @@
+@inject ICodeSetService CodeSetService
+
+<MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;" Class="pa-3">
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+            <MudDateRangePicker @bind-DateRange="_dateRange" @bind-DateRange:after="OnDateRangeAfterChanged"
+                                Label="Date Range" Variant="Variant.Outlined"
+                                Margin="Margin.Dense" Style="max-width: 260px;"
+                                PickerVariant="PickerVariant.Dialog"
+                                ShowToolbar="false" />
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           Color="Color.Default" OnClick="ClearDateRange"
+                           Style="@(_dateRange is null ? "visibility: hidden;" : "")"
+                           title="Clear date range" />
+        </MudStack>
+
+        <MudSelect T="string" @bind-Value="_selectedDateField" Label="Date Field" Variant="Variant.Outlined"
+                   Margin="Margin.Dense" Style="max-width: 180px;" Dense>
+            @foreach (var field in DateFields)
+            {
+                <MudSelectItem Value="@field.Id">@field.Label</MudSelectItem>
+            }
+        </MudSelect>
+
+        @foreach (var filter in _activeFilters)
+        {
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                @if (filter.CodeSetValues.Any())
+                {
+                    @* Enumerated field — multi-select dropdown *@
+                    <MudSelect T="string" MultiSelection MultiSelectionTextFunc="@(vals => $"{vals.Count()} selected")"
+                               SelectedValues="filter.SelectedValues"
+                               SelectedValuesChanged="@(vals => OnMultiSelectChanged(filter, vals))"
+                               Label="@filter.Label" Variant="Variant.Outlined"
+                               Margin="Margin.Dense" Style="min-width: 200px; max-width: 280px;" Dense>
+                        @foreach (var csv in filter.CodeSetValues)
+                        {
+                            <MudSelectItem T="string" Value="@csv.Description">@csv.Description</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+                else
+                {
+                    @* Free-text field *@
+                    <MudTextField @bind-Value="filter.Value" Label="@filter.Label" Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" Style="max-width: 180px;"
+                                  DebounceInterval="500" OnDebounceIntervalElapsed="() => EmitFilters()" />
+                }
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                               OnClick="() => RemoveFilter(filter.FieldId)"
+                               title="Remove filter" />
+            </MudStack>
+        }
+
+        <MudMenu Icon="@Icons.Material.Filled.Add" Variant="Variant.Text" Color="Color.Primary"
+                 Dense Size="Size.Small" Label="Add Filter">
+            @foreach (var field in FilterableFields)
+            {
+                @if (!_activeFilters.Any(f => f.FieldId == field.Id))
+                {
+                    <MudMenuItem OnClick="() => AddFilter(field)">
+                        @field.Label
+                        @if (field.CodeSetId.HasValue)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info"
+                                     Style="font-size: 0.6rem; margin-left: 4px;">list</MudChip>
+                        }
+                    </MudMenuItem>
+                }
+            }
+        </MudMenu>
+
+        @if (Filters.Any() || _activeFilters.Any())
+        {
+            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary"
+                       OnClick="ClearFilters">
+                Clear Filters
+            </MudButton>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter] public Dictionary<string, object?> Filters { get; set; } = new();
+    [Parameter] public List<DomainGroup> Domains { get; set; } = new();
+    [Parameter] public EventCallback<Dictionary<string, object?>> OnFiltersChanged { get; set; }
+
+    private DateRange? _dateRange;
+    private string _selectedDateField = string.Empty;
+    private List<ActiveFilter> _activeFilters = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Sync _activeFilters from the incoming Filters parameter (e.g., from a saved report).
+        // Idempotent: skip any FieldId already in _activeFilters so re-renders triggered by
+        // the user's own EmitFilters don't duplicate entries the user just created.
+        if (!Domains.Any() || !Filters.Any()) return;
+        var allFields = Domains.SelectMany(d => d.Fields).ToList();
+
+        foreach (var kvp in Filters)
+        {
+            if (kvp.Value is null) continue;
+
+            // Handle date range filters
+            if (kvp.Key.EndsWith("_start"))
+            {
+                var dateFieldId = kvp.Key[..^6];
+                if (string.IsNullOrEmpty(_selectedDateField)) _selectedDateField = dateFieldId;
+                var dateVal = ParseDate(kvp.Value);
+                _dateRange ??= new DateRange();
+                _dateRange = new DateRange(_dateRange.Start ?? dateVal, _dateRange.End);
+                continue;
+            }
+            if (kvp.Key.EndsWith("_end"))
+            {
+                var dateFieldId = kvp.Key[..^4];
+                if (string.IsNullOrEmpty(_selectedDateField)) _selectedDateField = dateFieldId;
+                var dateVal = ParseDate(kvp.Value);
+                _dateRange ??= new DateRange();
+                _dateRange = new DateRange(_dateRange.Start, _dateRange.End ?? dateVal);
+                continue;
+            }
+
+            // Regular or multi-select filter — skip if user already added it interactively
+            if (_activeFilters.Any(f => f.FieldId == kvp.Key)) continue;
+
+            var field = allFields.FirstOrDefault(f => f.Id == kvp.Key);
+            if (field is null) continue;
+
+            var filter = new ActiveFilter
+            {
+                FieldId = field.Id,
+                Label = field.Label,
+                CodeSetId = field.CodeSetId
+            };
+
+            // Load codeset values if enumerated
+            if (field.CodeSetId.HasValue)
+            {
+                filter.CodeSetValues = await CodeSetService.GetCodeSetValuesAsync(field.CodeSetId.Value);
+            }
+
+            // Restore selected values
+            var valueList = ExtractStringList(kvp.Value);
+            if (valueList is not null)
+            {
+                filter.SelectedValues = new HashSet<string>(valueList);
+            }
+            else
+            {
+                filter.Value = kvp.Value?.ToString() ?? string.Empty;
+            }
+
+            _activeFilters.Add(filter);
+        }
+    }
+
+    private static DateTime? ParseDate(object? val)
+    {
+        if (val is DateTime dt) return dt;
+        if (val is DateTimeOffset dto) return dto.DateTime;
+        if (val is System.Text.Json.JsonElement je && je.TryGetDateTime(out var jdt)) return jdt;
+        if (DateTime.TryParse(val?.ToString(), out var parsed)) return parsed;
+        return null;
+    }
+
+    private static List<string>? ExtractStringList(object? value)
+    {
+        if (value is List<string> list) return list;
+        if (value is IEnumerable<string> enumerable) return enumerable.ToList();
+        if (value is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.Array)
+            return je.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => s.Length > 0).ToList();
+        return null;
+    }
+
+    private IEnumerable<FieldDefinition> DateFields =>
+        Domains.SelectMany(d => d.Fields).Where(f =>
+            f.DataType.Equals("date", StringComparison.OrdinalIgnoreCase) ||
+            f.DataType.Equals("datetime", StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<FieldDefinition> FilterableFields =>
+        Domains.SelectMany(d => d.Fields).Where(f =>
+            f.DataType.Equals("text", StringComparison.OrdinalIgnoreCase) ||
+            f.DataType.Equals("string", StringComparison.OrdinalIgnoreCase) ||
+            f.DataType.Equals("varchar", StringComparison.OrdinalIgnoreCase) ||
+            f.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
+            f.DataType.Equals("int", StringComparison.OrdinalIgnoreCase));
+
+    private async Task OnDateRangeAfterChanged()
+    {
+        await EmitFilters();
+    }
+
+    private async Task ClearDateRange()
+    {
+        _dateRange = null;
+        await EmitFilters();
+    }
+
+    private async Task AddFilter(FieldDefinition field)
+    {
+        if (_activeFilters.Any(f => f.FieldId == field.Id)) return;
+
+        var filter = new ActiveFilter
+        {
+            FieldId = field.Id,
+            Label = field.Label,
+            Value = string.Empty,
+            CodeSetId = field.CodeSetId
+        };
+
+        // Load codeset values if this is an enumerated field
+        if (field.CodeSetId.HasValue)
+        {
+            filter.CodeSetValues = await CodeSetService.GetCodeSetValuesAsync(field.CodeSetId.Value);
+        }
+
+        _activeFilters.Add(filter);
+    }
+
+    private async Task OnMultiSelectChanged(ActiveFilter filter, IEnumerable<string> values)
+    {
+        filter.SelectedValues = new HashSet<string>(values);
+        await EmitFilters();
+    }
+
+    private async Task RemoveFilter(string fieldId)
+    {
+        _activeFilters.RemoveAll(f => f.FieldId == fieldId);
+        await EmitFilters();
+    }
+
+    private async Task ClearFilters()
+    {
+        _activeFilters.Clear();
+        _dateRange = null;
+        _selectedDateField = string.Empty;
+        await OnFiltersChanged.InvokeAsync(new Dictionary<string, object?>());
+    }
+
+    private async Task EmitFilters()
+    {
+        var filters = new Dictionary<string, object?>();
+
+        if (_dateRange is not null && !string.IsNullOrEmpty(_selectedDateField))
+        {
+            if (_dateRange.Start.HasValue)
+                filters[$"{_selectedDateField}_start"] = _dateRange.Start.Value;
+            if (_dateRange.End.HasValue)
+                filters[$"{_selectedDateField}_end"] = _dateRange.End.Value;
+        }
+
+        foreach (var filter in _activeFilters)
+        {
+            if (filter.CodeSetValues.Any() && filter.SelectedValues.Any())
+            {
+                // Multi-select: pass as List<string> for IN clause
+                filters[filter.FieldId] = filter.SelectedValues.ToList();
+            }
+            else if (!string.IsNullOrWhiteSpace(filter.Value))
+            {
+                filters[filter.FieldId] = filter.Value;
+            }
+        }
+
+        await OnFiltersChanged.InvokeAsync(filters);
+    }
+
+    private class ActiveFilter
+    {
+        public string FieldId { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public int? CodeSetId { get; set; }
+        public List<CodeSetValue> CodeSetValues { get; set; } = new();
+        public HashSet<string> SelectedValues { get; set; } = new();
+    }
+}

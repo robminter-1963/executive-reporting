@@ -1,0 +1,235 @@
+@inject IUserManagementService UserManagement
+@inject ICompanyRegistry CompanyRegistry
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using TleReportingDashboard.Web.Services
+@using MudBlazor
+
+<MudStack Spacing="3" Class="pa-2">
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.body2" Color="Color.Secondary">
+            Manage users, assign a job-function role, and grant per-company access.
+            Picking the <strong>Administrator</strong> role flips the global admin flag automatically.
+            Click <strong>Companies</strong> to edit per-company role grants.
+        </MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.PersonAdd"
+                   OnClick="OpenCreateDialog">
+            Add user
+        </MudButton>
+    </MudStack>
+
+    @* ── Users table ──────────────────────────────────────────────────── *@
+    <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudTable Items="_users" Dense Hover Class="pa-0" T="UserRecord">
+            <HeaderContent>
+                <MudTh>Email</MudTh>
+                <MudTh>Display name</MudTh>
+                <MudTh Style="width: 180px;">Role</MudTh>
+                <MudTh Style="width: 100px;">Active</MudTh>
+                <MudTh Style="width: 160px;">Status</MudTh>
+                <MudTh Style="width: 140px; text-align: center;">Companies</MudTh>
+                <MudTh Style="width: 120px;"></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.Email</MudTd>
+                <MudTd>@(context.DisplayName ?? "—")</MudTd>
+                <MudTd>
+                    @if (context.IsAdmin)
+                    {
+                        @* Administrator role gets a filled chip to stand out
+                           from other roles, matching how it was visualized
+                           before the job-function roles landed. *@
+                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled">
+                            @(context.RoleName ?? RoleRecord.AdministratorName)
+                        </MudChip>
+                    }
+                    else if (!string.IsNullOrEmpty(context.RoleName))
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">
+                            @context.RoleName
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (context.IsActive)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">Active</MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Inactive</MudChip>
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (string.IsNullOrEmpty(context.UserId))
+                    {
+                        <MudTooltip Text="This user hasn't signed in yet — access is pre-provisioned and will activate on first sign-in.">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
+                                     Icon="@Icons.Material.Filled.HourglassEmpty">
+                                Pending sign-in
+                            </MudChip>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Signed in</MudText>
+                    }
+                </MudTd>
+                <MudTd Style="text-align: center;">
+                    @* Admins see every company automatically, so the count
+                       isn't meaningful for them; show a "— all —" hint. *@
+                    @if (context.IsAdmin)
+                    {
+                        <MudTooltip Text="Admins see every company automatically">
+                            <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Apartment"
+                                       OnClick="@(() => OpenAccessDialog(context))">
+                                — all —
+                            </MudButton>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        var count = _accessCountByEmail.GetValueOrDefault(context.Email);
+                        <MudTooltip Text="Grant or revoke per-company access">
+                            <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Apartment"
+                                       Color="@(count == 0 ? Color.Warning : Color.Default)"
+                                       OnClick="@(() => OpenAccessDialog(context))">
+                                @count @(count == 1 ? "company" : "companies")
+                            </MudButton>
+                        </MudTooltip>
+                    }
+                </MudTd>
+                <MudTd Style="text-align: right;">
+                    <MudTooltip Text="Edit user">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                       OnClick="@(() => OpenEditDialog(context))" />
+                    </MudTooltip>
+                    <MudTooltip Text="Delete user">
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                       OnClick="@(() => DeleteUser(context))" />
+                    </MudTooltip>
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4 d-flex justify-center">
+                    No users yet — click <strong class="px-1">Add user</strong> to create the first.
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudPaper>
+</MudStack>
+
+@code {
+    [Parameter] public string CurrentUserEmail { get; set; } = string.Empty;
+
+    private List<UserRecord> _users = new();
+    // Access count per email so the Companies button can show "3 companies"
+    // without hammering the DB on every render. Refreshed by ReloadAsync.
+    private readonly Dictionary<string, int> _accessCountByEmail = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _users = await UserManagement.GetAllAsync();
+
+        _accessCountByEmail.Clear();
+        var tasks = _users
+            .Where(u => !u.IsAdmin)   // admins ignore grants
+            .Select(async u => (u.Email, Count: (await UserManagement.GetCompanyAccessAsync(u.Email)).Count))
+            .ToList();
+        foreach (var t in tasks)
+        {
+            var result = await t;
+            _accessCountByEmail[result.Email] = result.Count;
+        }
+    }
+
+    private async Task OpenCreateDialog()
+    {
+        var parameters = new DialogParameters<UserEditorDialog>
+        {
+            { x => x.Existing, null },
+            { x => x.CreatedBy, CurrentUserEmail }
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+        var dialog = await DialogService.ShowAsync<UserEditorDialog>("Add user", parameters, options);
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await ReloadAsync();
+    }
+
+    private async Task OpenEditDialog(UserRecord u)
+    {
+        var parameters = new DialogParameters<UserEditorDialog>
+        {
+            { x => x.Existing, u },
+            { x => x.CreatedBy, CurrentUserEmail }
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+        var dialog = await DialogService.ShowAsync<UserEditorDialog>("Edit user", parameters, options);
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await ReloadAsync();
+    }
+
+    private async Task DeleteUser(UserRecord u)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = "Delete user",
+            Message = $"Delete {u.Email} and revoke all their company access? This can't be undone.",
+            YesText = "Delete",
+            CancelText = "Cancel"
+        });
+        if (confirmed != true) return;
+
+        try
+        {
+            await UserManagement.DeleteAsync(u.Email);
+            _accessCountByEmail.Remove(u.Email);
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to delete: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenAccessDialog(UserRecord u)
+    {
+        var parameters = new DialogParameters<ManageUserAccessDialog>
+        {
+            { x => x.Email, u.Email },
+            { x => x.IsAdmin, u.IsAdmin }
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+        var dialog = await DialogService.ShowAsync<ManageUserAccessDialog>("Company access", parameters, options);
+        await dialog.Result;
+        await ReloadAsync();
+    }
+}

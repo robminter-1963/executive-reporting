@@ -1,0 +1,100 @@
+@if (_editing && !ReadOnly)
+{
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="0" Style="@($"justify-content: {GetJustify()};")"
+              @onmousedown:stopPropagation="true">
+        @if (ShowAlign)
+        {
+            <span @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true">
+                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignLeft" Size="Size.Small"
+                               Color="@(GetEffectiveAlign() == "left" ? Color.Primary : Color.Default)"
+                               OnClick="@(() => ChangeAlign("left"))" Style="padding: 2px;"
+                               title="Align left" />
+                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignCenter" Size="Size.Small"
+                               Color="@(GetEffectiveAlign() == "center" ? Color.Primary : Color.Default)"
+                               OnClick="@(() => ChangeAlign("center"))" Style="padding: 2px;"
+                               title="Align center" />
+                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignRight" Size="Size.Small"
+                               Color="@(GetEffectiveAlign() == "right" ? Color.Primary : Color.Default)"
+                               OnClick="@(() => ChangeAlign("right"))" Style="padding: 2px;"
+                               title="Align right" />
+            </span>
+        }
+        <MudTextField @bind-Value="_editValue" Variant="Variant.Text" Margin="Margin.Dense"
+                      Style="@($"font-size: 0.8rem; font-weight: 600; {Style}")"
+                      Immediate AutoFocus
+                      OnBlur="CommitEdit"
+                      OnKeyDown="OnKeyDown" />
+    </MudStack>
+}
+else
+{
+    <div style="@($"font-size: 0.8rem; font-weight: 600; width: 100%; text-align: {GetEffectiveAlign()}; {(ReadOnly ? "" : "cursor: pointer;")} {Style}")"
+         @ondblclick="@(ReadOnly ? (Action)(() => { }) : StartEdit)"
+         title="@(ReadOnly ? null : "Double-click to rename or align")">
+        @if (ReadOnly)
+        {
+            <span>@Label</span>
+        }
+        else
+        {
+            <span style="border-bottom: 1px dashed #DADCE0;">@Label</span>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string Label { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> OnLabelChanged { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public bool ShowAlign { get; set; } = true;
+    [Parameter] public string? Align { get; set; }
+    [Parameter] public EventCallback<string> OnAlignChanged { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
+
+    private bool _editing;
+    private string _editValue = string.Empty;
+
+    private string GetEffectiveAlign() => string.IsNullOrEmpty(Align) ? "left" : Align;
+    private string GetJustify() => GetEffectiveAlign() switch
+    {
+        "right" => "flex-end",
+        "center" => "center",
+        _ => "flex-start"
+    };
+
+    private void StartEdit()
+    {
+        _editValue = Label;
+        _editing = true;
+    }
+
+    private async Task CommitEdit()
+    {
+        _editing = false;
+        if (!string.IsNullOrWhiteSpace(_editValue) && _editValue != Label)
+        {
+            await OnLabelChanged.InvokeAsync(_editValue.Trim());
+        }
+    }
+
+    private async Task ChangeAlign(string newAlign)
+    {
+        Align = newAlign;
+        await OnAlignChanged.InvokeAsync(newAlign);
+        // Commit any pending label edit and exit edit mode so the new alignment is visible
+        if (!string.IsNullOrWhiteSpace(_editValue) && _editValue != Label)
+        {
+            await OnLabelChanged.InvokeAsync(_editValue.Trim());
+        }
+        _editing = false;
+        StateHasChanged();
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await CommitEdit();
+        else if (e.Key == "Escape")
+            _editing = false;
+    }
+}

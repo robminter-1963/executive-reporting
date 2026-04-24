@@ -1,0 +1,171 @@
+@using TleReportingDashboard.Web.Components.Pages
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.FilterAlt" />
+            <MudText Typo="Typo.h6">@(IsNew ? "Add Custom Filter" : "Edit Custom Filter")</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudGrid Spacing="2" Style="min-width: 600px;">
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Id" Label="ID" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="Unique identifier (snake_case, e.g. funded_today)" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Label" Label="Label" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="Display name shown in the report builder" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Description" Label="Description" Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              HelperText="Optional tooltip text explaining what this filter does" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                @* Group drives the Report Builder's section headings. Blank
+                   falls into "Misc". Options come from the Domains list so
+                   filters cluster with their related fields. *@
+                <MudSelect T="string" @bind-Value="_edited.GroupName" Label="Group (optional)"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Clearable
+                           HelperText="Buckets this filter under a section in the Report Builder. Blank = 'Misc'.">
+                    <MudSelectItem T="string" Value="@string.Empty">— Misc —</MudSelectItem>
+                    @if (AvailableDomains is not null)
+                    {
+                        @foreach (var d in AvailableDomains)
+                        {
+                            <MudSelectItem T="string" Value="@d">@d</MudSelectItem>
+                        }
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.SqlPreamble" Label="SQL Preamble / CTE (optional)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="4" Style="font-family: monospace; font-size: 0.85rem;"
+                              Placeholder="LOOKUP(STATUS, EVENTNUM) AS (SELECT 1, 346, 1 UNION ALL SELECT 2, 347, 2 ...)"
+                              HelperText="CTE definition without the WITH keyword. Placed before the SELECT. Leave blank if not needed." />
+            </MudItem>
+            <MudItem xs="12">
+                <MudSelect T="string" Label="JOIN source (optional)" Variant="Variant.Outlined"
+                           Margin="Margin.Dense" Clearable
+                           Value="_selectedJoinId"
+                           ValueChanged="OnJoinSelected"
+                           HelperText="Pick an existing JOIN from the Joins tab (stored as a reference), or choose Custom to write your own.">
+                    <MudSelectItem T="string" Value="@("")">— Custom —</MudSelectItem>
+                    @if (AvailableJoins is not null)
+                    {
+                        @foreach (var j in AvailableJoins)
+                        {
+                            <MudSelectItem T="string" Value="@j.Id">@FormatJoinLabel(j)</MudSelectItem>
+                        }
+                    }
+                </MudSelect>
+            </MudItem>
+            @if (string.IsNullOrEmpty(_selectedJoinId))
+            {
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_edited.SqlJoin" Label="Custom SQL JOIN (optional)"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Lines="2" Style="font-family: monospace; font-size: 0.85rem;"
+                                  Placeholder="@SqlJoinPlaceholder"
+                                  HelperText="JOIN clause appended after the schema joins when this filter is active. Leave blank if not needed." />
+                </MudItem>
+            }
+            else
+            {
+                <MudItem xs="12">
+                    <MudAlert Severity="Severity.Info" Dense Variant="Variant.Text" NoIcon>
+                        Using JOIN: <strong>@_selectedJoinId</strong> — the JOIN SQL is managed in the Joins tab.
+                    </MudAlert>
+                </MudItem>
+            }
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.SqlCondition" Label="SQL Condition (WHERE clause)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="4" Style="font-family: monospace; font-size: 0.85rem;"
+                              Placeholder="DATEDIFF(DAY, (SELECT TOP 1 DATES FROM ...), GETDATE())=0"
+                              HelperText="Appended as AND (...) to the WHERE clause. Use fully qualified table/alias references." />
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@(string.IsNullOrWhiteSpace(_edited.Id) || string.IsNullOrWhiteSpace(_edited.Label) || string.IsNullOrWhiteSpace(_edited.SqlCondition))">
+            OK
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public SchemaBuilder.CustomFilterEntry? Filter { get; set; }
+    [Parameter] public bool IsNew { get; set; }
+    [Parameter] public List<SchemaBuilder.JoinEntry>? AvailableJoins { get; set; }
+    [Parameter] public IEnumerable<SchemaBuilder.LookupEntry>? AvailableLookups { get; set; }
+    [Parameter] public IEnumerable<string>? AvailableDomains { get; set; }
+    [Parameter] public string? ConnectionType { get; set; }
+
+    // Placeholder only shown when a real Lookup exists in the schema.
+    // Picks the first one's Id as the example reference. When no lookups
+    // are defined, the field stays blank rather than showing a bogus name.
+    private string SqlJoinPlaceholder
+    {
+        get
+        {
+            var firstLookup = AvailableLookups?.FirstOrDefault(l => !string.IsNullOrWhiteSpace(l.Id));
+            return firstLookup is null
+                ? string.Empty
+                : $"LEFT JOIN {firstLookup.Id} ON {firstLookup.Id}.key = joined_alias.fk_column";
+        }
+    }
+
+    private SchemaBuilder.CustomFilterEntry _edited = new();
+    private string _selectedJoinId = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        if (Filter is not null)
+        {
+            _edited = new SchemaBuilder.CustomFilterEntry
+            {
+                Id = Filter.Id,
+                Label = Filter.Label,
+                Description = Filter.Description,
+                SqlPreamble = Filter.SqlPreamble,
+                JoinId = Filter.JoinId,
+                SqlJoin = Filter.SqlJoin,
+                SqlCondition = Filter.SqlCondition,
+                GroupName = Filter.GroupName
+            };
+            _selectedJoinId = Filter.JoinId;
+        }
+    }
+
+    private static string FormatJoinLabel(SchemaBuilder.JoinEntry j) =>
+        JoinLabelFormatter.Format(j);
+
+    private void OnJoinSelected(string joinId)
+    {
+        _selectedJoinId = joinId;
+        if (!string.IsNullOrEmpty(joinId))
+        {
+            // Store only the reference — clear inline SQL
+            _edited.JoinId = joinId;
+            _edited.SqlJoin = string.Empty;
+        }
+        else
+        {
+            // Custom mode — clear the reference
+            _edited.JoinId = string.Empty;
+        }
+    }
+
+    private void Cancel() => MudDialog?.Cancel();
+
+    private void Ok()
+    {
+        MudDialog?.Close(DialogResult.Ok(_edited));
+    }
+}

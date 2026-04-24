@@ -1,0 +1,199 @@
+@* Recursive UI for the Report Builder's Advanced Filters tree. One
+   FilterGroup renders as a bordered "card" with:
+
+     [Match ALL ▼ (Match ANY)]   ← group operator toggle
+     ├─ row 1 (AdvancedFilterRow) [×]
+     ├─ row 2 (AdvancedFilterRow) [×]
+     └─ nested group (another AdvancedFilterGroup, indented) [×]
+     [+ Add condition] [+ Add group]
+
+   Non-root groups get a remove [×] in their header so the user can
+   collapse a sub-tree. The root's [×] is hidden (there's nothing to
+   re-home its children into).
+
+   Nests to any depth. Each recursion indents a bit more so the tree is
+   readable. AND-groups get a blue accent; OR-groups get an orange one,
+   so at-a-glance the user can tell where a group's logical mode is.
+
+   Mutation pattern:
+     * `Group` is the in-memory tree node this component edits.
+     * Operator changes, add/remove of items, and nested-group mutations
+       all mutate `Group` directly and then invoke `OnChanged`.
+     * The parent (another group or ReportBuilder) calls StateHasChanged
+       so child bindings re-render. Avoids prop-drilling change events. *@
+
+@using TleReportingDashboard.Web.Models
+
+<MudPaper Elevation="0"
+          Class="pa-2"
+          Style="@BorderStyle">
+    <MudStack Spacing="1">
+        @* Group header: operator toggle + (non-root) remove button *@
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+            <MudToggleGroup T="string" Value="@(Group.Op ?? FilterGroupOps.And)"
+                            ValueChanged="OnOpChanged"
+                            Color="@(IsOr ? Color.Warning : Color.Primary)"
+                            Size="Size.Small" Outlined
+                            Style="min-height: 28px;">
+                <MudToggleItem T="string" Value="@FilterGroupOps.And">Match ALL</MudToggleItem>
+                <MudToggleItem T="string" Value="@FilterGroupOps.Or">Match ANY</MudToggleItem>
+            </MudToggleGroup>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-style: italic;">
+                @SummaryHint
+            </MudText>
+            <MudSpacer />
+            @if (!IsRoot)
+            {
+                <MudTooltip Text="Remove this group (and everything inside)">
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                   Color="Color.Default"
+                                   OnClick="@(() => OnRemove.InvokeAsync())" />
+                </MudTooltip>
+            }
+        </MudStack>
+
+        @* Items — each is either a leaf clause row or a nested group *@
+        @if (Group.Items is not null)
+        {
+            @foreach (var item in Group.Items.ToList())
+            {
+                var it = item;
+                @if (it.Clause is not null)
+                {
+                    var c = it.Clause;
+                    <AdvancedFilterRow Clause="c"
+                                       AvailableFields="AvailableFields"
+                                       OnChanged="HandleChildChanged"
+                                       OnRemove="@(() => RemoveItem(it))" />
+                }
+                else if (it.Group is not null)
+                {
+                    var g = it.Group;
+                    <div style="margin-left: 16px;">
+                        <AdvancedFilterGroup Group="g"
+                                             AvailableFields="AvailableFields"
+                                             IsRoot="false"
+                                             OnChanged="HandleChildChanged"
+                                             OnRemove="@(() => RemoveItem(it))" />
+                    </div>
+                }
+            }
+        }
+
+        @* Footer: add condition + add group *@
+        <MudStack Row Spacing="1" Class="mt-1">
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="AddClause"
+                       Disabled="@(AvailableFields.Count == 0)">
+                Add condition
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.AccountTree"
+                       OnClick="AddGroup">
+                Add group
+            </MudButton>
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public FilterGroup Group { get; set; } = default!;
+    [Parameter, EditorRequired] public List<FieldConfig> AvailableFields { get; set; } = new();
+    [Parameter] public bool IsRoot { get; set; } = false;
+    [Parameter] public EventCallback OnChanged { get; set; }
+    [Parameter] public EventCallback OnRemove { get; set; }
+
+    private bool IsOr => string.Equals(Group.Op, FilterGroupOps.Or, StringComparison.OrdinalIgnoreCase);
+
+    // Visual cue for which operator is active + root vs nested. Subtle
+    // left accent bar so deep trees are legible at a glance.
+    private string BorderStyle
+    {
+        get
+        {
+            var accent = IsOr ? "#F9AB00" : "#1A73E8";
+            var bg = IsOr ? "#FEF7E0" : "#F0F6FF";
+            var root = IsRoot
+                ? "border: 1px solid #DADCE0;"
+                : $"border: 1px solid {accent}40; border-left: 3px solid {accent};";
+            return $"{root} border-radius: 4px; background: {bg}33;";
+        }
+    }
+
+    private string SummaryHint
+    {
+        get
+        {
+            var count = Group.Items?.Count ?? 0;
+            if (count == 0) return "Empty group — add conditions or nested groups.";
+            return IsOr
+                ? $"Any of the {count} below must match."
+                : $"All of the {count} below must match.";
+        }
+    }
+
+    private async Task OnOpChanged(string? newOp)
+    {
+        Group.Op = string.Equals(newOp, FilterGroupOps.Or, StringComparison.OrdinalIgnoreCase)
+            ? FilterGroupOps.Or
+            : FilterGroupOps.And;
+        await HandleChildChanged();
+    }
+
+    // Appends a new blank clause seeded with the first valid field +
+    // operator for its data type, so the row renders immediately.
+    private async Task AddClause()
+    {
+        var firstField = AvailableFields.FirstOrDefault();
+        if (firstField is null) return;
+        var firstOp = firstField.DataType?.ToLowerInvariant() switch
+        {
+            "date" or "datetime" => FilterOperators.Between,
+            "boolean" => FilterOperators.IsTrue,
+            _ => FilterOperators.Equals
+        };
+        Group.Items ??= new();
+        Group.Items.Add(new FilterItem
+        {
+            Clause = new FilterClause
+            {
+                FieldId = firstField.Id,
+                Op = firstOp,
+                Values = new List<string>()
+            }
+        });
+        await HandleChildChanged();
+    }
+
+    // Appends a new empty nested group. Default op = AND for nested
+    // groups — users who want OR semantics flip the toggle after.
+    private async Task AddGroup()
+    {
+        Group.Items ??= new();
+        Group.Items.Add(new FilterItem
+        {
+            Group = new FilterGroup
+            {
+                Op = FilterGroupOps.And,
+                Items = new List<FilterItem>()
+            }
+        });
+        await HandleChildChanged();
+    }
+
+    private async Task RemoveItem(FilterItem item)
+    {
+        Group.Items?.Remove(item);
+        await HandleChildChanged();
+    }
+
+    // Bubble child changes up to the parent — propagates across any
+    // nesting depth. Each group also fires StateHasChanged so its own
+    // header (chip count, summary hint) refreshes immediately.
+    private async Task HandleChildChanged()
+    {
+        await OnChanged.InvokeAsync();
+        StateHasChanged();
+    }
+}

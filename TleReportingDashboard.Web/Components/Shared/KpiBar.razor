@@ -1,0 +1,115 @@
+@if (Data is not null && ActiveKpiIds.Any())
+{
+    <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+        @foreach (var kpi in GetActiveKpis())
+        {
+            <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; min-width: 160px;"
+                      Class="pa-3">
+                <MudStack Spacing="0">
+                    <MudStack Row AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@kpi.Label</MudText>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                       OnClick="() => OnKpiRemoved.InvokeAsync(kpi.Id)"
+                                       title="Remove KPI" />
+                    </MudStack>
+                    <MudText Typo="Typo.h6" Style="font-weight: 600;">@kpi.FormattedValue</MudText>
+                </MudStack>
+            </MudPaper>
+        }
+
+        <MudMenu Icon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Color="Color.Default"
+                 Dense Size="Size.Small" Label="Add KPI"
+                 Style="border: 1px dashed #DADCE0; border-radius: 4px; align-self: center;">
+            @foreach (var kpi in AvailableKpis.Where(k => !ActiveKpiIds.Contains(k.Id)))
+            {
+                <MudMenuItem OnClick="() => OnKpiAdded.InvokeAsync(kpi.Id)">@kpi.Label</MudMenuItem>
+            }
+        </MudMenu>
+    </MudStack>
+}
+
+@code {
+    [Parameter] public QueryResponse? Data { get; set; }
+    [Parameter] public List<string> ActiveKpiIds { get; set; } = new();
+    [Parameter] public EventCallback<string> OnKpiAdded { get; set; }
+    [Parameter] public EventCallback<string> OnKpiRemoved { get; set; }
+
+    private record KpiDefinition(string Id, string Label, string FieldId, string AggType, string Format);
+
+    private static readonly List<KpiDefinition> AvailableKpis = new()
+    {
+        new("avg_credit_score", "Avg Credit Score", "credit_score", "avg", "N0"),
+        // Kept id "funded_count" so existing saved reports with it already
+        // toggled on continue to resolve after the label change.
+        new("funded_count", "Count", "", "count", "N0"),
+        new("avg_cycle_time", "Avg Cycle Time", "cycle_time_days", "avg", "N1"),
+        new("avg_ltv", "Avg LTV", "ltv", "avg", "N1"),
+        new("avg_rate", "Avg Rate", "interest_rate", "avg", "N3"),
+        new("avg_dti", "Avg DTI", "dti", "avg", "N1"),
+        new("pipeline_count", "Pipeline Count", "", "count", "N0"),
+        new("avg_monthly_income", "Avg Monthly Income", "monthly_income", "avg", "C0"),
+    };
+
+    private record ComputedKpi(string Id, string Label, string FormattedValue);
+
+    private List<ComputedKpi> GetActiveKpis()
+    {
+        var result = new List<ComputedKpi>();
+        if (Data is null) return result;
+
+        foreach (var kpiId in ActiveKpiIds)
+        {
+            var def = AvailableKpis.FirstOrDefault(k => k.Id == kpiId);
+            if (def is null) continue;
+
+            var value = ComputeKpi(def);
+            result.Add(new ComputedKpi(def.Id, def.Label, value));
+        }
+        return result;
+    }
+
+    private string ComputeKpi(KpiDefinition def)
+    {
+        if (Data is null || !Data.Rows.Any()) return "--";
+
+        if (def.AggType == "count")
+            return Data.TotalCount.ToString("N0");
+
+        var col = Data.Columns.FirstOrDefault(c => c.FieldId == def.FieldId);
+        if (col is null) return "N/A";
+
+        var values = Data.Rows
+            .Select(r => r.TryGetValue(def.FieldId, out var v) ? v : null)
+            .Where(v => v is not null)
+            .Select(v =>
+            {
+                if (v is double d) return d;
+                if (v is decimal dec) return (double)dec;
+                if (v is int i) return (double)i;
+                if (v is long l) return (double)l;
+                if (double.TryParse(v?.ToString(), out var parsed)) return parsed;
+                return (double?)null;
+            })
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .ToList();
+
+        if (!values.Any()) return "N/A";
+
+        double computed = def.AggType switch
+        {
+            "sum" => values.Sum(),
+            "avg" => values.Average(),
+            _ => values.Count()
+        };
+
+        try
+        {
+            return computed.ToString(def.Format);
+        }
+        catch
+        {
+            return computed.ToString("N2");
+        }
+    }
+}

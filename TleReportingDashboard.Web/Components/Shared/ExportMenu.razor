@@ -1,0 +1,23 @@
+<MudMenu Icon="@Icons.Material.Filled.Download" Variant="Variant.Outlined"
+         Color="Color.Default" Size="Size.Small" Label="Export"
+         AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+         Disabled="@Disabled">
+    <MudMenuItem OnClick="() => OnExportExcel.InvokeAsync()">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+            <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" />
+            <MudText Typo="Typo.body2">Excel (.xlsx)</MudText>
+        </MudStack>
+    </MudMenuItem>
+    <MudMenuItem OnClick="() => OnExportCsv.InvokeAsync()">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+            <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" />
+            <MudText Typo="Typo.body2">CSV</MudText>
+        </MudStack>
+    </MudMenuItem>
+</MudMenu>
+
+@code {
+    [Parameter] public EventCallback OnExportExcel { get; set; }
+    [Parameter] public EventCallback OnExportCsv { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+}

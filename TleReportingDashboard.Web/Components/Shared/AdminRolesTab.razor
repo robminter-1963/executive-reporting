@@ -1,0 +1,310 @@
+@inject IRoleService RoleService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using TleReportingDashboard.Web.Services
+@using Microsoft.Data.SqlClient
+@using MudBlazor
+
+<MudStack Spacing="3" Class="pa-2">
+    <MudText Typo="Typo.body2" Color="Color.Secondary">
+        Roles are job-function labels you can assign to users in Admin → Users.
+        Marking a user's role as <strong>Administrator</strong> grants them the global admin flag automatically.
+        The <strong>Scope</strong> controls row-level visibility — <em>All records</em> means the user sees every row the
+        query returns; <em>Only their own</em> auto-filters to rows owned by the user (requires setting each user's LOS / CRM login
+        on their company access). Administrator is pinned to All.
+    </MudText>
+
+    @* ── Add role form ─────────────────────────────────────────────────── *@
+    <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Add role</MudText>
+            <MudStack Row AlignItems="AlignItems.Start" Spacing="2" Wrap="Wrap.Wrap">
+                <MudTextField @bind-Value="_newName" Label="Name" Required
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 220px;" />
+                <MudTextField @bind-Value="_newDescription" Label="Description (optional)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 320px;" />
+                <MudSelect T="string" @bind-Value="_newScope" Label="Scope"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;">
+                    <MudSelectItem T="string" Value="@ScopeRules.All">All records</MudSelectItem>
+                    <MudSelectItem T="string" Value="@ScopeRules.Self">Only their own</MudSelectItem>
+                </MudSelect>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Add"
+                           Disabled="@(!CanAdd())" OnClick="AddRole">
+                    Add role
+                </MudButton>
+                <SaveStatusIndicator @ref="_addIndicator" />
+            </MudStack>
+        </MudStack>
+    </MudPaper>
+
+    @* ── Roles table ───────────────────────────────────────────────────── *@
+    <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudTable Items="_roles" Dense Hover Class="pa-0" T="RoleRecord">
+            <HeaderContent>
+                <MudTh Style="width: 80px; text-align: center;">Order</MudTh>
+                <MudTh>Name</MudTh>
+                <MudTh>Description</MudTh>
+                <MudTh Style="width: 160px;">Scope</MudTh>
+                <MudTh Style="width: 100px;">Active</MudTh>
+                <MudTh Style="width: 160px;">Updated</MudTh>
+                <MudTh Style="width: 120px;"></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                @if (_editingId == context.Id)
+                {
+                    <MudTd></MudTd>
+                    <MudTd>
+                        <MudTextField @bind-Value="_editName" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudTd>
+                    <MudTd>
+                        <MudTextField @bind-Value="_editDescription" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudTd>
+                    <MudTd>
+                        @if (IsAdministratorRole(context))
+                        {
+                            @* Admin row is pinned to 'all' on the server no
+                               matter what the UI sends, but still disable
+                               the dropdown so admins aren't misled. *@
+                            <MudSelect T="string" Value="@ScopeRules.All" Disabled
+                                       Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem T="string" Value="@ScopeRules.All">All records</MudSelectItem>
+                            </MudSelect>
+                        }
+                        else
+                        {
+                            <MudSelect T="string" @bind-Value="_editScope"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem T="string" Value="@ScopeRules.All">All records</MudSelectItem>
+                                <MudSelectItem T="string" Value="@ScopeRules.Self">Only their own</MudSelectItem>
+                            </MudSelect>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <MudSwitch T="bool" @bind-Value="_editIsActive" Color="Color.Success" />
+                    </MudTd>
+                    <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
+                    <MudTd Style="text-align: right;">
+                        <MudTooltip Text="Save">
+                            <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success"
+                                           OnClick="SaveEdit" />
+                        </MudTooltip>
+                        <MudTooltip Text="Cancel">
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                           OnClick="CancelEdit" />
+                        </MudTooltip>
+                    </MudTd>
+                }
+                else
+                {
+                    <MudTd Style="text-align: center; white-space: nowrap;">
+                        <MudTooltip Text="Move up">
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
+                                           Disabled="@(_roles.IndexOf(context) == 0)"
+                                           OnClick="@(() => MoveUp(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Move down">
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
+                                           Disabled="@(_roles.IndexOf(context) == _roles.Count - 1)"
+                                           OnClick="@(() => MoveDown(context))" />
+                        </MudTooltip>
+                    </MudTd>
+                    <MudTd>
+                        @if (IsAdministratorRole(context))
+                        {
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                <strong>@context.Name</strong>
+                                <MudTooltip Text="Renaming this role breaks the admin-flag auto-sync">
+                                    <MudIcon Icon="@Icons.Material.Filled.Shield" Size="Size.Small" Color="Color.Primary" />
+                                </MudTooltip>
+                            </MudStack>
+                        }
+                        else
+                        {
+                            <strong>@context.Name</strong>
+                        }
+                    </MudTd>
+                    <MudTd>@(string.IsNullOrEmpty(context.Description) ? "—" : context.Description)</MudTd>
+                    <MudTd>
+                        @if (context.ScopeRule == ScopeRules.Self)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled"
+                                     Icon="@Icons.Material.Filled.FilterAlt">
+                                Only their own
+                            </MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">
+                                All records
+                            </MudChip>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        @if (context.IsActive)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">Active</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Inactive</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
+                    <MudTd Style="text-align: right;">
+                        <MudTooltip Text="Edit role">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                           OnClick="@(() => StartEdit(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Delete role">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                           OnClick="@(() => DeleteRole(context))" />
+                        </MudTooltip>
+                    </MudTd>
+                }
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4 d-flex justify-center">
+                    No roles defined — add one above.
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudPaper>
+</MudStack>
+
+@code {
+    [Parameter] public string CurrentUserEmail { get; set; } = string.Empty;
+
+    private List<RoleRecord> _roles = new();
+
+    private string _newName = string.Empty;
+    private string _newDescription = string.Empty;
+    private string _newScope = ScopeRules.All;
+    private SaveStatusIndicator? _addIndicator;
+
+    private Guid? _editingId;
+    private string _editName = string.Empty;
+    private string _editDescription = string.Empty;
+    private string _editScope = ScopeRules.All;
+    private bool _editIsActive;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _roles = await RoleService.GetAllAsync();
+    }
+
+    private bool CanAdd() => !string.IsNullOrWhiteSpace(_newName);
+
+    // Matches by name so renames don't accidentally flip this flag; admins
+    // are warned in the UI before they rename the Administrator row.
+    private static bool IsAdministratorRole(RoleRecord r) =>
+        string.Equals(r.Name, RoleRecord.AdministratorName, StringComparison.OrdinalIgnoreCase);
+
+    private async Task AddRole()
+    {
+        try
+        {
+            await RoleService.CreateAsync(
+                _newName.Trim(),
+                string.IsNullOrWhiteSpace(_newDescription) ? null : _newDescription.Trim(),
+                _newScope,
+                CurrentUserEmail);
+            _newName = _newDescription = string.Empty;
+            _newScope = ScopeRules.All;
+            await ReloadAsync();
+            if (_addIndicator is not null) _ = _addIndicator.Flash("Added");
+        }
+        catch (SqlException ex) when (ex.Number is 2601 or 2627)
+        {
+            Snackbar.Add("A role with that name already exists.", Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to add role: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void StartEdit(RoleRecord r)
+    {
+        _editingId = r.Id;
+        _editName = r.Name;
+        _editDescription = r.Description ?? string.Empty;
+        _editScope = IsAdministratorRole(r) ? ScopeRules.All : r.ScopeRule;
+        _editIsActive = r.IsActive;
+    }
+
+    private void CancelEdit() => _editingId = null;
+
+    private async Task SaveEdit()
+    {
+        if (_editingId is not Guid id) return;
+        try
+        {
+            await RoleService.UpdateAsync(id, _editName.Trim(),
+                string.IsNullOrWhiteSpace(_editDescription) ? null : _editDescription.Trim(),
+                _editScope,
+                _editIsActive);
+            _editingId = null;
+            await ReloadAsync();
+            Snackbar.Add("Role updated.", Severity.Success);
+        }
+        catch (SqlException ex) when (ex.Number is 2601 or 2627)
+        {
+            Snackbar.Add("That name is already taken by another role.", Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DeleteRole(RoleRecord r)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = "Delete role",
+            Message = $"Delete role \"{r.Name}\"? Users currently assigned to it will have their role cleared.",
+            YesText = "Delete",
+            CancelText = "Cancel"
+        });
+        if (confirmed != true) return;
+
+        try
+        {
+            await RoleService.DeleteAsync(r.Id);
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to delete: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private Task MoveUp(RoleRecord r) => SwapWithNeighbor(r, -1);
+    private Task MoveDown(RoleRecord r) => SwapWithNeighbor(r, +1);
+
+    private async Task SwapWithNeighbor(RoleRecord r, int direction)
+    {
+        var idx = _roles.IndexOf(r);
+        var target = idx + direction;
+        if (idx < 0 || target < 0 || target >= _roles.Count) return;
+
+        (_roles[idx], _roles[target]) = (_roles[target], _roles[idx]);
+
+        try
+        {
+            await RoleService.UpdateSortOrderAsync(_roles.Select(x => x.Id).ToList());
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to reorder: {ex.Message}", Severity.Error);
+            await ReloadAsync();
+        }
+    }
+}

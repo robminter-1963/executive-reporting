@@ -1,0 +1,162 @@
+using System.Data;
+using Microsoft.Data.SqlClient;
+using TleReportingDashboard.Web.Models;
+
+namespace TleReportingDashboard.Web.Services;
+
+public class UserPreferenceService : IUserPreferenceService
+{
+    private readonly string _connectionString;
+
+    public UserPreferenceService(IConfiguration configuration)
+    {
+        _connectionString = configuration.GetConnectionString("ConfigDb")
+            ?? throw new InvalidOperationException("ConfigDb connection string is required.");
+    }
+
+    public async Task<UserPreference> GetPreferencesAsync(string userId)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand(
+            "SELECT user_id, onboarding_completed, default_page_size, is_dark_mode, master_dashboard_title, master_dashboard_title_align, master_dashboard_logo, master_dashboard_logo_type, created_at, updated_at, report_library_page_size, report_page_sizes, schema_builder_connection_id, schema_builder_company_id, report_library_company_id FROM EMPOWER.RPT_user_preferences WHERE user_id = @UserId", conn);
+        cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (await reader.ReadAsync())
+        {
+            return new UserPreference
+            {
+                UserId = reader.GetString(0),
+                OnboardingCompleted = reader.GetBoolean(1),
+                DefaultPageSize = reader.GetInt32(2),
+                IsDarkMode = reader.GetBoolean(3),
+                MasterDashboardTitle = reader.IsDBNull(4) ? "Master Dashboard" : reader.GetString(4),
+                MasterDashboardTitleAlign = reader.IsDBNull(5) ? "left" : reader.GetString(5),
+                MasterDashboardLogo = reader.IsDBNull(6) ? null : (byte[])reader.GetValue(6),
+                MasterDashboardLogoType = reader.IsDBNull(7) ? null : reader.GetString(7),
+                CreatedAt = reader.GetDateTime(8),
+                UpdatedAt = reader.GetDateTime(9),
+                ReportLibraryPageSize = TryGetInt(reader, "report_library_page_size") ?? 15,
+                ReportPageSizes = ParseReportPageSizes(TryGetString(reader, "report_page_sizes")),
+                SchemaBuilderConnectionId = TryGetGuid(reader, "schema_builder_connection_id"),
+                SchemaBuilderCompanyId = TryGetGuid(reader, "schema_builder_company_id"),
+                ReportLibraryCompanyId = TryGetGuid(reader, "report_library_company_id")
+            };
+        }
+
+        return new UserPreference
+        {
+            UserId = userId,
+            DefaultPageSize = 100,
+            ReportLibraryPageSize = 15,
+            IsDarkMode = false
+        };
+    }
+
+    private static string? TryGetString(SqlDataReader reader, string column)
+    {
+        try
+        {
+            var ord = reader.GetOrdinal(column);
+            return reader.IsDBNull(ord) ? null : reader.GetString(ord);
+        }
+        catch (IndexOutOfRangeException) { return null; }
+    }
+
+    private static Dictionary<Guid, int> ParseReportPageSizes(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try
+        {
+            var raw = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, int>>(json);
+            if (raw is null) return new();
+            var result = new Dictionary<Guid, int>();
+            foreach (var kvp in raw)
+            {
+                if (Guid.TryParse(kvp.Key, out var id) && kvp.Value > 0)
+                    result[id] = kvp.Value;
+            }
+            return result;
+        }
+        catch { return new(); }
+    }
+
+    // Tolerate a missing column (migration not yet applied) by returning null
+    // instead of throwing. Callers fall back to the model's default.
+    private static int? TryGetInt(SqlDataReader reader, string column)
+    {
+        try
+        {
+            var ord = reader.GetOrdinal(column);
+            return reader.IsDBNull(ord) ? null : reader.GetInt32(ord);
+        }
+        catch (IndexOutOfRangeException) { return null; }
+    }
+
+    private static Guid? TryGetGuid(SqlDataReader reader, string column)
+    {
+        try
+        {
+            var ord = reader.GetOrdinal(column);
+            return reader.IsDBNull(ord) ? null : reader.GetGuid(ord);
+        }
+        catch (IndexOutOfRangeException) { return null; }
+    }
+
+    public async Task SavePreferencesAsync(UserPreference preference)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        // Serialize the per-report page-size map to JSON (string-keyed for
+        // portability). Null when empty so we don't write useless "{}" rows.
+        string? pageSizesJson = null;
+        if (preference.ReportPageSizes is { Count: > 0 })
+        {
+            var stringKeyed = preference.ReportPageSizes.ToDictionary(
+                kvp => kvp.Key.ToString(), kvp => kvp.Value);
+            pageSizesJson = System.Text.Json.JsonSerializer.Serialize(stringKeyed);
+        }
+
+        // MERGE upsert
+        await using var cmd = new SqlCommand(@"
+            MERGE EMPOWER.RPT_user_preferences AS target
+            USING (SELECT @UserId AS user_id) AS source
+            ON target.user_id = source.user_id
+            WHEN MATCHED THEN
+                UPDATE SET default_page_size = @PageSize,
+                           report_library_page_size = @LibPageSize,
+                           report_page_sizes = @ReportPageSizes,
+                           is_dark_mode = @IsDarkMode,
+                           onboarding_completed = @Onboarding,
+                           master_dashboard_title = @Title,
+                           master_dashboard_title_align = @TitleAlign,
+                           master_dashboard_logo = @Logo,
+                           master_dashboard_logo_type = @LogoType,
+                           schema_builder_connection_id = @SchemaConnId,
+                           schema_builder_company_id = @SchemaCompanyId,
+                           report_library_company_id = @LibCompanyId,
+                           updated_at = SYSUTCDATETIME()
+            WHEN NOT MATCHED THEN
+                INSERT (user_id, default_page_size, report_library_page_size, report_page_sizes, is_dark_mode, onboarding_completed, master_dashboard_title, master_dashboard_title_align, master_dashboard_logo, master_dashboard_logo_type, schema_builder_connection_id, schema_builder_company_id, report_library_company_id, created_at, updated_at)
+                VALUES (@UserId, @PageSize, @LibPageSize, @ReportPageSizes, @IsDarkMode, @Onboarding, @Title, @TitleAlign, @Logo, @LogoType, @SchemaConnId, @SchemaCompanyId, @LibCompanyId, SYSUTCDATETIME(), SYSUTCDATETIME());",
+            conn);
+
+        cmd.Parameters.Add(new SqlParameter("@UserId", preference.UserId));
+        cmd.Parameters.Add(new SqlParameter("@PageSize", preference.DefaultPageSize));
+        cmd.Parameters.Add(new SqlParameter("@LibPageSize", preference.ReportLibraryPageSize));
+        cmd.Parameters.Add(new SqlParameter("@ReportPageSizes", (object?)pageSizesJson ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@IsDarkMode", preference.IsDarkMode));
+        cmd.Parameters.Add(new SqlParameter("@Onboarding", preference.OnboardingCompleted));
+        cmd.Parameters.Add(new SqlParameter("@Title", (object?)preference.MasterDashboardTitle ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@TitleAlign", preference.MasterDashboardTitleAlign));
+        cmd.Parameters.Add(new SqlParameter("@Logo", SqlDbType.VarBinary) { Value = (object?)preference.MasterDashboardLogo ?? DBNull.Value });
+        cmd.Parameters.Add(new SqlParameter("@LogoType", (object?)preference.MasterDashboardLogoType ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@SchemaConnId", (object?)preference.SchemaBuilderConnectionId ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@SchemaCompanyId", (object?)preference.SchemaBuilderCompanyId ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@LibCompanyId", (object?)preference.ReportLibraryCompanyId ?? DBNull.Value));
+
+        await cmd.ExecuteNonQueryAsync();
+    }
+}

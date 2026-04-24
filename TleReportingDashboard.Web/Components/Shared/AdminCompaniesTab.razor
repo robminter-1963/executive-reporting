@@ -1,0 +1,454 @@
+@inject ICompanyAdminService CompanyAdminSvc
+@inject ICompanyRegistry CompanyRegistry
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.Data.SqlClient
+@using MudBlazor
+
+<MudStack Spacing="3" Class="pa-2">
+    <MudText Typo="Typo.body2" Color="Color.Secondary">
+        Each company is a tenant of the reporting suite. The URL <code>/c/{code}</code> segment and every permission check keys off this list.
+        Deactivate a company to hide it from users without losing its data.
+    </MudText>
+
+    @* ── Add company form ──────────────────────────────────────────────── *@
+    <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Add company</MudText>
+            <MudStack Row AlignItems="AlignItems.Start" Spacing="2" Wrap="Wrap.Wrap">
+                <MudTextField @bind-Value="_newCode" Label="Code" HelperText="URL segment (e.g. 'tle', 'csbk')"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 140px;" />
+                <MudTextField @bind-Value="_newName" Label="Name" HelperText="Display name"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 240px;" />
+                <MudSelect T="string" @bind-Value="_newDataSourceType" Label="Data Source Type"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;">
+                    <MudSelectItem Value="@("sqlserver")">SQL Server</MudSelectItem>
+                    <MudSelectItem Value="@("postgres")">Postgres</MudSelectItem>
+                </MudSelect>
+                <MudTextField @bind-Value="_newConnectionRef" Label="Connection Ref"
+                              HelperText="Legacy label; actual connection lives in DB Connections tab"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 200px;" />
+                <MudTextField @bind-Value="_newWebsiteUrl" Label="Website URL"
+                              HelperText="Optional — clicking the logo on the master dashboard opens this in a new tab"
+                              Placeholder="https://example.com"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 240px;" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.AddBusiness"
+                           Disabled="!CanAdd()" OnClick="AddCompany">
+                    Add
+                </MudButton>
+                <SaveStatusIndicator @ref="_addIndicator" />
+            </MudStack>
+        </MudStack>
+    </MudPaper>
+
+    @* ── Companies table ───────────────────────────────────────────────── *@
+    <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudTable Items="_companies" Dense Hover Striped Class="pa-0">
+            <HeaderContent>
+                <MudTh Style="width: 80px; text-align: center;">Order</MudTh>
+                <MudTh Style="width: 150px; text-align: center;">Logo</MudTh>
+                <MudTh>Code</MudTh>
+                <MudTh>Name</MudTh>
+                <MudTh>Data Source</MudTh>
+                <MudTh>Connection Ref</MudTh>
+                <MudTh>Website</MudTh>
+                <MudTh>Active</MudTh>
+                <MudTh>Updated</MudTh>
+                <MudTh Style="width: 160px;"></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                @if (_editingId == context.Id)
+                {
+                    @* Reorder controls are hidden in edit mode to keep the
+                       inline form tight — admins finish editing before
+                       reordering. *@
+                    <MudTd></MudTd>
+                    <MudTd Style="text-align: center;">
+                        @RenderLogoCell(context)
+                    </MudTd>
+                    <MudTd>
+                        <MudTextField @bind-Value="_editCode" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px;" />
+                    </MudTd>
+                    <MudTd>
+                        <MudTextField @bind-Value="_editName" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudTd>
+                    <MudTd>
+                        <MudSelect T="string" @bind-Value="_editDataSourceType" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 150px;">
+                            <MudSelectItem Value="@("sqlserver")">SQL Server</MudSelectItem>
+                            <MudSelectItem Value="@("postgres")">Postgres</MudSelectItem>
+                        </MudSelect>
+                    </MudTd>
+                    <MudTd>
+                        <MudTextField @bind-Value="_editConnectionRef" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudTd>
+                    <MudTd>
+                        <MudTextField @bind-Value="_editWebsiteUrl" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      Placeholder="https://example.com" />
+                    </MudTd>
+                    <MudTd>
+                        <MudSwitch T="bool" @bind-Value="_editIsActive" Color="Color.Success" />
+                    </MudTd>
+                    <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
+                    <MudTd>
+                        <MudTooltip Text="Save">
+                            <MudIconButton Icon="@Icons.Material.Filled.Save" Color="Color.Primary" Size="Size.Small" OnClick="SaveEdit" />
+                        </MudTooltip>
+                        <MudTooltip Text="Cancel">
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="CancelEdit" />
+                        </MudTooltip>
+                    </MudTd>
+                }
+                else
+                {
+                    <MudTd Style="text-align: center; white-space: nowrap;">
+                        <MudTooltip Text="Move up">
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
+                                           Disabled="@(_companies.IndexOf(context) == 0)"
+                                           OnClick="@(() => MoveUp(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Move down">
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
+                                           Disabled="@(_companies.IndexOf(context) == _companies.Count - 1)"
+                                           OnClick="@(() => MoveDown(context))" />
+                        </MudTooltip>
+                    </MudTd>
+                    <MudTd Style="text-align: center;">
+                        @RenderLogoCell(context)
+                    </MudTd>
+                    <MudTd><strong>@context.Code</strong></MudTd>
+                    <MudTd>@context.Name</MudTd>
+                    <MudTd>@context.DataSourceType</MudTd>
+                    <MudTd>@context.ConnectionRef</MudTd>
+                    <MudTd>
+                        @if (!string.IsNullOrEmpty(context.WebsiteUrl))
+                        {
+                            <MudLink Href="@context.WebsiteUrl" Target="_blank" Typo="Typo.body2">
+                                @TruncateUrl(context.WebsiteUrl)
+                            </MudLink>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        @if (context.IsActive)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">Active</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Inactive</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
+                    <MudTd>
+                        <MudTooltip Text="Edit">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => StartEdit(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="@(context.IsActive ? "Deactivate" : "Activate")">
+                            <MudIconButton Icon="@(context.IsActive ? Icons.Material.Filled.Block : Icons.Material.Filled.CheckCircle)"
+                                           Color="@(context.IsActive ? Color.Warning : Color.Success)" Size="Size.Small"
+                                           OnClick="@(() => ToggleActive(context))" />
+                        </MudTooltip>
+                    </MudTd>
+                }
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4 d-flex justify-center">
+                    No companies yet.
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudPaper>
+</MudStack>
+
+@code {
+    [Parameter] public EventCallback CompaniesChanged { get; set; }
+
+    private List<CompanyRecord> _companies = new();
+
+    private string _newCode = string.Empty;
+    private string _newName = string.Empty;
+    private string _newDataSourceType = "sqlserver";
+    private string _newConnectionRef = string.Empty;
+    private string _newWebsiteUrl = string.Empty;
+
+    private Guid? _editingId;
+    private string _editCode = string.Empty;
+    private string _editName = string.Empty;
+    private string _editDataSourceType = "sqlserver";
+    private string _editConnectionRef = string.Empty;
+    private string _editWebsiteUrl = string.Empty;
+    private bool _editIsActive;
+
+    private SaveStatusIndicator? _addIndicator;
+
+    // Max logo size. 1 MB is plenty for PNGs / SVGs / small JPEGs; larger
+    // files are rejected in the uploader rather than silently truncated.
+    private const long MaxLogoBytes = 1 * 1024 * 1024;
+    // Which company's logo is currently uploading — drives a per-row
+    // spinner so the admin knows the click registered.
+    private Guid? _uploadingLogoFor;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _companies = await CompanyAdminSvc.GetAllAsync();
+        await CompaniesChanged.InvokeAsync();
+    }
+
+    private bool CanAdd() =>
+        !string.IsNullOrWhiteSpace(_newCode)
+        && !string.IsNullOrWhiteSpace(_newName)
+        && !string.IsNullOrWhiteSpace(_newConnectionRef);
+
+    private async Task AddCompany()
+    {
+        try
+        {
+            await CompanyAdminSvc.CreateAsync(_newCode.Trim().ToLowerInvariant(), _newName.Trim(),
+                _newDataSourceType, _newConnectionRef.Trim(),
+                string.IsNullOrWhiteSpace(_newWebsiteUrl) ? null : _newWebsiteUrl.Trim(),
+                createdBy: null);
+            _newCode = _newName = _newConnectionRef = _newWebsiteUrl = string.Empty;
+            _newDataSourceType = "sqlserver";
+            await ReloadAsync();
+            if (_addIndicator is not null) _ = _addIndicator.Flash("Added");
+        }
+        catch (SqlException ex) when (ex.Number is 2601 or 2627)
+        {
+            Snackbar.Add("A company with that code already exists.", Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to add company: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void StartEdit(CompanyRecord c)
+    {
+        _editingId = c.Id;
+        _editCode = c.Code;
+        _editName = c.Name;
+        _editDataSourceType = c.DataSourceType;
+        _editConnectionRef = c.ConnectionRef;
+        _editWebsiteUrl = c.WebsiteUrl ?? string.Empty;
+        _editIsActive = c.IsActive;
+    }
+
+    private void CancelEdit() => _editingId = null;
+
+    // Strip scheme + trailing slash for a cleaner display; href still uses
+    // the original so the link actually works. 40-char cap keeps the table
+    // from exploding horizontally when someone pastes a deep URL.
+    private static string TruncateUrl(string url)
+    {
+        var stripped = url;
+        if (stripped.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) stripped = stripped[8..];
+        else if (stripped.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) stripped = stripped[7..];
+        stripped = stripped.TrimEnd('/');
+        return stripped.Length <= 40 ? stripped : stripped[..37] + "...";
+    }
+
+    private Task MoveUp(CompanyRecord c) => SwapWithNeighbor(c, -1);
+    private Task MoveDown(CompanyRecord c) => SwapWithNeighbor(c, +1);
+
+    // Swaps a company with its immediate neighbor and persists the new
+    // ordering. Rebuilds the list from the persisted order afterwards so
+    // display_order ties (e.g. brand-new companies with display_order = 0)
+    // resolve to the new positions.
+    private async Task SwapWithNeighbor(CompanyRecord c, int direction)
+    {
+        var idx = _companies.IndexOf(c);
+        var target = idx + direction;
+        if (idx < 0 || target < 0 || target >= _companies.Count) return;
+
+        (_companies[idx], _companies[target]) = (_companies[target], _companies[idx]);
+
+        try
+        {
+            await CompanyAdminSvc.UpdateDisplayOrderAsync(_companies.Select(x => x.Id).ToList());
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to reorder: {ex.Message}", Severity.Error);
+            await ReloadAsync();
+        }
+    }
+
+    private async Task SaveEdit()
+    {
+        if (_editingId is not Guid id) return;
+        try
+        {
+            await CompanyAdminSvc.UpdateAsync(id, _editCode.Trim().ToLowerInvariant(), _editName.Trim(),
+                _editDataSourceType, _editConnectionRef.Trim(),
+                string.IsNullOrWhiteSpace(_editWebsiteUrl) ? null : _editWebsiteUrl.Trim(),
+                _editIsActive);
+            _editingId = null;
+            await ReloadAsync();
+        }
+        catch (SqlException ex) when (ex.Number is 2601 or 2627)
+        {
+            Snackbar.Add("That code is already taken by another company.", Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ── Logo cell (inline preview + upload/clear controls) ─────────────
+    //
+    // Rendered for both the edit row and the read-only row so admins can
+    // update a company's logo without opening an edit session. The <img>
+    // uses an inline data-URL so there's no separate asset endpoint to
+    // maintain — bytes live in the DB and render straight from memory.
+    private RenderFragment RenderLogoCell(CompanyRecord c) => __builder =>
+    {
+        <MudStack Spacing="1" AlignItems="AlignItems.Center">
+            @if (_uploadingLogoFor == c.Id)
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" />
+            }
+            else if (c.Logo is { Length: > 0 })
+            {
+                <img src="@ToDataUrl(c.Logo, c.LogoContentType)"
+                     alt="@c.Name logo"
+                     style="max-width: 120px; max-height: 72px; border: 1px solid #E8EAED; border-radius: 3px; padding: 3px; background: #FFFFFF;" />
+            }
+            else
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Image" Color="Color.Default" Size="Size.Large" />
+            }
+            <MudStack Row Spacing="0" Class="mt-0">
+                @* Using <InputFile> directly instead of <MudFileUpload>
+                   because MudFileUpload renders a full-size button around
+                   ActivatorContent that we couldn't shrink to icon size.
+                   The hidden input is paired to a <label for="…"> so
+                   clicking the upload icon opens the native file picker. *@
+                @{
+                    var uploadId = $"logo-upload-{c.Id:N}";
+                }
+                <MudTooltip Text="Upload a new logo (PNG / JPG / SVG · max 1 MB)">
+                    <label for="@uploadId"
+                           style="display: inline-flex; align-items: center; justify-content: center;
+                                  width: 28px; height: 28px; border-radius: 50%; cursor: pointer;
+                                  color: #5F6368;"
+                           onmouseover="this.style.background='#F1F3F4'"
+                           onmouseout="this.style.background='transparent'">
+                        <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Small" />
+                    </label>
+                </MudTooltip>
+                <InputFile id="@uploadId"
+                           OnChange="@(e => OnLogoUploaded(c.Id, e.File))"
+                           style="display: none;"
+                           accept=".png,.jpg,.jpeg,.gif,.svg,.webp" />
+
+                @if (c.Logo is { Length: > 0 })
+                {
+                    <MudTooltip Text="Remove logo">
+                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                       Size="Size.Small" Color="Color.Default"
+                                       OnClick="@(() => OnLogoClear(c.Id, c.Name))" />
+                    </MudTooltip>
+                }
+            </MudStack>
+        </MudStack>
+    };
+
+    private static string ToDataUrl(byte[] bytes, string? contentType)
+    {
+        var ct = string.IsNullOrWhiteSpace(contentType) ? "image/png" : contentType;
+        return $"data:{ct};base64,{Convert.ToBase64String(bytes)}";
+    }
+
+    private async Task OnLogoUploaded(Guid companyId, IBrowserFile? file)
+    {
+        if (file is null) return;
+        if (file.Size > MaxLogoBytes)
+        {
+            Snackbar.Add($"Logo too large ({file.Size / 1024} KB). Max is {MaxLogoBytes / 1024} KB.", Severity.Warning);
+            return;
+        }
+
+        _uploadingLogoFor = companyId;
+        try
+        {
+            // Read the browser file into memory. OpenReadStream enforces
+            // the same size cap we just checked, so a stream overflow can
+            // only happen if the client lied — defensive second cap below.
+            await using var stream = file.OpenReadStream(maxAllowedSize: MaxLogoBytes);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            var bytes = ms.ToArray();
+            var contentType = string.IsNullOrWhiteSpace(file.ContentType) ? "image/png" : file.ContentType;
+
+            await CompanyAdminSvc.UploadLogoAsync(companyId, bytes, contentType);
+            await ReloadAsync();
+            Snackbar.Add("Logo uploaded.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Upload failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _uploadingLogoFor = null;
+        }
+    }
+
+    private async Task OnLogoClear(Guid companyId, string companyName)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = "Remove logo",
+            Message = $"Remove the logo for '{companyName}'?",
+            YesText = "Remove",
+            CancelText = "Cancel"
+        });
+        if (confirmed != true) return;
+
+        try
+        {
+            await CompanyAdminSvc.ClearLogoAsync(companyId);
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to clear logo: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ToggleActive(CompanyRecord c)
+    {
+        var target = !c.IsActive;
+        var verb = target ? "activate" : "deactivate";
+        var confirmed = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = $"{char.ToUpper(verb[0])}{verb[1..]} company",
+            Message = $"{char.ToUpper(verb[0])}{verb[1..]} '{c.Name}'?",
+            YesText = verb,
+            CancelText = "Cancel"
+        });
+        if (confirmed != true) return;
+
+        try
+        {
+            await CompanyAdminSvc.SetActiveAsync(c.Id, target);
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
+        }
+    }
+}

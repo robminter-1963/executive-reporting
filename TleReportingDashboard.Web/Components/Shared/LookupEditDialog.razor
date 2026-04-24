@@ -1,0 +1,77 @@
+@using TleReportingDashboard.Web.Components.Pages
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.TableView" />
+            <MudText Typo="Typo.h6">@(IsNew ? "Add Lookup" : "Edit Lookup")</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudGrid Spacing="2" Style="min-width: 600px;">
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Id" Label="ID" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="Unique identifier (e.g. status_events)" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Label" Label="Label" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="Display name (e.g. Status Event Number Mapping)" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.SqlPreamble" Label="CTE Definition"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="6" Style="font-family: monospace; font-size: 0.85rem;"
+                              Placeholder="LOOKUP(STATUS, EVENTNUM, ORDERBY) AS (SELECT 1, 346, 1 UNION ALL SELECT 2, 347, 2 ...)"
+                              HelperText="CTE body without the WITH keyword. Added to the WITH clause when referenced." />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.SqlJoin" Label="JOIN clause (optional)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="2" Style="font-family: monospace; font-size: 0.85rem;"
+                              Placeholder="@SqlJoinPlaceholder"
+                              HelperText="JOIN appended after schema joins when this lookup is referenced." />
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@(string.IsNullOrWhiteSpace(_edited.Id) || string.IsNullOrWhiteSpace(_edited.Label) || string.IsNullOrWhiteSpace(_edited.SqlPreamble))">
+            OK
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public SchemaBuilder.LookupEntry? Lookup { get; set; }
+    [Parameter] public bool IsNew { get; set; }
+    [Parameter] public string? ConnectionType { get; set; }
+
+    // Placeholder only appears once the admin has named this lookup (i.e.
+    // the CTE exists in some form). Until then the field stays blank so
+    // we don't invent a LOOKUP reference that doesn't match anything real.
+    private string SqlJoinPlaceholder =>
+        string.IsNullOrWhiteSpace(_edited.Id)
+            ? string.Empty
+            : $"LEFT JOIN {_edited.Id} lu ON lu.key = joined_alias.fk_column";
+
+    private SchemaBuilder.LookupEntry _edited = new();
+
+    protected override void OnInitialized()
+    {
+        if (Lookup is not null)
+        {
+            _edited = new SchemaBuilder.LookupEntry
+            {
+                Id = Lookup.Id,
+                Label = Lookup.Label,
+                SqlPreamble = Lookup.SqlPreamble,
+                SqlJoin = Lookup.SqlJoin
+            };
+        }
+    }
+
+    private void Cancel() => MudDialog?.Cancel();
+    private void Ok() => MudDialog?.Close(DialogResult.Ok(_edited));
+}

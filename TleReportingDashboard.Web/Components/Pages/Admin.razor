@@ -1,0 +1,80 @@
+@page "/admin"
+@rendermode InteractiveServer
+@inject IAdminService AdminService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+
+<PageTitle>Admin - Executive Reporting Suite</PageTitle>
+
+<MudStack Spacing="3" Class="pa-4">
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Navigation.NavigateTo("/reports"))" />
+        <MudText Typo="Typo.h5" Style="font-weight: 600;">Admin</MudText>
+        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
+                 Icon="@Icons.Material.Filled.Shield"
+                 Style="font-size: 0.65rem; height: 22px;">
+            GLOBAL ADMIN
+        </MudChip>
+        <MudSpacer />
+        <MudTooltip Text="Preview the proposed ad-hoc filter UX — nothing persists">
+            <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                       StartIcon="@Icons.Material.Filled.Science"
+                       OnClick="@(() => Navigation.NavigateTo("/prototype/filters"))">
+                Filter Prototype
+            </MudButton>
+        </MudTooltip>
+        <MudTooltip Text="Schema Builder — edit per-company field catalog">
+            <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                       StartIcon="@Icons.Material.Filled.DataObject"
+                       OnClick="@(() => Navigation.NavigateTo("/admin/schema-builder"))">
+                Schema Builder
+            </MudButton>
+        </MudTooltip>
+    </MudStack>
+    <MudText Typo="Typo.body2" Color="Color.Secondary">
+        Set up companies, their data-source connections, and users (with per-company role grants). Changes take effect immediately.
+    </MudText>
+
+    @if (!_accessGranted)
+    {
+        <MudAlert Severity="Severity.Error">
+            You must be a global admin to access this page.
+        </MudAlert>
+    }
+    else
+    {
+        <MudTabs @bind-ActivePanelIndex="_activeTab" Elevation="0" Rounded ApplyEffectsToContainer>
+            <MudTabPanel Text="Companies" Icon="@Icons.Material.Filled.Business">
+                <AdminCompaniesTab />
+            </MudTabPanel>
+            <MudTabPanel Text="DB Connections" Icon="@Icons.Material.Filled.Storage">
+                <AdminConnectionsTab />
+            </MudTabPanel>
+            <MudTabPanel Text="Users" Icon="@Icons.Material.Filled.ManageAccounts">
+                <AdminUsersTab CurrentUserEmail="@_currentUserEmail" />
+            </MudTabPanel>
+            <MudTabPanel Text="Roles" Icon="@Icons.Material.Filled.Badge">
+                <AdminRolesTab CurrentUserEmail="@_currentUserEmail" />
+            </MudTabPanel>
+            <MudTabPanel Text="Schema History" Icon="@Icons.Material.Filled.History">
+                <AdminSchemaHistoryTab />
+            </MudTabPanel>
+        </MudTabs>
+    }
+</MudStack>
+
+@code {
+    private bool _accessGranted;
+    private int _activeTab;
+    private string _currentUserEmail = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _currentUserEmail = authState.User.FindFirst("preferred_username")?.Value
+            ?? authState.User.FindFirst("email")?.Value
+            ?? authState.User.Identity?.Name
+            ?? string.Empty;
+        _accessGranted = AdminService.IsGlobalAdmin(_currentUserEmail);
+    }
+}

@@ -1,0 +1,194 @@
+@inject ICodeSetService CodeSetService
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Custom Sort Order: @FieldLabel</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 500px;">
+            @if (!CodeSetId.HasValue && (Initial is null || Initial.Count == 0))
+            {
+                <MudAlert Severity="Severity.Warning">
+                    Custom sort order requires a CodeSetId or existing sort values.
+                </MudAlert>
+            }
+            else if (_loading)
+            {
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary">Loading values from CodeSet @CodeSetId...</MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    Drag rows to reorder. Top of the list appears first.
+                </MudText>
+
+                <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; max-height: 450px; overflow-y: auto;">
+                    @for (var i = 0; i < _entries.Count; i++)
+                    {
+                        var idx = i;
+                        var entry = _entries[i];
+                        <div class="@($"sort-row {(_dragSource == idx ? "dragging" : "")}")"
+                             draggable="true"
+                             @ondragstart="() => _dragSource = idx"
+                             @ondragend="() => { _dragSource = -1; _dropTarget = -1; }"
+                             @ondragover:preventDefault
+                             @ondragover="() => { if (_dragSource >= 0 && idx != _dragSource) _dropTarget = idx; }"
+                             @ondrop="() => OnDrop(idx)">
+                            @if (_dropTarget == idx && _dragSource != idx)
+                            {
+                                <div class="drop-indicator-top"></div>
+                            }
+                            <div class="sort-row-content">
+                                <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small"
+                                         Style="color: #9AA0A6; cursor: grab;" />
+                                <MudText Typo="Typo.body2" Style="width: 30px; color: #5F6368;">@(idx + 1)</MudText>
+                                <MudText Typo="Typo.body2" Style="flex: 1;">@entry.Value</MudText>
+                            </div>
+                        </div>
+                    }
+                    @* End drop zone (drop here to move to bottom) *@
+                    <div class="sort-end-zone"
+                         @ondragover:preventDefault
+                         @ondragover="() => { if (_dragSource >= 0) _dropTarget = _entries.Count; }"
+                         @ondrop="() => OnDrop(_entries.Count)">
+                        @if (_dropTarget == _entries.Count)
+                        {
+                            <div class="drop-indicator-top"></div>
+                        }
+                    </div>
+                </MudPaper>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="ResetAlphabetical" Color="Color.Warning" Disabled="!_entries.Any()">
+            Reset (Alphabetical)
+        </MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save"
+                   Disabled="!_entries.Any()">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .sort-row {
+        position: relative;
+        border-bottom: 1px solid #F1F3F4;
+        transition: background 0.1s, opacity 0.15s;
+    }
+    .sort-row:hover {
+        background: #F8F9FA;
+    }
+    .sort-row.dragging {
+        opacity: 0.4;
+    }
+    .sort-row-content {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+    }
+    .drop-indicator-top, .drop-indicator-bottom {
+        height: 2px;
+        background: #1A73E8;
+        margin: 0 8px;
+    }
+    .sort-end-zone {
+        min-height: 16px;
+    }
+</style>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public string FieldLabel { get; set; } = string.Empty;
+    [Parameter] public int? CodeSetId { get; set; }
+    [Parameter] public Dictionary<string, int>? Initial { get; set; }
+
+    private List<SortEntry> _entries = new();
+    private bool _loading;
+    private int _dragSource = -1;
+    private int _dropTarget = -1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!CodeSetId.HasValue && (Initial is null || Initial.Count == 0)) return;
+
+        _loading = true;
+        try
+        {
+            if (CodeSetId.HasValue)
+            {
+                // Load values from the database code set
+                var values = await CodeSetService.GetCodeSetValuesAsync(CodeSetId.Value);
+
+                var initial = Initial ?? new Dictionary<string, int>();
+                var ordered = values
+                    .OrderBy(v => initial.TryGetValue(v.Description, out var o) ? o : int.MaxValue)
+                    .ThenBy(v => v.Description, StringComparer.OrdinalIgnoreCase);
+
+                foreach (var v in ordered)
+                {
+                    _entries.Add(new SortEntry { Value = v.Description });
+                }
+            }
+            else if (Initial is not null && Initial.Count > 0)
+            {
+                // No CodeSetId — load directly from the saved ValueSortOrder
+                var ordered = Initial.OrderBy(kvp => kvp.Value);
+                foreach (var kvp in ordered)
+                {
+                    _entries.Add(new SortEntry { Value = kvp.Key });
+                }
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void OnDrop(int targetIndex)
+    {
+        if (_dragSource < 0 || _dragSource == targetIndex)
+        {
+            _dragSource = -1; _dropTarget = -1;
+            return;
+        }
+
+        // Indicator is always shown above the target row, so the item lands at targetIndex.
+        var item = _entries[_dragSource];
+        _entries.RemoveAt(_dragSource);
+
+        // After removal, indices above the source shift down by 1.
+        var insertAt = targetIndex > _dragSource ? targetIndex - 1 : targetIndex;
+        insertAt = Math.Clamp(insertAt, 0, _entries.Count);
+
+        _entries.Insert(insertAt, item);
+        _dragSource = -1; _dropTarget = -1;
+    }
+
+    private void ResetAlphabetical()
+    {
+        _entries = _entries.OrderBy(e => e.Value, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private void Cancel() => MudDialog?.Cancel();
+
+    private void Save()
+    {
+        // Order is implicit by list position
+        var result = new Dictionary<string, int>();
+        for (var i = 0; i < _entries.Count; i++)
+        {
+            if (!string.IsNullOrWhiteSpace(_entries[i].Value))
+                result[_entries[i].Value.Trim()] = i + 1;
+        }
+        MudDialog?.Close(DialogResult.Ok<Dictionary<string, int>>(result));
+    }
+
+    private class SortEntry
+    {
+        public string Value { get; set; } = string.Empty;
+    }
+}

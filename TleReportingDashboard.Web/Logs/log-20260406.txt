@@ -1,0 +1,231 @@
+2026-04-06 15:31:05.126 -07:00 [WRN] The ASP.NET Core developer certificate is not trusted. For information about trusting the ASP.NET Core developer certificate, see https://aka.ms/aspnet/https-trust-dev-cert
+2026-04-06 15:31:05.141 -07:00 [INF] Now listening on: https://localhost:56764
+2026-04-06 15:31:05.141 -07:00 [INF] Now listening on: http://localhost:56767
+2026-04-06 15:31:05.142 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-06 15:31:05.142 -07:00 [INF] Hosting environment: Development
+2026-04-06 15:31:05.142 -07:00 [INF] Content root path: /Users/christopher.wilson/Documents/repos/TLE-Reporting/src/TleReportingDashboard.Web
+2026-04-06 15:31:24.549 -07:00 [WRN] Unhandled exception rendering component: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:31:24.554 -07:00 [ERR] Unhandled exception in circuit 'GyxJaoKM2-Ad5B-q5gbYBwDFSwQAnuGGWpB8v_iF4M0'.
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:31:24.556 -07:00 [WRN] Unhandled exception rendering component: Cannot access a disposed object.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.ArrayBuilder`1.GrowBuffer(Int32 desiredCapacity)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:31:24.557 -07:00 [ERR] Unhandled exception in circuit 'GyxJaoKM2-Ad5B-q5gbYBwDFSwQAnuGGWpB8v_iF4M0'.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.ArrayBuilder`1.GrowBuffer(Int32 desiredCapacity)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:31:31.095 -07:00 [WRN] Unhandled exception rendering component: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:31:31.095 -07:00 [ERR] Unhandled exception in circuit '48M1dpxf3_txeJdsJPx8V1ATSfvPmQvySjVR4I7xRNo'.
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:31:31.096 -07:00 [WRN] Unhandled exception rendering component: Cannot access a disposed object.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.ArrayBuilder`1.GrowBuffer(Int32 desiredCapacity)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:31:31.096 -07:00 [ERR] Unhandled exception in circuit '48M1dpxf3_txeJdsJPx8V1ATSfvPmQvySjVR4I7xRNo'.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.ArrayBuilder`1.GrowBuffer(Int32 desiredCapacity)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:31:41.970 -07:00 [WRN] Unhandled exception rendering component: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:31:41.971 -07:00 [ERR] Unhandled exception in circuit 'c3Epg9fTY7BdxQQkcLUiiBqn84sRMc7Qd4Co5pbJ4lo'.
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:31:41.971 -07:00 [WRN] Unhandled exception rendering component: Cannot access a disposed object.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:31:41.971 -07:00 [ERR] Unhandled exception in circuit 'c3Epg9fTY7BdxQQkcLUiiBqn84sRMc7Qd4Co5pbJ4lo'.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:32:43.801 -07:00 [INF] Application is shutting down...
+2026-04-06 15:33:48.722 -07:00 [INF] Now listening on: https://localhost:57119
+2026-04-06 15:33:48.728 -07:00 [INF] Now listening on: http://localhost:57121
+2026-04-06 15:33:48.729 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-06 15:33:48.729 -07:00 [INF] Hosting environment: Development
+2026-04-06 15:33:48.729 -07:00 [INF] Content root path: /Users/christopher.wilson/Documents/repos/TLE-Reporting/src/TleReportingDashboard.Web
+2026-04-06 15:34:03.791 -07:00 [WRN] Unhandled exception rendering component: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:34:03.795 -07:00 [ERR] Unhandled exception in circuit 'ScrcEXkxKuybyuuGPv3wSmdyOG8eZoUBLXuqvSs6hmw'.
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:34:03.797 -07:00 [WRN] Unhandled exception rendering component: Cannot access a disposed object.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.ArrayBuilder`1.GrowBuffer(Int32 desiredCapacity)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:34:03.797 -07:00 [ERR] Unhandled exception in circuit 'ScrcEXkxKuybyuuGPv3wSmdyOG8eZoUBLXuqvSs6hmw'.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.ArrayBuilder`1.GrowBuffer(Int32 desiredCapacity)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:34:13.168 -07:00 [WRN] Unhandled exception rendering component: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:34:13.168 -07:00 [ERR] Unhandled exception in circuit '-u4S8x9EjKUo_mzA-hSKgkNBMaINhXtdq9aWUhtdlwA'.
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:34:13.168 -07:00 [WRN] Unhandled exception rendering component: Cannot access a disposed object.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.ArrayBuilder`1.GrowBuffer(Int32 desiredCapacity)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:34:13.169 -07:00 [ERR] Unhandled exception in circuit '-u4S8x9EjKUo_mzA-hSKgkNBMaINhXtdq9aWUhtdlwA'.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.ArrayBuilder`1.GrowBuffer(Int32 desiredCapacity)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:34:23.237 -07:00 [WRN] Unhandled exception rendering component: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:34:23.237 -07:00 [ERR] Unhandled exception in circuit 'x5pESnS1aAzbSPwn3sR5tW09SlPyKzqHu4IuolkFzCo'.
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:34:23.238 -07:00 [WRN] Unhandled exception rendering component: Cannot access a disposed object.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:34:23.238 -07:00 [ERR] Unhandled exception in circuit 'x5pESnS1aAzbSPwn3sR5tW09SlPyKzqHu4IuolkFzCo'.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.ComputeDiff(Renderer renderer, RenderBatchBuilder batchBuilder, Int32 componentId, ArrayRange`1 oldTree, ArrayRange`1 newTree)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:34:34.482 -07:00 [WRN] Unhandled exception rendering component: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:34:34.483 -07:00 [ERR] Unhandled exception in circuit 'AKdPeklxadyGZ2Q1ZctQpevC7iUF5pCrsuEBLrSxd_0'.
+System.InvalidOperationException: Missing <MudPopoverProvider />, please add it to your layout. See https://mudblazor.com/getting-started/installation#manual-install-add-components
+   at MudBlazor.PopoverService.CreatePopoverAsync(IPopover popover)
+   at MudBlazor.MudPopoverBase.OnInitializedAsync()
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+   at Microsoft.AspNetCore.Components.ComponentsMetrics.CaptureParametersDuration(Task task, Int64 startTimestamp, String componentType)
+2026-04-06 15:34:34.483 -07:00 [WRN] Unhandled exception rendering component: Cannot access a disposed object.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:34:34.483 -07:00 [ERR] Unhandled exception in circuit 'AKdPeklxadyGZ2Q1ZctQpevC7iUF5pCrsuEBLrSxd_0'.
+System.ObjectDisposedException: Cannot access a disposed object.
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.InsertNewFrame(DiffContext& diffContext, Int32 newFrameIndex)
+   at Microsoft.AspNetCore.Components.RenderTree.RenderTreeDiffBuilder.AppendDiffEntriesForRange(DiffContext& diffContext, Int32 oldStartIndex, Int32 oldEndIndexExcl, Int32 newStartIndex, Int32 newEndIndexExcl)
+   at Microsoft.AspNetCore.Components.Rendering.ComponentState.RenderIntoBatch(RenderBatchBuilder batchBuilder, RenderFragment renderFragment, Exception& renderFragmentException)
+   at Microsoft.AspNetCore.Components.RenderTree.Renderer.ProcessRenderQueue()
+2026-04-06 15:35:54.228 -07:00 [INF] Application is shutting down...
+2026-04-06 15:36:03.679 -07:00 [INF] Now listening on: https://localhost:57486
+2026-04-06 15:36:03.688 -07:00 [INF] Now listening on: http://localhost:57487
+2026-04-06 15:36:03.689 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-06 15:36:03.689 -07:00 [INF] Hosting environment: Development
+2026-04-06 15:36:03.689 -07:00 [INF] Content root path: /Users/christopher.wilson/Documents/repos/TLE-Reporting/src/TleReportingDashboard.Web
+2026-04-06 15:45:46.049 -07:00 [INF] Application is shutting down...
+2026-04-06 15:45:54.709 -07:00 [INF] Now listening on: https://localhost:58797
+2026-04-06 15:45:54.717 -07:00 [INF] Now listening on: http://localhost:58798
+2026-04-06 15:45:54.718 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-06 15:45:54.718 -07:00 [INF] Hosting environment: Development
+2026-04-06 15:45:54.718 -07:00 [INF] Content root path: /Users/christopher.wilson/Documents/repos/TLE-Reporting/src/TleReportingDashboard.Web
+2026-04-06 15:53:25.377 -07:00 [INF] Application is shutting down...
+2026-04-06 15:53:33.457 -07:00 [INF] Now listening on: https://localhost:59010
+2026-04-06 15:53:33.466 -07:00 [INF] Now listening on: http://localhost:59011
+2026-04-06 15:53:33.467 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-06 15:53:33.467 -07:00 [INF] Hosting environment: Development
+2026-04-06 15:53:33.467 -07:00 [INF] Content root path: /Users/christopher.wilson/Documents/repos/TLE-Reporting/src/TleReportingDashboard.Web
+2026-04-06 15:58:14.106 -07:00 [INF] Application is shutting down...
+2026-04-06 15:58:21.600 -07:00 [INF] Now listening on: https://localhost:59175
+2026-04-06 15:58:21.607 -07:00 [INF] Now listening on: http://localhost:59176
+2026-04-06 15:58:21.608 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-06 15:58:21.608 -07:00 [INF] Hosting environment: Development
+2026-04-06 15:58:21.608 -07:00 [INF] Content root path: /Users/christopher.wilson/Documents/repos/TLE-Reporting/src/TleReportingDashboard.Web
+2026-04-06 16:03:33.402 -07:00 [INF] Application is shutting down...
+2026-04-06 16:03:42.604 -07:00 [INF] Now listening on: https://localhost:59361
+2026-04-06 16:03:42.612 -07:00 [INF] Now listening on: http://localhost:59362
+2026-04-06 16:03:42.613 -07:00 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-06 16:03:42.613 -07:00 [INF] Hosting environment: Development
+2026-04-06 16:03:42.613 -07:00 [INF] Content root path: /Users/christopher.wilson/Documents/repos/TLE-Reporting/src/TleReportingDashboard.Web
+2026-04-06 16:06:31.145 -07:00 [INF] Application is shutting down...

@@ -1,0 +1,193 @@
+@inject ISharingService SharingService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+            <MudIcon Icon="@Icons.Material.Filled.Share" />
+            <MudText Typo="Typo.h6">Share Report</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width: 420px;">
+            @if (!string.IsNullOrWhiteSpace(ReportName))
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    Share "@ReportName" with other users or groups.
+                </MudText>
+            }
+
+            @* Add new share *@
+            <MudStack Row AlignItems="AlignItems.End" Spacing="2">
+                <MudTextField @bind-Value="_newShareEmail" Label="User email or name"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="flex: 1;"
+                              Placeholder="Enter email address..." />
+                <MudSelect T="string" @bind-Value="_newSharePermission" Label="Permission"
+                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Style="max-width: 130px;" Dense>
+                    <MudSelectItem Value="@("viewer")">Viewer</MudSelectItem>
+                    <MudSelectItem Value="@("editor")">Editor</MudSelectItem>
+                </MudSelect>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Medium"
+                           OnClick="AddShare"
+                           Disabled="@(string.IsNullOrWhiteSpace(_newShareEmail) || _isSaving)">
+                    @if (_isSaving)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    }
+                    Share
+                </MudButton>
+            </MudStack>
+
+            <MudDivider />
+
+            @if (_isLoadingShares)
+            {
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+            }
+
+            @* Current shares list *@
+            @if (_shares.Any())
+            {
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Shared with</MudText>
+                <MudList T="ReportShare" Dense>
+                    @foreach (var share in _shares)
+                    {
+                        <MudListItem T="ReportShare">
+                            <MudStack Row AlignItems="AlignItems.Center"
+                                       Justify="Justify.SpaceBetween" Style="width: 100%;">
+                                <MudStack Spacing="0">
+                                    <MudText Typo="Typo.body2">@share.SharedWithId</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @share.SharedWithType
+                                        &mdash;
+                                        @(share.Permission == "editor" ? "Can edit" : "View only")
+                                    </MudText>
+                                </MudStack>
+                                <MudIconButton Icon="@Icons.Material.Filled.PersonRemove"
+                                               Size="Size.Small" Color="Color.Error"
+                                               OnClick="() => RevokeShare(share)"
+                                               title="Revoke access" />
+                            </MudStack>
+                        </MudListItem>
+                    }
+                </MudList>
+            }
+            else if (!_isLoadingShares)
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-2">
+                    This report is not shared with anyone yet.
+                </MudText>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Done" Variant="Variant.Filled" Color="Color.Primary">
+            Done
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public Guid ReportId { get; set; }
+    [Parameter] public string ReportName { get; set; } = string.Empty;
+    [Parameter] public string CurrentUserId { get; set; } = string.Empty;
+    [Parameter] public List<ReportShare> ExistingShares { get; set; } = new();
+
+    private List<ReportShare> _shares = new();
+    private string _newShareEmail = string.Empty;
+    private string _newSharePermission = "viewer";
+    private bool _isLoadingShares;
+    private bool _isSaving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (ExistingShares.Any())
+        {
+            _shares = ExistingShares.Select(s => new ReportShare
+            {
+                Id = s.Id,
+                ReportId = s.ReportId,
+                SharedWithId = s.SharedWithId,
+                SharedWithType = s.SharedWithType,
+                Permission = s.Permission,
+                SharedById = s.SharedById,
+                CreatedAt = s.CreatedAt
+            }).ToList();
+        }
+        else
+        {
+            _isLoadingShares = true;
+            try
+            {
+                _shares = await SharingService.GetSharesForReportAsync(ReportId);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Failed to load shares: {ex.Message}", Severity.Error);
+            }
+            finally
+            {
+                _isLoadingShares = false;
+            }
+        }
+    }
+
+    private async Task AddShare()
+    {
+        if (string.IsNullOrWhiteSpace(_newShareEmail)) return;
+
+        // Prevent duplicate shares for the same user
+        if (_shares.Any(s => s.SharedWithId.Equals(_newShareEmail, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        _isSaving = true;
+        try
+        {
+            var share = new ReportShare
+            {
+                Id = Guid.NewGuid(),
+                ReportId = ReportId,
+                SharedWithId = _newShareEmail.Trim(),
+                SharedWithType = "user",
+                Permission = _newSharePermission,
+                SharedById = CurrentUserId,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            var saved = await SharingService.ShareReportAsync(share);
+            _shares.Add(saved);
+            _newShareEmail = string.Empty;
+            _newSharePermission = "viewer";
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Share failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task RevokeShare(ReportShare share)
+    {
+        try
+        {
+            await SharingService.RevokeShareAsync(share.Id, CurrentUserId);
+            _shares.Remove(share);
+            Snackbar.Add("Share revoked.", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Revoke failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void Done()
+    {
+        MudDialog?.Close(DialogResult.Ok(_shares));
+    }
+}

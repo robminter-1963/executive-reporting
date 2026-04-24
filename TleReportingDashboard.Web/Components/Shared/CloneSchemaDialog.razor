@@ -1,0 +1,65 @@
+@using MudBlazor
+@using TleReportingDashboard.Web.Services
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 440px;">
+            <MudText Typo="Typo.body2">
+                Clone fields, joins, lookups, and custom filters from another
+                <strong>@TargetConnection.ConnectionType</strong> connection into
+                <strong>@TargetConnection.Name</strong>.
+            </MudText>
+
+            <MudSelect T="Guid?" @bind-Value="_sourceId" Label="Copy from"
+                       Variant="Variant.Outlined" Margin="Margin.Dense">
+                @foreach (var src in SameTypeSources)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)src.Id)">@src.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (TargetHasSchema)
+            {
+                <MudAlert Severity="Severity.Warning" Dense>
+                    <strong>@TargetConnection.Name</strong> already has a schema.
+                    Cloning will <strong>overwrite</strong> everything currently configured on it.
+                </MudAlert>
+                <MudCheckBox T="bool" @bind-Value="_confirmOverwrite"
+                             Label="Yes, replace the existing schema"
+                             Color="Color.Warning" />
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="!CanSubmit()" OnClick="Submit">
+            Clone
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public CompanyConnectionRecord TargetConnection { get; set; } = default!;
+    [Parameter] public List<CompanyConnectionRecord> SameTypeSources { get; set; } = new();
+    [Parameter] public bool TargetHasSchema { get; set; }
+
+    private Guid? _sourceId;
+    private bool _confirmOverwrite;
+
+    private bool CanSubmit()
+    {
+        if (_sourceId is null) return false;
+        if (TargetHasSchema && !_confirmOverwrite) return false;
+        return true;
+    }
+
+    private void Submit()
+    {
+        if (!CanSubmit() || _sourceId is not Guid id) return;
+        MudDialog.Close(DialogResult.Ok(id));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

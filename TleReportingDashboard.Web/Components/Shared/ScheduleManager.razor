@@ -1,0 +1,294 @@
+@inject IScheduleService ScheduleService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@using TleReportingDashboard.Web.Services
+
+<MudPaper Elevation="0" Style="border: 1px solid #DADCE0; border-radius: 4px;" Class="pa-3">
+    <MudStack Spacing="2">
+        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Schedules</MudText>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Add" OnClick="OpenNewScheduleDialog">
+                New Schedule
+            </MudButton>
+        </MudStack>
+
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate Color="Color.Primary" />
+        }
+        else if (_schedules.Any())
+        {
+            <MudList T="ReportSchedule" Dense>
+                @foreach (var schedule in _schedules)
+                {
+                    <MudListItem T="ReportSchedule">
+                        <MudStack Row AlignItems="AlignItems.Center"
+                                   Justify="Justify.SpaceBetween" Style="width: 100%;">
+                            @* Schedule info *@
+                            <MudStack Spacing="0" Style="flex: 1; min-width: 0;">
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                    @schedule.Subject
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @DescribeTrigger(schedule)
+                                </MudText>
+                                @if (!string.IsNullOrWhiteSpace(schedule.Recipients))
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                             Style="overflow-wrap: anywhere;"
+                                             title="@FormatAddresses(schedule.Recipients)">
+                                        To: @FormatAddresses(schedule.Recipients)
+                                    </MudText>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(schedule.CcRecipients))
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                             Style="overflow-wrap: anywhere;"
+                                             title="@FormatAddresses(schedule.CcRecipients)">
+                                        Cc: @FormatAddresses(schedule.CcRecipients)
+                                    </MudText>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(schedule.BccRecipients))
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                             Style="overflow-wrap: anywhere;"
+                                             title="@FormatAddresses(schedule.BccRecipients)">
+                                        Bcc: @FormatAddresses(schedule.BccRecipients)
+                                    </MudText>
+                                }
+                                @if (schedule.LastRunAt.HasValue)
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        Last run: @schedule.LastRunAt.Value.ToString("MMM dd, yyyy HH:mm")
+                                    </MudText>
+                                }
+                            </MudStack>
+
+                            @* Status badge *@
+                            @if (schedule.LastRunStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)
+                            {
+                                <MudTooltip Text="@($"Failed: {schedule.LastRunStatus} ({schedule.ConsecutiveFailures} consecutive failures)")">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Error"
+                                             Variant="Variant.Filled">
+                                        Failed
+                                    </MudChip>
+                                </MudTooltip>
+                            }
+                            else if (!schedule.IsActive)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning"
+                                         Variant="Variant.Outlined">
+                                    Paused
+                                </MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                                         Variant="Variant.Outlined">
+                                    Active
+                                </MudChip>
+                            }
+
+                            @* Action buttons *@
+                            <MudStack Row Spacing="0">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                               OnClick="() => OpenEditScheduleDialog(schedule)"
+                                               title="Edit schedule" />
+                                @if (schedule.IsActive)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Pause" Size="Size.Small"
+                                                   OnClick="() => TogglePause(schedule)"
+                                                   title="Pause schedule" />
+                                }
+                                else
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                                   Color="Color.Success"
+                                                   OnClick="() => TogglePause(schedule)"
+                                                   title="Resume schedule" />
+                                }
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="() => ConfirmDelete(schedule)"
+                                               title="Delete schedule" />
+                            </MudStack>
+                        </MudStack>
+                    </MudListItem>
+                }
+            </MudList>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-2">
+                No schedules configured for this report.
+            </MudText>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter] public Guid ReportId { get; set; }
+    [Parameter] public string UserId { get; set; } = string.Empty;
+    [Parameter] public string UserEmail { get; set; } = string.Empty;
+
+    private List<ReportSchedule> _schedules = new();
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadSchedules();
+    }
+
+    private async Task LoadSchedules()
+    {
+        _loading = true;
+        try
+        {
+            _schedules = await ScheduleService.GetSchedulesForReportAsync(ReportId);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load schedules: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OpenNewScheduleDialog()
+    {
+        var parameters = new DialogParameters<ScheduleDialog>
+        {
+            { x => x.ReportId, ReportId },
+            { x => x.UserId, UserId },
+            { x => x.UserEmail, UserEmail }
+        };
+
+        var dialog = await DialogService.ShowAsync<ScheduleDialog>("New Schedule", parameters);
+        var result = await dialog.Result;
+
+        if (result is not null && !result.Canceled && result.Data is ReportSchedule newSchedule)
+        {
+            try
+            {
+                newSchedule.OwnerId = UserId;
+                newSchedule.OwnerEmail = UserEmail;
+                await ScheduleService.CreateScheduleAsync(newSchedule);
+                await LoadSchedules();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Failed to create schedule: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    private async Task OpenEditScheduleDialog(ReportSchedule schedule)
+    {
+        var parameters = new DialogParameters<ScheduleDialog>
+        {
+            { x => x.ReportId, ReportId },
+            { x => x.UserId, schedule.OwnerId },
+            { x => x.UserEmail, schedule.OwnerEmail },
+            { x => x.ExistingSchedule, schedule }
+        };
+
+        var dialog = await DialogService.ShowAsync<ScheduleDialog>("Edit Schedule", parameters);
+        var result = await dialog.Result;
+
+        if (result is not null && !result.Canceled && result.Data is ReportSchedule updated)
+        {
+            try
+            {
+                await ScheduleService.UpdateScheduleAsync(updated);
+                await LoadSchedules();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Failed to update schedule: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    private async Task TogglePause(ReportSchedule schedule)
+    {
+        try
+        {
+            schedule.IsActive = !schedule.IsActive;
+            await ScheduleService.UpdateScheduleAsync(schedule);
+            var action = schedule.IsActive ? "resumed" : "paused";
+            Snackbar.Add($"Schedule {action}.", Severity.Info);
+            await LoadSchedules();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to update schedule: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ConfirmDelete(ReportSchedule schedule)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Delete Schedule",
+            $"Are you sure you want to delete the schedule \"{schedule.Subject}\"?",
+            yesText: "Delete", cancelText: "Cancel");
+
+        if (confirmed == true)
+        {
+            try
+            {
+                await ScheduleService.DeleteScheduleAsync(schedule.Id, UserId);
+                await LoadSchedules();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Failed to delete schedule: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    private static string DescribeTrigger(ReportSchedule schedule)
+    {
+        // Prefer the rich pattern when present; fall back to cron for legacy rows.
+        if (!string.IsNullOrWhiteSpace(schedule.SchedulePatternJson))
+        {
+            var pattern = SchedulePattern.FromJson(schedule.SchedulePatternJson);
+            var text = ScheduleCron.Describe(pattern);
+            if (schedule.StartDate.HasValue)
+                text += $" — starts {schedule.StartDate:MMM d, yyyy}";
+            if (schedule.EndDate.HasValue)
+                text += $", ends {schedule.EndDate:MMM d, yyyy}";
+            return text;
+        }
+        return FormatCronFallback(schedule.CronExpression);
+    }
+
+    // Normalize a mixed ; or , separated list to a clean comma-space string.
+    private static string FormatAddresses(string? list)
+    {
+        if (string.IsNullOrWhiteSpace(list)) return string.Empty;
+        var parts = list.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return string.Join(", ", parts);
+    }
+
+    private static string FormatCronFallback(string cron)
+    {
+        if (string.IsNullOrWhiteSpace(cron)) return "Unknown";
+        var parts = cron.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 5) return cron;
+
+        string timeStr = "";
+        if (int.TryParse(parts[1], out var hour) && int.TryParse(parts[0], out var minute))
+            timeStr = DateTime.Today.Add(new TimeSpan(hour, minute, 0)).ToString("h:mm tt");
+        else
+            timeStr = $"{parts[1]}:{parts[0]}";
+
+        if (parts[4] != "*" && int.TryParse(parts[4], out var dow))
+            return $"Weekly on {((DayOfWeek)dow)} at {timeStr}";
+        if (parts[2] != "*" && int.TryParse(parts[2], out var dom))
+            return $"Monthly on day {dom} at {timeStr}";
+        return $"Daily at {timeStr}";
+    }
+}

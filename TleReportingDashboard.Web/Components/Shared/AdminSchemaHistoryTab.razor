@@ -1,0 +1,349 @@
+@inject ISchemaConfigHistoryService HistorySvc
+@inject ICompanyRegistry CompanyRegistry
+@inject ICompanyConnectionAdminService ConnectionAdminSvc
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+@* Admin-only view of EMPOWER.RPT_schema_config_history. One row per
+   Schema Builder save, kept forever by default. This tab lets admins
+   filter by connection + date range, preview a single blob, and purge
+   old rows either by multi-select or by the active date filter. *@
+<MudStack Spacing="3" Class="pa-2">
+    <MudText Typo="Typo.body2" Color="Color.Secondary" Style="max-width: 820px;">
+        Every save in Schema Builder writes a row here. Purge safely by
+        date range (keeps the N most-recent) or multi-select specific rows.
+        Deletions are immediate and not reversible.
+    </MudText>
+
+    @* ── Filter bar ───────────────────────────────────────────────────── *@
+    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudStack Row AlignItems="AlignItems.End" Spacing="2" Wrap="Wrap.Wrap">
+            <MudSelect T="Guid?" Value="_filterConnectionId" ValueChanged="OnConnectionChanged"
+                       ToStringFunc="@ConnectionToLabel"
+                       Label="Connection" Variant="Variant.Outlined" Margin="Margin.Dense"
+                       Style="min-width: 280px;">
+                <MudSelectItem T="Guid?" Value="@((Guid?)null)">All connections</MudSelectItem>
+                @foreach (var c in _allConnections.OrderBy(x => ConnectionToLabel(x.Id), StringComparer.OrdinalIgnoreCase))
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@ConnectionToLabel(c.Id)</MudSelectItem>
+                }
+            </MudSelect>
+            <MudDatePicker Label="From" @bind-Date="_filterFrom" Clearable
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;" />
+            <MudDatePicker Label="To" @bind-Date="_filterTo" Clearable
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.FilterList"
+                       OnClick="ReloadAsync" Disabled="@_loading">
+                Apply
+            </MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Default"
+                       StartIcon="@Icons.Material.Filled.Clear"
+                       OnClick="ClearFilters" Disabled="@_loading">
+                Clear
+            </MudButton>
+        </MudStack>
+    </MudPaper>
+
+    @* ── Actions ─────────────────────────────────────────────────────── *@
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+        <MudText Typo="Typo.body2" Color="Color.Secondary">
+            @_rows.Count row(s) · @_selected.Count selected
+        </MudText>
+        <MudSpacer />
+        <MudTooltip Text="Delete only the rows you've checked in the table">
+            <MudButton Variant="Variant.Outlined" Color="Color.Error"
+                       StartIcon="@Icons.Material.Filled.DeleteSweep"
+                       Disabled="@(_selected.Count == 0 || _loading)"
+                       OnClick="DeleteSelectedAsync">
+                Delete Selected (@_selected.Count)
+            </MudButton>
+        </MudTooltip>
+        <MudTooltip Text="Delete every row matching the current filter (connection + date range)">
+            <MudButton Variant="Variant.Filled" Color="Color.Error"
+                       StartIcon="@Icons.Material.Filled.DeleteForever"
+                       Disabled="@(!_filterFrom.HasValue || !_filterTo.HasValue || _loading)"
+                       OnClick="DeleteByDateRangeAsync">
+                Delete by Date Range
+            </MudButton>
+        </MudTooltip>
+    </MudStack>
+
+    @* ── List ────────────────────────────────────────────────────────── *@
+    @if (_loading)
+    {
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+    }
+    else if (_rows.Count == 0)
+    {
+        <MudPaper Elevation="0" Class="pa-6 d-flex flex-column align-center"
+                  Style="border: 1px dashed #DADCE0;">
+            <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Large" Color="Color.Default" />
+            <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                No history rows match the current filters.
+            </MudText>
+        </MudPaper>
+    }
+    else
+    {
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudTable Items="_rows" Dense Hover Striped FixedHeader
+                      T="SchemaConfigHistoryRecord"
+                      Height="max(300px, calc(100vh - 460px))"
+                      RowsPerPage="25">
+                <HeaderContent>
+                    <MudTh Style="width: 48px; text-align: center;">
+                        <MudCheckBox T="bool" Value="@AllSelectedOnPage"
+                                     ValueChanged="OnToggleAll" Dense />
+                    </MudTh>
+                    <MudTh>Saved</MudTh>
+                    <MudTh>Company</MudTh>
+                    <MudTh>Connection</MudTh>
+                    <MudTh>Updated By</MudTh>
+                    <MudTh Style="text-align: right;">Size</MudTh>
+                    <MudTh Style="width: 72px;"></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="text-align: center;">
+                        <MudCheckBox T="bool" Value="@_selected.Contains(context.HistoryId)"
+                                     ValueChanged="@(v => OnToggleRow(context.HistoryId, v))"
+                                     Dense />
+                    </MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.body2">
+                            @context.UpdatedAt.ToLocalTime().ToString("MMM d, yyyy h:mm tt")
+                        </MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@(context.CompanyName ?? "—")</MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.body2">@(context.ConnectionName ?? "—")</MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.caption">@(context.UpdatedBy ?? "—")</MudText>
+                    </MudTd>
+                    <MudTd Style="text-align: right;">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@FormatSize(context.JsonSize)</MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudTooltip Text="Preview JSON">
+                            <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                                           OnClick="@(() => PreviewAsync(context))" />
+                        </MudTooltip>
+                    </MudTd>
+                </RowTemplate>
+                <PagerContent>
+                    <MudTablePager PageSizeOptions="new[] { 25, 50, 100, 200 }" />
+                </PagerContent>
+            </MudTable>
+        </MudPaper>
+    }
+</MudStack>
+
+@code {
+    private List<SchemaConfigHistoryRecord> _rows = new();
+    // Rows the admin has ticked in the list. Tracked by history_id so it
+    // survives table re-paints (new filter apply, sort, etc.). Selections
+    // that fall out of the filter result are pruned on reload.
+    private HashSet<long> _selected = new();
+    private List<CompanyConnectionRecord> _allConnections = new();
+    private Guid? _filterConnectionId;
+    private DateTime? _filterFrom;
+    private DateTime? _filterTo;
+    private bool _loading = true;
+
+    // True when every row currently rendered is in the selection set.
+    // Flips the header checkbox to the "all on" state without claiming
+    // rows outside the current filter/page.
+    private bool AllSelectedOnPage =>
+        _rows.Count > 0 && _rows.All(r => _selected.Contains(r.HistoryId));
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadConnectionsAsync();
+        await ReloadAsync();
+    }
+
+    private async Task LoadConnectionsAsync()
+    {
+        // Pull connections across every active company so the filter can
+        // narrow to any connection in the registry, regardless of which
+        // company scope the user is currently viewing.
+        _allConnections = new();
+        try
+        {
+            var companies = await CompanyRegistry.GetActiveAsync();
+            foreach (var c in companies)
+            {
+                var conns = await ConnectionAdminSvc.GetByCompanyAsync(c.Id);
+                _allConnections.AddRange(conns.Where(cn => cn.IsActive));
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Couldn't load connections for the filter: {ex.Message}", Severity.Warning);
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // Expand the "to" date to include the entire selected day —
+            // otherwise picking 2026-04-22 as the upper bound would miss
+            // rows saved later in the same day.
+            var toInclusive = _filterTo.HasValue
+                ? _filterTo.Value.Date.AddDays(1).AddTicks(-1)
+                : (DateTime?)null;
+
+            _rows = await HistorySvc.GetAsync(
+                _filterConnectionId,
+                _filterFrom?.Date,
+                toInclusive);
+
+            // Drop any selected ids that are no longer in the visible list.
+            _selected.IntersectWith(_rows.Select(r => r.HistoryId));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load history: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnConnectionChanged(Guid? id)
+    {
+        _filterConnectionId = id;
+        // Wait for Apply — don't reload on every dropdown change. Gives the
+        // admin a chance to adjust dates before the next trip.
+    }
+
+    private void ClearFilters()
+    {
+        _filterConnectionId = null;
+        _filterFrom = null;
+        _filterTo = null;
+        _ = ReloadAsync();
+    }
+
+    private void OnToggleRow(long id, bool isChecked)
+    {
+        if (isChecked) _selected.Add(id);
+        else _selected.Remove(id);
+    }
+
+    private void OnToggleAll(bool isChecked)
+    {
+        if (isChecked)
+        {
+            foreach (var r in _rows) _selected.Add(r.HistoryId);
+        }
+        else
+        {
+            foreach (var r in _rows) _selected.Remove(r.HistoryId);
+        }
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        if (_selected.Count == 0) return;
+        var n = _selected.Count;
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            title: "Delete selected history rows",
+            message: $"Permanently delete {n} schema history row{(n == 1 ? "" : "s")}? This cannot be undone.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+        if (confirm != true) return;
+
+        try
+        {
+            var ids = _selected.ToList();
+            var deleted = await HistorySvc.DeleteAsync(ids);
+            _selected.Clear();
+            await ReloadAsync();
+            Snackbar.Add($"Deleted {deleted} history row{(deleted == 1 ? "" : "s")}.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DeleteByDateRangeAsync()
+    {
+        if (!_filterFrom.HasValue || !_filterTo.HasValue) return;
+
+        var from = _filterFrom.Value.Date;
+        var to = _filterTo.Value.Date.AddDays(1).AddTicks(-1);
+        var connNote = _filterConnectionId is Guid cid
+            ? $" for {ConnectionToLabel(cid)}"
+            : " across every connection";
+
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            title: "Delete by date range",
+            message: $"Permanently delete every history row saved between " +
+                     $"{from:MMM d, yyyy} and {_filterTo.Value:MMM d, yyyy}{connNote}? " +
+                     $"This cannot be undone.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+        if (confirm != true) return;
+
+        try
+        {
+            var deleted = await HistorySvc.DeleteByDateRangeAsync(_filterConnectionId, from, to);
+            _selected.Clear();
+            await ReloadAsync();
+            Snackbar.Add($"Deleted {deleted} history row{(deleted == 1 ? "" : "s")}.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task PreviewAsync(SchemaConfigHistoryRecord row)
+    {
+        // Wrap GetJsonAsync in a Func<long, Task<string?>> so the dialog
+        // parameter type matches exactly — method-group conversion fails
+        // because the service method has an extra CancellationToken param.
+        Func<long, Task<string?>> fetch = id => HistorySvc.GetJsonAsync(id);
+        var parameters = new DialogParameters<SchemaHistoryPreviewDialog>
+        {
+            { x => x.HistoryId, row.HistoryId },
+            { x => x.SavedAt, row.UpdatedAt },
+            { x => x.UpdatedBy, row.UpdatedBy },
+            { x => x.FetchJsonAsync, fetch }
+        };
+        await DialogService.ShowAsync<SchemaHistoryPreviewDialog>(
+            title: "Schema history preview",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+    }
+
+    // Connection label resolver. Shows "Company · Name" when the connection
+    // is in the cache, falls back to the guid so the dropdown is never blank.
+    private string ConnectionToLabel(Guid? id)
+    {
+        if (id is null) return "All connections";
+        var conn = _allConnections.FirstOrDefault(x => x.Id == id);
+        if (conn is null) return id.Value.ToString();
+        // Company name isn't on the record; callers typically don't need it
+        // because the table column shows it. Keep the dropdown terse.
+        return conn.Name + (conn.IsDefault ? " (default)" : "");
+    }
+
+    private static string FormatSize(int chars)
+    {
+        // json is NVARCHAR so chars ≈ bytes / 2. Surface in KB for readability.
+        if (chars <= 0) return "—";
+        var kb = chars / 1024.0;
+        return kb < 1 ? $"{chars} chars" : $"{kb:N1} KB";
+    }
+}

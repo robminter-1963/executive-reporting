@@ -1,0 +1,206 @@
+<MudStack Class="pa-2" Spacing="1">
+    @if (TemplateLocked)
+    {
+        <MudPaper Elevation="0" Class="pa-2"
+                  Style="background: #FEF7E0; border: 1px solid #F9AB00; border-radius: 4px;">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                <MudIcon Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                         Style="color: #F9AB00; font-size: 16px;" />
+                <MudText Typo="Typo.caption" Style="color: #5F6368; line-height: 1.2;">
+                    Use the eye icon to show or hide columns.
+                </MudText>
+            </MudStack>
+        </MudPaper>
+    }
+
+    <MudTextField @bind-Value="_searchText" Placeholder="Search fields..."
+                  Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                  DebounceInterval="200" Style="font-size: 0.8rem;" />
+
+    @* 158px = 48px MudAppBar + ~110px for the search field, padding, and (when shown) banner. *@
+    <MudStack Spacing="0" Style="overflow-y: auto; max-height: calc(100vh - 158px);">
+        @foreach (var domain in FilteredDomains)
+        {
+            <MudExpansionPanels Elevation="0" Dense>
+                <MudExpansionPanel Style="background: transparent; margin: 0; padding: 0;">
+                    <TitleContent>
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                            <MudText Style="font-size: 0.75rem; font-weight: 600; color: #5F6368; text-transform: uppercase; letter-spacing: 0.5px;">
+                                @domain.Name
+                            </MudText>
+                            <MudText Style="font-size: 0.65rem; color: #9AA0A6;">(@domain.Fields.Count)</MudText>
+                        </MudStack>
+                    </TitleContent>
+                    <ChildContent>
+                        <div style="display: flex; flex-direction: column; gap: 0;">
+                        @foreach (var field in GetFilteredFields(domain))
+                        {
+                            var isSelected = SelectedFieldIds.Contains(field.Id);
+                            var isDimmed = !string.IsNullOrEmpty(field.RolesRequired);
+                            <MudTooltip Placement="Placement.Right" Arrow="true"
+                                       Style="max-width: 300px;">
+                                <TooltipContent>
+                                    <div style="text-align: left; font-size: 0.8rem;">
+                                        <div style="font-weight: 600; margin-bottom: 4px;">@field.Label</div>
+                                        @if (!string.IsNullOrEmpty(field.Description))
+                                        {
+                                            <div style="color: #ccc; margin-bottom: 4px;">@field.Description</div>
+                                        }
+                                        <div style="display: flex; gap: 12px; font-size: 0.7rem; color: #aaa;">
+                                            <span>Type: @field.DataType</span>
+                                            <span>@field.FieldType</span>
+                                        </div>
+                                        @if (!string.IsNullOrEmpty(field.RolesRequired))
+                                        {
+                                            <div style="font-size: 0.7rem; color: #F9AB00; margin-top: 4px;">
+                                                Requires @field.RolesRequired — data will be redacted
+                                            </div>
+                                        }
+                                    </div>
+                                </TooltipContent>
+                                <ChildContent>
+                            <div style="@GetFieldStyle(isSelected)" class="field-row"
+                                 @onclick="() => ToggleField(field.Id, isSelected)">
+
+                                @* Selection / visibility indicator *@
+                                @if (TemplateLocked)
+                                {
+                                    var hidden = HiddenFieldIds.Contains(field.Id, StringComparer.OrdinalIgnoreCase);
+                                    <MudIcon Icon="@(hidden ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                             Size="Size.Small"
+                                             Style="@(hidden ? "color: #9AA0A6; font-size: 16px;" : "color: #1A73E8; font-size: 16px;")" />
+                                }
+                                else
+                                {
+                                    <MudIcon Icon="@(isSelected ? Icons.Material.Filled.CheckBox : Icons.Material.Filled.CheckBoxOutlineBlank)"
+                                             Size="Size.Small"
+                                             Style="@(isSelected ? "color: #1A73E8; font-size: 16px;" : "color: #DADCE0; font-size: 16px;")" />
+                                }
+
+                                @* Label *@
+                                <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    @if (!string.IsNullOrWhiteSpace(_searchText))
+                                    {
+                                        <MudHighlighter Text="@field.Label" HighlightedText="@_searchText"
+                                                        Style="font-size: 0.8rem;" />
+                                    }
+                                    else
+                                    {
+                                        <span style="font-size: 0.8rem;">@field.Label</span>
+                                    }
+                                </span>
+
+                                @* Role lock *@
+                                @if (isDimmed)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small"
+                                             Style="color: #9AA0A6; font-size: 14px;" />
+                                }
+
+                                @* Type badge *@
+                                <span style="font-size: 0.6rem; padding: 1px 4px; border-radius: 3px; white-space: nowrap;
+                                             @(field.FieldType.Equals("Measure", StringComparison.OrdinalIgnoreCase)
+                                                 ? "background: #FEF7E0; color: #F9AB00;"
+                                                 : "background: #E8F0FE; color: #1A73E8;")">
+                                    @(field.FieldType.Equals("Measure", StringComparison.OrdinalIgnoreCase) ? "Σ" : "Dim")
+                                </span>
+                            </div>
+                                </ChildContent>
+                            </MudTooltip>
+                        }
+                        </div>
+                    </ChildContent>
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+    </MudStack>
+</MudStack>
+
+<style>
+    .field-row {
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 6px;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: background 0.1s;
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .field-row:hover {
+        background: #F1F3F4 !important;
+    }
+</style>
+
+@code {
+    [Parameter] public List<DomainGroup> Domains { get; set; } = new();
+    [Parameter] public List<string> SelectedFieldIds { get; set; } = new();
+    [Parameter] public EventCallback<string> OnFieldAdded { get; set; }
+    [Parameter] public EventCallback<string> OnFieldRemoved { get; set; }
+
+    /// <summary>When true, the picker only shows template fields and the click toggles
+    /// visibility (via OnFieldVisibilityToggled) instead of adding/removing.</summary>
+    [Parameter] public bool TemplateLocked { get; set; }
+    [Parameter] public string? TemplateName { get; set; }
+    [Parameter] public List<string> HiddenFieldIds { get; set; } = new();
+    [Parameter] public EventCallback<string> OnFieldVisibilityToggled { get; set; }
+
+    private string _searchText = string.Empty;
+
+    private IEnumerable<DomainGroup> FilteredDomains
+    {
+        get
+        {
+            var domains = TemplateLocked
+                ? Domains.Where(d => d.Fields.Any(f => SelectedFieldIds.Contains(f.Id, StringComparer.OrdinalIgnoreCase)))
+                : Domains;
+
+            if (string.IsNullOrWhiteSpace(_searchText)) return domains;
+            return domains.Where(d => d.Fields.Any(f =>
+                (!TemplateLocked || SelectedFieldIds.Contains(f.Id, StringComparer.OrdinalIgnoreCase)) &&
+                (f.Label.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
+                 f.Id.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
+                 (!string.IsNullOrEmpty(f.Description) &&
+                  f.Description.Contains(_searchText, StringComparison.OrdinalIgnoreCase)))));
+        }
+    }
+
+    private IEnumerable<FieldDefinition> GetFilteredFields(DomainGroup domain)
+    {
+        IEnumerable<FieldDefinition> fields = domain.Fields;
+
+        if (TemplateLocked)
+            fields = fields.Where(f => SelectedFieldIds.Contains(f.Id, StringComparer.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+            fields = fields.Where(f =>
+                f.Label.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
+                f.Id.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(f.Description) &&
+                 f.Description.Contains(_searchText, StringComparison.OrdinalIgnoreCase)));
+
+        return fields.OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string GetFieldStyle(bool isSelected) =>
+        isSelected
+            ? "background: #E8F0FE;"
+            : "";
+
+    private async Task ToggleField(string fieldId, bool isSelected)
+    {
+        if (TemplateLocked)
+        {
+            await OnFieldVisibilityToggled.InvokeAsync(fieldId);
+            return;
+        }
+
+        if (isSelected)
+            await OnFieldRemoved.InvokeAsync(fieldId);
+        else
+            await OnFieldAdded.InvokeAsync(fieldId);
+    }
+}

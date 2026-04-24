@@ -1,0 +1,196 @@
+<MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;" Class="pa-4">
+    <MudStack Spacing="3">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudToggleGroup T="ChartType" @bind-Value="_chartType" @bind-Value:after="BuildChart" Outlined Size="Size.Small">
+                <MudToggleItem T="ChartType" Value="ChartType.Bar" Text="Bar" />
+                <MudToggleItem T="ChartType" Value="ChartType.Line" Text="Line" />
+                <MudToggleItem T="ChartType" Value="ChartType.Pie" Text="Pie" />
+            </MudToggleGroup>
+
+            <MudSelect T="string" @bind-Value="_xField" @bind-Value:after="BuildChart" Label="X-Axis" Variant="Variant.Outlined"
+                       Margin="Margin.Dense" Dense Style="max-width: 200px;">
+                @foreach (var col in AvailableColumns)
+                {
+                    <MudSelectItem Value="@col.FieldId">@col.Label</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSelect T="string" @bind-Value="_yField" @bind-Value:after="BuildChart" Label="Y-Axis" Variant="Variant.Outlined"
+                       Margin="Margin.Dense" Dense Style="max-width: 200px;">
+                @foreach (var col in NumericColumns)
+                {
+                    <MudSelectItem Value="@col.FieldId">@col.Label</MudSelectItem>
+                }
+            </MudSelect>
+        </MudStack>
+
+        @if (CanRenderChart)
+        {
+            @if (_chartType == ChartType.Pie)
+            {
+                <MudChart T="double" ChartType="_chartType" ChartSeries="_chartSeries"
+                          ChartLabels="_chartLabels" Width="100%" Height="400px"
+                          ChartOptions="_chartOptions">
+                    <TooltipTemplate>
+                        @{
+                            var idx = Array.IndexOf(_paletteColors, context.Color);
+                            var label = idx >= 0 && idx < _pieValueLabels.Length ? _pieValueLabels[idx] : context.Color;
+                        }
+                        <text style="font-size: 14px; font-weight: 600; fill: white;">@label</text>
+                    </TooltipTemplate>
+                </MudChart>
+            }
+            else
+            {
+                <MudChart T="double" ChartType="_chartType" ChartSeries="_chartSeries"
+                          ChartLabels="_chartLabels" Width="100%" Height="400px"
+                          ChartOptions="_chartOptions" />
+            }
+        }
+        else
+        {
+            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                      Style="border: 1px dashed #DADCE0; min-height: 300px;">
+                <MudIcon Icon="@Icons.Material.Filled.BarChart" Size="Size.Large" Color="Color.Default" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">
+                    Select X and Y axis fields to render a chart.
+                </MudText>
+            </MudPaper>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter] public QueryResponse? Data { get; set; }
+    [Parameter] public List<ColumnMeta> AvailableColumns { get; set; } = new();
+
+    private ChartType _chartType = ChartType.Bar;
+    private string _xField = string.Empty;
+    private string _yField = string.Empty;
+
+    private List<ChartSeries<double>> _chartSeries = new();
+    private string[] _chartLabels = Array.Empty<string>();
+    private string[] _pieValueLabels = Array.Empty<string>();
+    private ChartOptions _chartOptions = new();
+
+    // Default MudBlazor chart palette colors (in order)
+    private static readonly string[] _paletteColors =
+    {
+        "#2979FF", "#1DE9B6", "#FFC107", "#FF1744", "#651FFF", "#00B8D4",
+        "#00C853", "#FFAB00", "#FF3D00", "#3D5AFE", "#00E5FF", "#76FF03",
+        "#FFEA00", "#FF6D00", "#D500F9", "#1A237E", "#F50057", "#7C4DFF"
+    };
+
+    private IEnumerable<ColumnMeta> NumericColumns =>
+        AvailableColumns.Where(c =>
+            c.DataType.Equals("currency", StringComparison.OrdinalIgnoreCase) ||
+            c.DataType.Equals("money", StringComparison.OrdinalIgnoreCase) ||
+            c.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
+            c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase) ||
+            c.DataType.Equals("decimal", StringComparison.OrdinalIgnoreCase) ||
+            c.DataType.Equals("float", StringComparison.OrdinalIgnoreCase) ||
+            c.DataType.Equals("double", StringComparison.OrdinalIgnoreCase) ||
+            c.DataType.Equals("numeric", StringComparison.OrdinalIgnoreCase) ||
+            c.DataType.Equals("percent", StringComparison.OrdinalIgnoreCase) ||
+            c.DataType.Equals("percentage", StringComparison.OrdinalIgnoreCase));
+
+    private bool CanRenderChart =>
+        Data is not null && Data.Rows.Any() &&
+        !string.IsNullOrEmpty(_xField) && !string.IsNullOrEmpty(_yField);
+
+    protected override void OnParametersSet()
+    {
+        BuildChart();
+    }
+
+    private void BuildChart()
+    {
+        if (!CanRenderChart)
+        {
+            _chartSeries = new();
+            _chartLabels = Array.Empty<string>();
+            return;
+        }
+
+        var yCol = AvailableColumns.FirstOrDefault(c => c.FieldId == _yField);
+        var isAvgType = yCol is not null && (
+            yCol.DataType.Equals("percent", StringComparison.OrdinalIgnoreCase) ||
+            yCol.DataType.Equals("percentage", StringComparison.OrdinalIgnoreCase));
+
+        _chartOptions = new ChartOptions
+        {
+            ChartPalette = _paletteColors
+        };
+
+        var xCol = AvailableColumns.FirstOrDefault(c => c.FieldId == _xField);
+        var customSort = xCol?.ValueSortOrder;
+
+        var groupedRaw = Data!.Rows
+            .GroupBy(r => r.TryGetValue(_xField, out var v) ? FormatLabel(v) : "(empty)")
+            .Select(g =>
+            {
+                var values = g
+                    .Select(r => r.TryGetValue(_yField, out var v) ? v : null)
+                    .Where(v => v is not null)
+                    .Select(v =>
+                    {
+                        if (v is double d) return d;
+                        if (v is decimal dec) return (double)dec;
+                        if (v is int i) return (double)i;
+                        if (v is long l) return (double)l;
+                        if (double.TryParse(v?.ToString(), out var parsed)) return parsed;
+                        return 0.0;
+                    })
+                    .ToList();
+
+                var agg = !values.Any() ? 0.0 : isAvgType ? values.Average() : values.Sum();
+                return new { Key = g.Key, Value = agg };
+            });
+
+        // Apply custom sort order (e.g. Status) when available, otherwise sort by value descending
+        var sorted = customSort is not null
+            ? groupedRaw.OrderBy(g => customSort.TryGetValue(g.Key, out var rank) ? rank : int.MaxValue)
+            : groupedRaw.OrderByDescending(g => g.Value);
+
+        var grouped = sorted.Take(20).ToDictionary(g => g.Key, g => g.Value);
+
+        var dt = (yCol?.DataType ?? "").ToLowerInvariant();
+        _chartLabels = grouped.Keys.ToArray();
+        _pieValueLabels = grouped.Values.Select(v => FormatYValue(v, dt)).ToArray();
+        var seriesName = yCol?.Label ?? _yField;
+        var tooltipFormat = dt switch
+        {
+            "currency" or "money" => "C0",
+            "percent" or "percentage" => "N3'%'",
+            "integer" or "int" => "N0",
+            "decimal" or "float" or "double" or "numeric" => "N2",
+            _ => "N0"
+        };
+
+        _chartSeries = new List<ChartSeries<double>>
+        {
+            new ChartSeries<double>
+            {
+                Name = seriesName,
+                Data = grouped.Values.ToArray(),
+                TooltipYValueFormat = tooltipFormat
+            }
+        };
+    }
+
+    private static string FormatYValue(double val, string dataType) => dataType switch
+    {
+        "currency" or "money" => val.ToString("C0"),
+        "percent" or "percentage" => val.ToString("N2") + "%",
+        "integer" or "int" => val.ToString("N0"),
+        _ => val.ToString("N2")
+    };
+
+private static string FormatLabel(object? val)
+    {
+        if (val is null) return "(empty)";
+        if (val is DateTime dt) return dt.ToString("MM/dd/yyyy");
+        if (val is DateTimeOffset dto) return dto.ToString("MM/dd/yyyy");
+        return val.ToString() ?? "(empty)";
+    }
+}

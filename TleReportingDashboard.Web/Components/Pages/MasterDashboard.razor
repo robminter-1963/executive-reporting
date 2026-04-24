@@ -1,0 +1,1172 @@
+@page "/master-dashboard/{CompanyCode}"
+@rendermode InteractiveServer
+@inject IMasterDashboardService MasterService
+@inject IReportService ReportService
+@inject ISharingService SharingService
+@inject IQueryService QueryService
+@inject IGridTemplateService GridTemplateService
+@inject IUserPreferenceService PreferenceService
+@inject IUserManagementService UserManagement
+@inject IQueryScopeResolver ScopeResolver
+@inject ICompanyRegistry CompanyRegistry
+@inject IAdminService AdminService
+@inject CurrentCompanyState CurrentCompany
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject IConfiguration Config
+@implements IDisposable
+
+<PageTitle>@(_initialized ? $"{_dashboardTitle} - Executive Reporting Suite" : "Executive Reporting Suite")</PageTitle>
+
+@if (!_initialized)
+{
+    <MudMainContent Style="padding: 16px;">
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center;
+                    min-height: 60vh; gap: 16px;">
+            <img src="loading.gif" alt="Loading…"
+                 style="max-width: 240px; height: auto;" />
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Loading your dashboard…</MudText>
+        </div>
+    </MudMainContent>
+    return;
+}
+
+<MudMainContent Style="padding: 16px 16px 32px 16px; overflow-x: hidden; overflow-y: auto; height: calc(100vh - 48px);">
+    <MudStack Spacing="3">
+        @* ── Header ── *@
+        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                @* Viewers have no business in the Report Library — they can
+                   only consume the dashboard. Editors, Schedulers, and
+                   admins still get the shortcut. *@
+                @if (_userRoleForCompany != UserRoles.Viewer)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                                   OnClick="@(() => Navigation.NavigateTo("/reports"))"
+                                   title="Report Library" />
+                }
+                @if (_logoDataUri is not null)
+                {
+                    @* Gray letterbox background so light-on-transparent
+                       logos (white text on a transparent PNG, low-alpha
+                       exports) stay legible against the page chrome.
+                       Small inset padding keeps the image from touching
+                       the box edges. *@
+                    @* Clickable letterbox when the company has a website_url.
+                       target="_blank" + rel="noopener noreferrer" is the
+                       standard safe outbound pattern (prevents the opened
+                       page from hijacking window.opener). *@
+                    @if (!string.IsNullOrEmpty(_companyWebsiteUrl))
+                    {
+                        <a href="@_companyWebsiteUrl" target="_blank" rel="noopener noreferrer"
+                           title="@_companyWebsiteUrl"
+                           style="background: #A9A9A9; border-radius: 4px;
+                                  padding: 4px 8px; display: inline-flex;
+                                  align-items: center; cursor: pointer;">
+                            <img src="@_logoDataUri" alt=""
+                                 style="height: 36px; max-width: 160px; object-fit: contain;" />
+                        </a>
+                    }
+                    else
+                    {
+                        <div style="background: #A9A9A9; border-radius: 4px;
+                                    padding: 4px 8px; display: inline-flex;
+                                    align-items: center;">
+                            <img src="@_logoDataUri" alt=""
+                                 style="height: 36px; max-width: 160px; object-fit: contain;" />
+                        </div>
+                    }
+                }
+                @if (_editMode)
+                {
+                    <MudFileUpload T="IBrowserFile" Accept=".png,.jpg,.jpeg,.svg,.gif,.webp" FilesChanged="OnLogoUploaded"
+                                   Style="margin: 0;">
+                        <ActivatorContent>
+                            <MudTooltip Text="@(_logoDataUri is not null ? "Change logo" : "Upload logo")" Placement="Placement.Bottom">
+                                <MudIconButton Icon="@Icons.Material.Filled.Image" Size="Size.Small"
+                                               Color="@(_logoDataUri is not null ? Color.Primary : Color.Default)" />
+                            </MudTooltip>
+                        </ActivatorContent>
+                    </MudFileUpload>
+                    @if (_logoDataUri is not null)
+                    {
+                        <MudTooltip Text="Remove logo" Placement="Placement.Bottom">
+                            <MudIconButton Icon="@Icons.Material.Filled.HideImage" Size="Size.Small" Color="Color.Error"
+                                           OnClick="RemoveLogo" />
+                        </MudTooltip>
+                    }
+                }
+                @* Title removed from the header — the company logo now
+                   identifies the dashboard visually, and per-user rename
+                   stopped making sense once dashboards became per-company.
+                   _dashboardTitle is still set (to the company name) so the
+                   browser tab / <PageTitle> stays informative. *@
+            </MudStack>
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                @* Edit is admin-only — the shared dashboard is the company's
+                   canonical layout, and Editors/Viewers don't get to mutate
+                   it. Phase 4 adds an approval queue so Editors can propose
+                   tiles without direct edit rights. *@
+                @if (_userRoleForCompany == UserRoles.Admin)
+                {
+                    @if (_editMode)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Add" OnClick="OpenAddDialog">
+                            Add Report
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Tab" OnClick="AddTab">
+                            Add Tab
+                        </MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Save" OnClick="SaveLayout">
+                            Save Layout
+                        </MudButton>
+                    }
+                    <MudButton Variant="@(_editMode ? Variant.Filled : Variant.Outlined)"
+                               Color="@(_editMode ? Color.Warning : Color.Default)" Size="Size.Small"
+                               StartIcon="@(_editMode ? Icons.Material.Filled.Check : Icons.Material.Filled.Edit)"
+                               OnClick="ToggleEditMode">
+                        @(_editMode ? "Done Editing" : "Edit Layout")
+                    </MudButton>
+                }
+            </MudStack>
+        </MudStack>
+
+        @if (_loading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+
+        @* ── Tabs ── *@
+        @if (_tabs.Any())
+        {
+            <MudTabs ActivePanelIndex="_activeTabIndex" ActivePanelIndexChanged="OnTabChanged"
+                     Elevation="0" Rounded ApplyEffectsToContainer>
+                @foreach (var tab in _tabs)
+                {
+                    var t = tab;
+                    <MudTabPanel>
+                        <TabContent>
+                            @* Tab header doubles as a drop target while a
+                               tile is being dragged in edit mode — drop a
+                               tile onto another tab's label to re-home it.
+                               Plain div wraps the MudStack because drag
+                               directives (:preventDefault / :stopPropagation)
+                               don't compose cleanly with MudBlazor component
+                               parameters. stopPropagation on drop prevents
+                               MudTabs from treating the release as a tab-click. *@
+                            <div style="@(_dropTargetTabId == t.Id
+                                            ? "outline: 2px dashed #1A73E8; outline-offset: 2px; border-radius: 4px;"
+                                            : "")"
+                                 @ondragover:preventDefault
+                                 @ondragover="@(() => { if (_editMode && _dragSource >= 0 && t.Id != ActiveTab?.Id) _dropTargetTabId = t.Id; })"
+                                 @ondragleave="@(() => { if (_dropTargetTabId == t.Id) _dropTargetTabId = 0; })"
+                                 @ondrop="@(() => OnTileDropOnTab(t.Id))"
+                                 @ondrop:stopPropagation="true">
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                    <span>@t.Label</span>
+                                    @if (_editMode)
+                                    {
+                                        <MudTooltip Text="Rename tab">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                           Color="Color.Default" Style="padding: 2px;"
+                                                           OnClick="@(() => RenameTab(t))" />
+                                        </MudTooltip>
+                                        @if (_tabs.Count > 1)
+                                        {
+                                            <MudTooltip Text="Remove tab">
+                                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                               Color="Color.Error" Style="padding: 2px;"
+                                                               OnClick="@(() => RemoveTab(t))" />
+                                            </MudTooltip>
+                                        }
+                                    }
+                                </MudStack>
+                            </div>
+                        </TabContent>
+                        <ChildContent>
+                            @* ── Tile reorder bar (edit mode) ── *@
+                            @if (_editMode && _tiles.Any())
+                            {
+                                <MudPaper Elevation="0" Class="pa-2 mt-2" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">
+                                        Drag to reorder tiles:
+                                    </MudText>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
+                                        @for (var i = 0; i < _tiles.Count; i++)
+                                        {
+                                            var idx = i;
+                                            var tile = _tiles[i];
+                                            <div @key="tile.Id"
+                                                 style="@(_dragSource == idx ? "opacity: 0.3;" : "") position: relative;"
+                                                 draggable="true"
+                                                 @ondragstart="() => _dragSource = idx"
+                                                 @ondragend="() => { _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0; }"
+                                                 @ondragover:preventDefault
+                                                 @ondragover="() => { if (_dragSource >= 0 && idx != _dragSource) _dropTarget = idx; }"
+                                                 @ondrop="() => OnTileDrop(idx)">
+                                                @if (_dropTarget == idx && _dragSource != idx)
+                                                {
+                                                    <div style="position: absolute; left: -2px; top: 2px; bottom: 2px; width: 3px; background: #1A73E8; border-radius: 2px; z-index: 10;"></div>
+                                                }
+                                                <MudChip T="string" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                                         Style="cursor: grab;">
+                                                    @tile.ReportName
+                                                </MudChip>
+                                            </div>
+                                        }
+                                    </div>
+                                </MudPaper>
+                            }
+
+                            @* ── Tile grid ── *@
+                            @if (_tiles.Any())
+                            {
+                                <div class="mt-2" style="display: flex; flex-wrap: wrap; gap: 16px; padding-bottom: 12px;">
+                                    @for (var ti = 0; ti < _tiles.Count; ti++)
+                                    {
+                                        var idx = ti;
+                                        var tl = _tiles[ti];
+                                        var isDragging = _editMode && _dragSource == idx;
+                                        var isDropTarget = _editMode && _dropTarget == idx && _dragSource >= 0 && _dragSource != idx;
+                                        var tileClass = "master-tile"
+                                            + (_editMode ? " master-tile-edit" : string.Empty)
+                                            + (isDragging ? " master-tile-dragging" : string.Empty)
+                                            + (isDropTarget ? " master-tile-droptarget" : string.Empty);
+                                        <div @key="tl.Id" id="@($"master-tile-{tl.Id}")"
+                                             class="@tileClass"
+                                             style="width: @(tl.ColSpan * 60)px; height: @(tl.Height)px; position: relative; flex-shrink: 0;"
+                                             @ondragover:preventDefault
+                                             @ondragover="@(() => { if (_editMode && _dragSource >= 0 && idx != _dragSource) { _dropTarget = idx; } })"
+                                             @ondrop="@(() => OnTileDrop(idx))">
+                                            <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; height: 100%; display: flex; flex-direction: column; overflow: hidden; box-shadow: 7px 7px 9px rgba(0,0,0,0.20), 5px 5px 7px rgba(0,0,0,0.14);">
+                                                @* Tile header — drag handle in edit mode; title is bold and per-tile alignable *@
+                                                @{
+                                                    var tileAlign = string.IsNullOrEmpty(tl.TitleAlign) ? "left" : tl.TitleAlign;
+                                                }
+                                                <div draggable="@(_editMode ? "true" : "false")"
+                                                     @ondragstart="@(() => _dragSource = idx)"
+                                                     @ondragend="@(() => { _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0; })"
+                                                     style="@(_editMode ? "cursor: grab;" : "")">
+                                                    <div style="display: flex; align-items: center; gap: 4px; padding: 6px 12px; border-bottom: 1px solid #E8EAED; background: #FFFFFF;">
+                                                        @if (_editMode)
+                                                        {
+                                                            <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small"
+                                                                     Style="color: #5F6368; font-size: 18px;" />
+                                                        }
+                                                        <span style="@($"flex: 1; min-width: 0; font-weight: 700; font-size: 0.95rem; text-align: {tileAlign}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;")"
+                                                              title="@tl.ReportName">@tl.ReportName</span>
+                                                        @if (_editMode)
+                                                        {
+                                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="white-space: nowrap;">(@(tl.ColSpan * 60)w x @(tl.Height)h)</MudText>
+                                                            <MudTooltip Text="Align left" Placement="Placement.Bottom">
+                                                                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignLeft" Size="Size.Small"
+                                                                               Color="@(tileAlign == "left" ? Color.Primary : Color.Default)"
+                                                                               OnClick="@(() => SetTileAlign(tl, "left"))" />
+                                                            </MudTooltip>
+                                                            <MudTooltip Text="Align center" Placement="Placement.Bottom">
+                                                                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignCenter" Size="Size.Small"
+                                                                               Color="@(tileAlign == "center" ? Color.Primary : Color.Default)"
+                                                                               OnClick="@(() => SetTileAlign(tl, "center"))" />
+                                                            </MudTooltip>
+                                                            <MudTooltip Text="Align right" Placement="Placement.Bottom">
+                                                                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignRight" Size="Size.Small"
+                                                                               Color="@(tileAlign == "right" ? Color.Primary : Color.Default)"
+                                                                               OnClick="@(() => SetTileAlign(tl, "right"))" />
+                                                            </MudTooltip>
+                                                        }
+                                                        @if (_tileData.TryGetValue(tl.ReportId, out var tdHeader) && tdHeader.Config is not null
+                                                             && !string.IsNullOrEmpty(tdHeader.Config.ChartType))
+                                                        {
+                                                            <MudTooltip Text="@(_chartVisibleTiles.Contains(tl.Id) ? "Hide Chart" : "Show Chart")" Placement="Placement.Bottom">
+                                                                <MudIconButton Icon="@(_chartVisibleTiles.Contains(tl.Id) ? Icons.Material.Filled.BarChart : Icons.Material.Outlined.BarChart)"
+                                                                               Size="Size.Small"
+                                                                               Color="@(_chartVisibleTiles.Contains(tl.Id) ? Color.Primary : Color.Default)"
+                                                                               OnClick="@(() => ToggleChart(tl.Id))" />
+                                                            </MudTooltip>
+                                                        }
+                                                        @if (_editMode)
+                                                        {
+                                                            <MudTooltip Text="Remove tile">
+                                                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                                               Color="Color.Error"
+                                                                               OnClick="() => RemoveTile(tl)" />
+                                                            </MudTooltip>
+                                                        }
+                                                    </div>
+                                                </div>
+
+                                                @* Tile content *@
+                                                <div style="overflow: hidden; flex: 1; display: flex; flex-direction: column;">
+                                                    @if (_tileData.TryGetValue(tl.ReportId, out var td))
+                                                    {
+                                                        <DashboardView Data="td.Data" InitialConfig="td.Config"
+                                                                       ReadOnly="true" DetailFromDashboard="true" ReportId="tl.ReportId"
+                                                                       GridHeight="@($"{Math.Max(150, tl.Height - 120)}px")"
+                                                                       Compact="true"
+                                                                       HideChart="@(!_chartVisibleTiles.Contains(tl.Id))" />
+                                                    }
+                                                    else if (_tileLoading.Contains(tl.ReportId))
+                                                    {
+                                                        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+                                                    }
+                                                    else
+                                                    {
+                                                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4">
+                                                            @(_tileErrors.TryGetValue(tl.ReportId, out var err)
+                                                                ? err
+                                                                : "Failed to load dashboard data.")
+                                                        </MudText>
+                                                    }
+                                                </div>
+                                            </MudPaper>
+                                            @if (_editMode)
+                                            {
+                                                <div class="tile-resize-handle"></div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            else if (!_loading)
+                            {
+                                <MudPaper Class="pa-8 d-flex flex-column align-center justify-center mt-2" Elevation="0"
+                                          Style="border: 1px dashed #DADCE0; min-height: 200px;">
+                                    <MudIcon Icon="@Icons.Material.Filled.DashboardCustomize" Size="Size.Large" Color="Color.Default" />
+                                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                                        No reports on this tab yet.
+                                    </MudText>
+                                    @if (_editMode)
+                                    {
+                                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+                                                   StartIcon="@Icons.Material.Filled.Add" OnClick="OpenAddDialog">
+                                            Add Report
+                                        </MudButton>
+                                    }
+                                </MudPaper>
+                            }
+                        </ChildContent>
+                    </MudTabPanel>
+                }
+            </MudTabs>
+        }
+        else if (!_loading)
+        {
+            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
+                      Style="border: 1px dashed #DADCE0; min-height: 300px;">
+                <MudIcon Icon="@Icons.Material.Filled.DashboardCustomize" Size="Size.Large" Color="Color.Default" />
+                <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                    No tabs on the master dashboard yet.
+                </MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+                           StartIcon="@Icons.Material.Filled.Tab" OnClick="AddTab">
+                    Create First Tab
+                </MudButton>
+            </MudPaper>
+        }
+    </MudStack>
+</MudMainContent>
+
+<style>
+    .tile-resize-handle {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        width: 16px;
+        height: 16px;
+        cursor: nwse-resize;
+        z-index: 20;
+        background: linear-gradient(135deg, transparent 50%, #1A73E8 50%);
+        border-radius: 0 0 4px 0;
+        opacity: 0.6;
+    }
+    .tile-resize-handle:hover {
+        opacity: 1;
+    }
+    .mud-tabs .mud-tab {
+        text-transform: none !important;
+    }
+    /* Responsive: tiles can't exceed viewport width, and won't shrink below
+       a readable minimum. The inline width (ColSpan * 60) is treated as the
+       preferred width; max-width: 100% caps it to the available space. */
+    .master-tile {
+        max-width: 100%;
+        min-width: 300px;
+    }
+    .master-tile-edit {
+        outline: 2px dashed #DADCE0;
+        outline-offset: -2px;
+    }
+    .master-tile.tile-resizing {
+        outline: 2px solid #1A73E8 !important;
+        opacity: 0.9;
+    }
+    .master-tile.master-tile-dragging {
+        opacity: 0.4;
+    }
+    .master-tile.master-tile-droptarget {
+        outline: 3px solid #1A73E8 !important;
+        outline-offset: -3px;
+    }
+    /* Per-tile grid header row: dodger blue background, white text (including
+       sort icons and the sortable header buttons MudDataGrid renders). Scoped
+       to .master-tile so the Report Library and other grids aren't affected. */
+    .master-tile thead th,
+    .master-tile .mud-table-head th,
+    .master-tile .mud-table-cell-header {
+        background: dodgerblue !important;
+        color: #FFFFFF !important;
+        white-space: nowrap !important;
+    }
+    .master-tile thead th .mud-button-root,
+    .master-tile .mud-table-head .mud-button-root,
+    .master-tile .mud-table-sort-label,
+    .master-tile .mud-table-sort-label .mud-icon-root {
+        color: #FFFFFF !important;
+    }
+    /* Body cells: nowrap + overflow: hidden + ellipsis so long data values
+       truncate with the ellipsis character instead of wrapping over multiple rows.
+       The ellipsis rule must also hit the inner MudText wrapper (rendered as p or
+       span), otherwise the text overflows the inner element silently without
+       producing the ellipsis. display: block + max-width: 100% makes text-overflow
+       actually fire on the inner element. */
+    .master-tile tbody td,
+    .master-tile .mud-table-cell:not(.mud-table-cell-header) {
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        /* No max-width here — under table-layout: fixed the column widths come from
+           the <col>/th definitions; max-width: 0 would override the explicit widths
+           set on count/pct/measure/extras and collapse those cells to zero. */
+    }
+    .master-tile tbody td .mud-typography,
+    .master-tile tbody td p,
+    .master-tile tbody td span,
+    .master-tile tbody td div {
+        max-width: 100%;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        text-align: inherit;   /* pick up text-align from the parent cell */
+    }
+    .master-tile tbody td .mud-typography,
+    .master-tile tbody td p {
+        display: block;
+    }
+    /* No horizontal scrollbar inside a tile — if content is wider than the tile,
+       clip it silently. Combined with the ellipsis on body cells above, the
+       Campaign column (or whichever is flexible) shrinks and cells truncate. */
+    .master-tile .mud-table-container {
+        overflow-x: hidden !important;
+    }
+    .master-tile table {
+        table-layout: auto;
+        width: 100%;
+    }
+    /* Tighter cell padding inside tiles — 4px top/bottom, 6px left/right. */
+    .master-tile .mud-table-cell {
+        padding: 4px 6px !important;
+    }
+    /* Darker hover on tile data rows for better visual feedback. */
+    .master-tile tbody tr:hover td {
+        background-color: #E0E0E0 !important;
+    }
+</style>
+
+@code {
+    [Parameter] public string? CompanyCode { get; set; }
+
+    private string _userId = "anonymous";
+    private string _userEmail = string.Empty;
+    // Resolved from CompanyCode in OnInitializedAsync — used as the scope for
+    // every MasterService call so dashboards are (user, company) keyed.
+    private Guid _companyId;
+    // Populated from RPT_companies.website_url when non-null — makes the
+    // header logo a clickable link to the company's external site.
+    private string? _companyWebsiteUrl;
+    // The signed-in user's role for the current company. "Admin" when the
+    // user is a global admin (who bypasses per-company roles entirely).
+    // Drives per-role UI gating — e.g. hiding the Report Library shortcut
+    // from Viewers, who aren't meant to leave the dashboard.
+    private string _userRoleForCompany = string.Empty;
+    private bool _loading = true;
+    private bool _initialized;
+    private bool _editMode;
+    private string _dashboardTitle = "Master Dashboard";
+    private byte[]? _logoBytes;
+    private string? _logoMimeType;
+    private string? _logoDataUri;
+    private List<MasterDashboardTab> _tabs = new();
+    private int _activeTabIndex;
+    private List<MasterDashboardTile> _tiles = new();
+    private List<MasterDashboardTile> _pendingRemovals = new();
+    // Per-tab snapshot of in-memory tile edits so switching tabs while editing
+    // doesn't discard unsaved alignment / resize / removal changes on the prior tab.
+    private Dictionary<int, List<MasterDashboardTile>> _tilesByTab = new();
+    private Dictionary<int, List<MasterDashboardTile>> _pendingRemovalsByTab = new();
+    private Dictionary<Guid, TileLoadResult> _tileData = new();
+    private Dictionary<Guid, string> _tileErrors = new();
+    private HashSet<Guid> _tileLoading = new();
+    private HashSet<int> _chartVisibleTiles = new();
+    private DotNetObjectReference<MasterDashboard>? _dotNetRef;
+    private int _dragSource = -1;
+    private int _dropTarget = -1;
+    // Tab id currently hovered as a cross-tab drop target. 0 = none (tab
+    // ids are positive identity values, so 0 is a safe sentinel). Reset
+    // on drag-end alongside the other drag state.
+    private int _dropTargetTabId;
+
+    private MasterDashboardTab? ActiveTab => _activeTabIndex >= 0 && _activeTabIndex < _tabs.Count ? _tabs[_activeTabIndex] : null;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_editMode && _tiles.Any())
+        {
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            // Snapshot: the await below yields, and a concurrent OnTileDrop (or any other
+            // handler that mutates _tiles) would otherwise invalidate the enumerator and
+            // throw "Collection was modified" on the next iteration.
+            var snapshot = _tiles.ToList();
+            foreach (var tile in snapshot)
+            {
+                // Call every render — initTileResize is idempotent (data-resize-wired marker
+                // on the handle element). A C# one-shot guard was too aggressive: if the handle
+                // wasn't in DOM yet on the first call after entering edit mode, JS bailed and
+                // we never retried.
+                await JS.InvokeVoidAsync("initTileResize", tile.Id, _dotNetRef, 24);
+            }
+        }
+
+        // Apply native-browser tooltips to any truncated <td> so the user can see the full
+        // value on hover. Runs every render — cheap (measures existing DOM, no mutations
+        // unless truncation state actually changed).
+        if (_initialized && _tiles.Any())
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("applyCellTooltips", ".master-tile");
+            }
+            catch { /* JS not ready on very first render — next render will catch up */ }
+        }
+    }
+
+    [JSInvokable]
+    public void OnTileResized(int tileId, int colSpan, int height)
+    {
+        var tile = _tiles.FirstOrDefault(t => t.Id == tileId);
+        if (tile is not null)
+        {
+            tile.ColSpan = colSpan;
+            tile.Height = height;
+            StateHasChanged();
+        }
+    }
+
+    public void Dispose()
+    {
+        _dotNetRef?.Dispose();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _userId = authState.User.FindFirst("oid")?.Value
+                  ?? authState.User.Identity?.Name
+                  ?? "anonymous";
+        _userEmail = authState.User.FindFirst("preferred_username")?.Value ?? string.Empty;
+
+        // Resolve the company from the URL segment. An invalid/unknown code
+        // bounces back to the picker instead of rendering an empty dashboard.
+        // Access check: admins see every company; non-admins need a row in
+        // RPT_user_companies for this company. Both checks resolve via
+        // UserManagementService's email-keyed access list so pre-provisioned
+        // users work even before their first sign-in has bound user_id.
+        CompanySummary? company = null;
+        if (!string.IsNullOrEmpty(CompanyCode))
+        {
+            company = await CompanyRegistry.GetByCodeAsync(CompanyCode);
+        }
+        if (company is null)
+        {
+            Navigation.NavigateTo("/?all=1", replace: true);
+            return;
+        }
+
+        var isAdmin = AdminService.IsAdmin(_userEmail);
+        if (isAdmin)
+        {
+            // Sentinel role — admins bypass per-company grants entirely.
+            // Used by UI gating to show every affordance regardless of role.
+            _userRoleForCompany = UserRoles.Admin;
+        }
+        else if (!string.IsNullOrEmpty(_userEmail))
+        {
+            var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
+            var grant = access.FirstOrDefault(a => a.CompanyId == company.Id);
+            if (grant is null)
+            {
+                // Route exists but the user has no grant — treat it the same
+                // as an unknown code: back to the picker. The picker's empty
+                // state handles the "no access anywhere" case.
+                Navigation.NavigateTo("/?all=1", replace: true);
+                return;
+            }
+            _userRoleForCompany = grant.Role;
+        }
+
+        _companyId = company.Id;
+        _companyWebsiteUrl = company.WebsiteUrl;
+        CurrentCompany.Set(company.Id, company.Code, company.Name);
+
+        // Remember this as the user's last-visited company so /  auto-routes
+        // them back here next time. Fire-and-forget: non-critical for render.
+        if (!string.IsNullOrEmpty(_userEmail))
+        {
+            _ = UserManagement.SetLastVisitedCompanyAsync(_userEmail, company.Id);
+        }
+
+        // Header now reflects the active company — title = company name,
+        // logo = company's uploaded logo. Falls back to per-user prefs when
+        // the company has nothing uploaded yet, so a no-logo company still
+        // renders something recognizable.
+        var prefs = await PreferenceService.GetPreferencesAsync(_userId);
+        _dashboardTitle = company.Name;
+        if (company.Logo is not null && company.Logo.Length > 0)
+        {
+            _logoBytes = company.Logo;
+            _logoMimeType = company.LogoContentType;
+        }
+        else
+        {
+            _logoBytes = prefs.MasterDashboardLogo;
+            _logoMimeType = prefs.MasterDashboardLogoType;
+        }
+        _logoDataUri = BuildLogoDataUri();
+
+        // Keep the Report Library / Builder company filter in sync with the
+        // dashboard the user just landed on. The design spec was: picking a
+        // company anywhere in the app filters the rest of the session to it.
+        // Only writes when the selection actually changed, to avoid clobbering
+        // the updated_at timestamp on every navigation.
+        if (prefs.ReportLibraryCompanyId != company.Id)
+        {
+            prefs.UserId = _userId;
+            prefs.ReportLibraryCompanyId = company.Id;
+            try { await PreferenceService.SavePreferencesAsync(prefs); }
+            catch { /* non-fatal — the filter can be re-set manually */ }
+        }
+
+        await LoadTabs();
+        _initialized = true;
+    }
+
+    private async Task LoadTabs()
+    {
+        _loading = true;
+        try
+        {
+            _tabs = await MasterService.GetTabsAsync(_companyId);
+            if (_tabs.Any())
+            {
+                _activeTabIndex = 0;
+                await LoadTilesForActiveTab();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadTilesForActiveTab()
+    {
+        var tab = ActiveTab;
+        if (tab is null) { _tiles.Clear(); return; }
+
+        try
+        {
+            // If we already have an in-memory snapshot for this tab (e.g. user is
+            // toggling between tabs in edit mode), restore it instead of clobbering
+            // their unsaved edits with a fresh DB fetch.
+            if (_tilesByTab.TryGetValue(tab.Id, out var cachedTiles))
+            {
+                _tiles = cachedTiles;
+            }
+            else
+            {
+                _tiles = await MasterService.GetTilesAsync(_companyId, tab.Id);
+            }
+            _pendingRemovals = _pendingRemovalsByTab.TryGetValue(tab.Id, out var cachedRemovals)
+                ? cachedRemovals
+                : new List<MasterDashboardTile>();
+            await LoadAllTileData();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load tiles: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OnTabChanged(int index)
+    {
+        // Snapshot the outgoing tab's in-memory tiles + pending removals so we can
+        // restore them when the user comes back. Without this, switching tabs in
+        // edit mode would lose alignment / resize / removal edits.
+        var outgoing = ActiveTab;
+        if (outgoing is not null)
+        {
+            _tilesByTab[outgoing.Id] = _tiles;
+            _pendingRemovalsByTab[outgoing.Id] = _pendingRemovals;
+        }
+        _activeTabIndex = index;
+        await LoadTilesForActiveTab();
+    }
+
+    private async Task LoadAllTileData()
+    {
+        _tileData.Clear();
+        _tileErrors.Clear();
+        _tileLoading.Clear();
+
+        // Mark all tiles as loading up-front (single-threaded) then fire the fetches.
+        foreach (var tile in _tiles) _tileLoading.Add(tile.ReportId);
+        StateHasChanged();
+
+        // Collect results from parallel tasks, then merge into _tileData on the
+        // main thread. Dictionary/HashSet are not thread-safe; direct concurrent
+        // mutation was a race condition.
+        var results = await Task.WhenAll(_tiles.Select(async tile =>
+        {
+            try
+            {
+                var result = await LoadReportDashboard(tile.ReportId);
+                return (tile.ReportId, (TileLoadResult?)result, (string?)null);
+            }
+            catch (Exception ex)
+            {
+                return (tile.ReportId, (TileLoadResult?)null, (string?)ex.Message);
+            }
+        }));
+
+        foreach (var (reportId, result, error) in results)
+        {
+            if (result is not null)
+                _tileData[reportId] = result;
+            else if (error is not null)
+                _tileErrors[reportId] = error;
+            _tileLoading.Remove(reportId);
+        }
+        StateHasChanged();
+    }
+
+    private async Task<TileLoadResult?> LoadReportDashboard(Guid reportId)
+    {
+        // Shared-per-company dashboard (Phase 3): the tile's presence on this
+        // company's dashboard *is* the authorization signal. The page-level
+        // access check in OnInitializedAsync has already verified the user
+        // can view the company, so we fetch the report directly without
+        // owner/share scoping — otherwise Viewers and Editors who don't own
+        // the report and don't have a share record get "Failed to load" on
+        // every tile.
+        var report = await ReportService.GetReportByIdAsync(reportId);
+        if (report is null) return null;
+
+        var fieldIds = new List<string>();
+        if (report.GridTemplateId.HasValue)
+        {
+            var resolved = await GridTemplateService.ResolveTemplateAsync(report.GridTemplateId);
+            if (resolved is not null) fieldIds = resolved.FieldIds;
+        }
+        else if (!string.IsNullOrWhiteSpace(report.FieldIds))
+        {
+            fieldIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(report.FieldIds) ?? new();
+        }
+        if (!fieldIds.Any()) return null;
+
+        var filters = new Dictionary<string, object?>();
+        if (!string.IsNullOrWhiteSpace(report.Filters))
+            filters = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(report.Filters) ?? new();
+
+        DashboardView.DashboardConfig? config = null;
+        List<string>? customFilterIds = null;
+        TleReportingDashboard.Web.Models.FilterGroup? advancedFilters = null;
+        // Feature-flag the advanced-filter pass-through so a rollback in
+        // appsettings also takes effect on the Master Dashboard, not just
+        // the Report Builder.
+        var advancedFiltersEnabled = Config.GetValue<bool>("Features:AdvancedFilters", false);
+
+        if (!string.IsNullOrWhiteSpace(report.ColumnState))
+        {
+            try
+            {
+                config = System.Text.Json.JsonSerializer.Deserialize<DashboardView.DashboardConfig>(
+                    report.ColumnState, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                using var doc = System.Text.Json.JsonDocument.Parse(report.ColumnState);
+                if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
+                    customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
+
+                // Advanced (ad-hoc) filters tree. Same back-compat shape
+                // handling as the Report Builder: new saves emit an
+                // object {op, items:[…]}; early experimental saves emit
+                // a flat array, which we wrap into a root AND-group.
+                if (advancedFiltersEnabled
+                    && doc.RootElement.TryGetProperty("AdvancedFilters", out var afEl))
+                {
+                    if (afEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        advancedFilters = System.Text.Json.JsonSerializer
+                            .Deserialize<TleReportingDashboard.Web.Models.FilterGroup>(
+                                afEl.GetRawText(),
+                                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    }
+                    else if (afEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        var flat = System.Text.Json.JsonSerializer
+                            .Deserialize<List<TleReportingDashboard.Web.Models.FilterClause>>(afEl.GetRawText())
+                            ?? new();
+                        if (flat.Count > 0)
+                        {
+                            advancedFilters = new TleReportingDashboard.Web.Models.FilterGroup
+                            {
+                                Op = TleReportingDashboard.Web.Models.FilterGroupOps.And,
+                                Items = flat.Select(c => new TleReportingDashboard.Web.Models.FilterItem { Clause = c }).ToList()
+                            };
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // Include extra group-by fields from dashboard config.
+        void AddExtraIds(IEnumerable<string>? ids)
+        {
+            if (ids is null) return;
+            foreach (var extra in ids)
+                if (!fieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                    fieldIds.Add(extra);
+        }
+        AddExtraIds(config?.ExtraGroupByFieldIds);
+        AddExtraIds(config?.ExtraDimensionFieldIds);
+
+        var request = new QueryRequest
+        {
+            FieldIds = fieldIds,
+            Filters = filters,
+            CustomFilterIds = customFilterIds,
+            AdvancedFilters = advancedFilters,
+            Page = 1,
+            PageSize = 50000,
+            // Tile inherits the connection and primary table from the report it
+            // points at — keeps viewer + detail + dashboard in sync automatically.
+            ConnectionId = report.ConnectionId,
+            PrimaryTable = report.PrimaryTable
+        };
+        request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, report.ConnectionId, report.PrimaryTable);
+        var data = await QueryService.ExecuteQueryAsync(request);
+        return new TileLoadResult(data, config);
+    }
+
+    // ── Tab management ──
+
+    private async Task AddTab()
+    {
+        try
+        {
+            // Snapshot the outgoing tab's in-memory edits before switching focus.
+            var outgoing = ActiveTab;
+            if (outgoing is not null)
+            {
+                _tilesByTab[outgoing.Id] = _tiles;
+                _pendingRemovalsByTab[outgoing.Id] = _pendingRemovals;
+            }
+            var tab = await MasterService.AddTabAsync(_companyId, $"Tab {_tabs.Count + 1}");
+            _tabs.Add(tab);
+            _activeTabIndex = _tabs.Count - 1;
+            _editMode = true;
+            _tiles = new List<MasterDashboardTile>();
+            _pendingRemovals = new List<MasterDashboardTile>();
+            StateHasChanged();
+            await RenameTab(tab);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to add tab: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RenameTab(MasterDashboardTab tab)
+    {
+        var newName = await JS.InvokeAsync<string>("prompt", "Enter a new name for this tab:", tab.Label);
+        if (!string.IsNullOrWhiteSpace(newName))
+        {
+            tab.Label = newName;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RemoveTab(MasterDashboardTab tab)
+    {
+        if (_tabs.Count <= 1) return;
+        try
+        {
+            await MasterService.RemoveTabAsync(tab.Id);
+            _tabs.Remove(tab);
+            _activeTabIndex = Math.Min(_activeTabIndex, _tabs.Count - 1);
+            await LoadTilesForActiveTab();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to remove tab: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ── Tile management ──
+
+    private async Task OpenAddDialog()
+    {
+        var tab = ActiveTab;
+        if (tab is null) return;
+
+        List<SavedReport> available;
+        Dictionary<Guid, List<string>> placedMap;
+        try
+        {
+            available = await MasterService.GetAvailableReportsAsync(_companyId);
+            // Reports placed on ANY of the user's tabs (not just the active
+            // one) — prevents the same report from being pinned twice across
+            // tabs. _tiles here would only give us current-tab state.
+            placedMap = await MasterService.GetPlacedReportTabsAsync(_companyId);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load reports: {ex.Message}", Severity.Error);
+            return;
+        }
+
+        var totalEligible = available.Count;
+        var existingIds = placedMap.Keys.ToHashSet();
+        available = available.Where(r => !existingIds.Contains(r.Id)).ToList();
+
+        if (!available.Any())
+        {
+            // Distinguish "nothing marked ShowOnMaster" from "everything eligible
+            // is already placed somewhere" so the admin knows what to do next.
+            var msg = totalEligible == 0
+                ? "No reports available. Enable 'Show on Master Dashboard' in a report's dashboard editor first."
+                : "Every eligible report is already placed on one of your dashboard tabs.";
+            Snackbar.Add(msg, Severity.Info);
+            return;
+        }
+
+        var parameters = new DialogParameters { { "Reports", available } };
+        var dialog = await DialogService.ShowAsync<AddTileDialog>("Add Report to Dashboard", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not Guid reportId) return;
+
+        try
+        {
+            await MasterService.AddTileAsync(_companyId, tab.Id, reportId);
+
+            var allTiles = await MasterService.GetTilesAsync(_companyId, tab.Id);
+            var newTile = allTiles.FirstOrDefault(t => t.ReportId == reportId);
+            if (newTile is not null)
+            {
+                _tiles.Add(newTile);
+                try
+                {
+                    var td = await LoadReportDashboard(newTile.ReportId);
+                    if (td is not null) _tileData[newTile.ReportId] = td;
+                }
+                catch { }
+            }
+
+            _editMode = true;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to add: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void ToggleChart(int tileId)
+    {
+        if (!_chartVisibleTiles.Remove(tileId))
+            _chartVisibleTiles.Add(tileId);
+    }
+
+    private async Task ToggleEditMode()
+    {
+        if (_editMode)
+        {
+            // Leaving edit mode discards unsaved per-tab edits — drop the snapshots
+            // and reload the active tab from DB so the user sees persisted state.
+            var hadDirtyState = _pendingRemovals.Any() || _pendingRemovalsByTab.Any() || _tilesByTab.Any();
+            _pendingRemovals.Clear();
+            _pendingRemovalsByTab.Clear();
+            _tilesByTab.Clear();
+            if (hadDirtyState)
+                await LoadTilesForActiveTab();
+        }
+        _editMode = !_editMode;
+    }
+
+    private void RemoveTile(MasterDashboardTile tile)
+    {
+        _tiles.Remove(tile);
+        _pendingRemovals.Add(tile);
+        _tileData.Remove(tile.ReportId);
+        Snackbar.Add($"{tile.ReportName} marked for removal. Click Save Layout to confirm.", Severity.Warning);
+    }
+
+    private async Task SaveLayout()
+    {
+        for (var i = 0; i < _tiles.Count; i++)
+            _tiles[i].SortOrder = i;
+
+        try
+        {
+            // Snapshot the currently-active tab's tiles into the cache so the save
+            // loop below sees its edits alongside any cached tabs the user visited.
+            var activeNow = ActiveTab;
+            if (activeNow is not null)
+            {
+                _tilesByTab[activeNow.Id] = _tiles;
+                _pendingRemovalsByTab[activeNow.Id] = _pendingRemovals;
+            }
+
+            // Delete removed tiles across all edited tabs
+            foreach (var removalList in _pendingRemovalsByTab.Values)
+                foreach (var tile in removalList)
+                    await MasterService.RemoveTileAsync(tile.Id);
+            _pendingRemovalsByTab.Clear();
+            _pendingRemovals.Clear();
+
+            // Update tiles for every tab the user touched in this session
+            foreach (var tabTiles in _tilesByTab.Values)
+            {
+                // Keep sort order in sync with current list position
+                for (var i = 0; i < tabTiles.Count; i++)
+                    tabTiles[i].SortOrder = i;
+                await MasterService.UpdateLayoutAsync(tabTiles);
+            }
+            _tilesByTab.Clear();
+
+            // Update tab labels and order
+            for (var i = 0; i < _tabs.Count; i++)
+                _tabs[i].SortOrder = i;
+            await MasterService.UpdateTabOrderAsync(_tabs);
+
+            // Persist the logo upload (still user-scoped fallback for now —
+            // Phase 3 will route logo uploads to RPT_companies instead so
+            // every user sees the same company branding). Title is no
+            // longer editable here, so we don't write it back.
+            var prefs = await PreferenceService.GetPreferencesAsync(_userId);
+            prefs.MasterDashboardLogo = _logoBytes;
+            prefs.MasterDashboardLogoType = _logoMimeType;
+            await PreferenceService.SavePreferencesAsync(prefs);
+
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OnLogoUploaded(IBrowserFile file)
+    {
+        try
+        {
+            using var stream = file.OpenReadStream(maxAllowedSize: 2 * 1024 * 1024); // 2MB max
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            _logoBytes = ms.ToArray();
+            _logoMimeType = file.ContentType;
+            _logoDataUri = BuildLogoDataUri();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to upload logo: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void RemoveLogo()
+    {
+        _logoBytes = null;
+        _logoMimeType = null;
+        _logoDataUri = null;
+    }
+
+    private string? BuildLogoDataUri()
+    {
+        if (_logoBytes is null || _logoBytes.Length == 0) return null;
+        var mime = _logoMimeType ?? "image/png";
+        return $"data:{mime};base64,{Convert.ToBase64String(_logoBytes)}";
+    }
+
+    private void SetTileAlign(MasterDashboardTile tile, string align)
+    {
+        // Per-tile alignment. Persisted on Save Layout via UpdateLayoutAsync.
+        tile.TitleAlign = align;
+    }
+
+    private void OnTileDrop(int targetIndex)
+    {
+        if (_dragSource < 0 || _dragSource == targetIndex)
+        {
+            _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0;
+            return;
+        }
+
+        var item = _tiles[_dragSource];
+        _tiles.RemoveAt(_dragSource);
+        var insertAt = targetIndex > _dragSource ? targetIndex - 1 : targetIndex;
+        insertAt = Math.Clamp(insertAt, 0, _tiles.Count);
+        _tiles.Insert(insertAt, item);
+        _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0;
+    }
+
+    // Cross-tab move. Fired when the user drags a tile over a tab header
+    // (not the active one) and releases. Updates the DB via the service,
+    // removes the tile from the local list for the current tab, and
+    // resets all drag state. No tab switch — the user stays where they
+    // are; the tile is just gone from this view.
+    private async Task OnTileDropOnTab(int targetTabId)
+    {
+        var activeId = ActiveTab?.Id ?? 0;
+        // Snapshot the drag-source index before we clear state; async
+        // handlers can re-enter after any await.
+        var sourceIdx = _dragSource;
+        _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0;
+
+        if (sourceIdx < 0 || sourceIdx >= _tiles.Count) return;
+        if (targetTabId == activeId) return;
+
+        var tile = _tiles[sourceIdx];
+        try
+        {
+            await MasterService.MoveTileToTabAsync(tile.Id, targetTabId);
+            _tiles.RemoveAt(sourceIdx);
+            _tileData.Remove(tile.ReportId);
+            var targetLabel = _tabs.FirstOrDefault(x => x.Id == targetTabId)?.Label ?? "another tab";
+            Snackbar.Add($"Moved \"{tile.ReportName}\" to {targetLabel}.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to move tile: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private record TileLoadResult(QueryResponse Data, DashboardView.DashboardConfig? Config);
+}

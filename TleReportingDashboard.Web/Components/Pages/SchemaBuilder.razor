@@ -1,0 +1,2292 @@
+@page "/admin/schema-builder"
+@rendermode InteractiveServer
+@inject SchemaBuilderService DbService
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject IWebHostEnvironment Env
+@inject IDialogService DialogService
+@inject IFieldReferenceService FieldReferenceService
+@inject ISchemaConfigStore SchemaConfigStoreSvc
+@inject ICompanyConnectionAdminService ConnectionAdminSvc
+@inject ICompanyRegistry CompanyRegistry
+@inject ICustomPrimaryTableService TableAliasSvc
+@inject NavigationManager Navigation
+@inject IUserPreferenceService PreferenceService
+@inject AuthenticationStateProvider AuthStateProvider
+
+<PageTitle>Schema Config Builder</PageTitle>
+
+@if (!Env.IsDevelopment())
+{
+    <MudAlert Severity="Severity.Error">Schema Builder is only available in Development mode.</MudAlert>
+    return;
+}
+
+<style>
+    /* Scope: Schema Config Builder tabs.
+       No horizontal scrollbars anywhere — not on the page and not inside any grid.
+       Content that would overflow is clipped; cells with long SQL previews already
+       use text-overflow: ellipsis with a full-text tooltip so clipping reads cleanly.
+       Vertical scroll is unaffected — grids that set FixedHeader/Height keep vertical scroll. */
+    .schema-builder-page {
+        max-width: 100%;
+        overflow-x: hidden;
+        /* Flex column so MudTabs + tab panel can claim remaining viewport
+           height without the whole page scrolling as one piece. The
+           min-height: 0 trick is load-bearing for nested flex scroll —
+           without it the overflow container never activates. */
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+    /* MudTabs itself becomes the flex middle child. */
+    .schema-builder-page .mud-tabs {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    /* The panels container grows; each panel's content scrolls
+       independently when its rows overflow (Joins, Fields, etc.). */
+    .schema-builder-page .mud-tabs .mud-tabs-panels,
+    .schema-builder-page .mud-tabs .mud-tabs-tabpanels {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+    }
+    .schema-builder-page .mud-table-container {
+        overflow-x: hidden;
+        max-width: 100%;
+    }
+    .schema-builder-page .mud-data-grid,
+    .schema-builder-page .mud-tabs {
+        max-width: 100%;
+    }
+    .schema-builder-page .mud-tab-panel {
+        overflow-x: hidden;
+    }
+    /* Force the full MudDataGrid chain (outer wrapper → table container → table) to
+       fill its parent. Without this, .mud-data-grid and .mud-table-container take
+       their intrinsic width, which is narrower than the tab panel on wide viewports. */
+    .schema-builder-page .mud-data-grid,
+    .schema-builder-page .mud-data-grid .mud-table-container {
+        width: 100%;
+    }
+    /* The MudDataGrid chain must fill its tab at every layer so the row's right edge
+       lands at the tab's right edge. MudBlazor's internal widths can sometimes collapse
+       to auto, so !important pins these against any inline or library override. */
+    .schema-builder-page .mud-data-grid,
+    .schema-builder-page .mud-data-grid .mud-table-container,
+    .schema-builder-page .mud-data-grid .mud-table-root,
+    .schema-builder-page .mud-data-grid table {
+        width: 100% !important;
+    }
+    /* The non-FixedHeader grids (Joins / Lookups / Custom Filters) use table-layout: fixed
+       so a "preview" column with long nowrap SQL can't stretch past its declared width
+       and push the action column off-screen. Declared widths are hard caps under fixed
+       layout; unsized columns share remaining space equally. */
+    .schema-fixed-grid .mud-table-root,
+    .schema-fixed-grid table {
+        table-layout: fixed !important;
+    }
+    .schema-fixed-grid td,
+    .schema-fixed-grid th {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+</style>
+
+@* Constrain to viewport so the page scrolls instead of clipping when a
+   tab's contents (Joins, Fields, etc.) overflow. Using a flex column
+   here + CSS below on .mud-tabs / .mud-tab-panel so the tab strip stays
+   pinned while only the active panel's body scrolls — the outer-scroll
+   approach (a single overflow-y on the whole page) doesn't work with
+   MudTabs because its internal container intercepts the overflow and
+   clips silently. Match the 48px MudAppBar offset used elsewhere. *@
+<MudStack Spacing="3" Class="pa-4 schema-builder-page"
+          Style="height: calc(100vh - 48px); overflow: hidden;">
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+        <MudTooltip Text="Back to Admin">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="@(() => Navigation.NavigateTo("/admin"))" />
+        </MudTooltip>
+        <MudText Typo="Typo.h5" Style="font-weight: 600;">Schema Config Builder</MudText>
+        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
+                 Icon="@Icons.Material.Filled.Shield"
+                 Style="font-size: 0.65rem; height: 22px;">
+            ADMIN
+        </MudChip>
+    </MudStack>
+    <MudText Typo="Typo.body2" Color="Color.Secondary">
+        Browse the Empower database, select tables and columns, and configure field properties for the selected connection.
+        Each connection has its own schema — different DB shapes, different field catalogs.
+    </MudText>
+
+    @* ── Company + Connection picker + Clone action ────────────────────
+       Company is the outer axis (schemas are per-connection, connections
+       are per-company). Switching companies reloads the connection list
+       and selects that company's default connection. *@
+    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+            <MudSelect T="Guid?" Value="_selectedCompanyId" ValueChanged="OnCompanyChanged"
+                       Label="Company" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 240px;">
+                @foreach (var c in _companies)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
+                }
+            </MudSelect>
+            @* ToStringFunc explicitly maps the Guid? value back to a label.
+               Without it, MudSelect briefly shows the raw GUID when the items
+               list swaps out (new company's connections) before the new items
+               re-render — the select's display falls back to value.ToString(). *@
+            <MudSelect T="Guid?" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged"
+                       Label="Connection" Variant="Variant.Outlined" Margin="Margin.Dense"
+                       ToStringFunc="@ConnectionToLabel"
+                       Disabled="@(_selectedCompanyId is null || _availableConnections.Count == 0)"
+                       Style="min-width: 280px;">
+                @foreach (var c in _availableConnections.Where(c => c.IsActive))
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">
+                        @c.Name (@c.ConnectionType)@(c.IsDefault ? " · default" : "")
+                    </MudSelectItem>
+                }
+            </MudSelect>
+            @if (_selectedCompanyId is not null && _availableConnections.Count == 0)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Warning">
+                    This company has no active connections yet. Add one from the Admin page.
+                </MudText>
+            }
+            @if (_selectedConnectionId is not null)
+            {
+                <MudTooltip Text="Copy fields, joins, lookups, and custom filters from another connection of the same type (same company)">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.ContentCopy"
+                               OnClick="OpenCloneDialog">
+                        Clone from…
+                    </MudButton>
+                </MudTooltip>
+                <MudTooltip Text="Bulk-rename a table reference across every Field, Join, Lookup, and Custom Filter. Preview before commit.">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.FindReplace"
+                               OnClick="OpenRenameDialog">
+                        Rename reference…
+                    </MudButton>
+                </MudTooltip>
+            }
+        </MudStack>
+    </MudPaper>
+
+    <MudTabs ActivePanelIndex="_activeTab" ActivePanelIndexChanged="OnActiveTabChanged"
+             Elevation="0" Rounded ApplyEffectsToContainer>
+
+        @* ── Tab 1: Table Aliases ──
+           First tab on purpose: field, join, and report definitions all lean
+           on the aliases catalog, so it's the natural starting point when
+           setting up a new connection. *@
+        <MudTabPanel Text="Table Aliases" Icon="@Icons.Material.Filled.TableRows">
+            <AdminTableAliasesTab ConnectionId="_selectedConnectionId"
+                                  OnEntriesChanged="LoadTableAliasesAsync" />
+        </MudTabPanel>
+
+        @* ── Tab 2: Fields ── *@
+        <MudTabPanel Text="Fields" Icon="@Icons.Material.Filled.ViewColumn">
+            <MudStack Spacing="2" Class="pa-2">
+                @* Table browser *@
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                        <MudTextField @bind-Value="_tableFilter" Placeholder="@($"Filter tables (e.g. {TablePlaceholder()})...")"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 300px;"
+                                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                      Immediate DebounceInterval="500" OnDebounceIntervalElapsed="LoadTables" />
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   OnClick="LoadTables" Disabled="_loadingTables">
+                            @(_loadingTables ? "Loading..." : "Search Tables")
+                        </MudButton>
+                        @if (_selectedTable is not null)
+                        {
+                            <MudChip T="string" Variant="Variant.Filled" Color="Color.Info" Size="Size.Small"
+                                     OnClose="ClearSelectedTable">
+                                @_selectedTable.FullName
+                            </MudChip>
+                        }
+                    </MudStack>
+
+                    @if (_tables.Any() && _selectedTable is null)
+                    {
+                        <MudDataGrid T="DbTableInfo" Items="_tables" Dense Hover
+                                     FixedHeader Height="250px" RowsPerPage="50" Class="mt-2">
+                            <Columns>
+                                <TemplateColumn T="DbTableInfo" title="Schema">
+                                    <CellTemplate><MudText Typo="Typo.body2">@context.Item.SchemaName</MudText></CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="DbTableInfo" title="Table">
+                                    <CellTemplate><MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.TableName</MudText></CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="DbTableInfo" title=""
+                                                HeaderStyle="width: 1px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 1px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                                                   OnClick="() => SelectTable(context.Item)">Select</MudButton>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                            <PagerContent><MudDataGridPager T="DbTableInfo" /></PagerContent>
+                        </MudDataGrid>
+                    }
+                </MudPaper>
+
+                @* Column picker *@
+                @if (_tableColumns.Any())
+                {
+                    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                                Columns in @_selectedTable?.FullName
+                            </MudText>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled"
+                                     Color="@GetTableTypeColor()" Style="font-size: 0.7rem;">
+                                @GetTableTypeLabel()
+                            </MudChip>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @GetTableTypeHint()
+                            </MudText>
+                        </MudStack>
+                        <MudDataGrid T="DbColumnInfo" Items="_tableColumns" Dense Hover FixedHeader Height="300px" RowsPerPage="100">
+                            <Columns>
+                                <TemplateColumn T="DbColumnInfo" title="Column">
+                                    <CellTemplate><MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.ColumnName</MudText></CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="DbColumnInfo" title="Type">
+                                    <CellTemplate><MudText Typo="Typo.body2">@context.Item.DataType</MudText></CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="DbColumnInfo" title="Length">
+                                    <CellTemplate><MudText Typo="Typo.body2">@(context.Item.MaxLength?.ToString() ?? context.Item.Precision?.ToString() ?? "—")</MudText></CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="DbColumnInfo" title="Nullable">
+                                    <CellTemplate><MudText Typo="Typo.body2">@(context.Item.IsNullable ? "Yes" : "No")</MudText></CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="DbColumnInfo" title=""
+                                                HeaderStyle="width: 1px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 1px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        @{
+                                            var c = context.Item;
+                                            var matchingJoins = GetMatchingJoins();
+                                        }
+                                        @if (matchingJoins.Count <= 1)
+                                        {
+                                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                                       OnClick="() => AddField(c, null)"
+                                                       Disabled="IsFieldAlreadyAdded(c, null)">
+                                                Add
+                                            </MudButton>
+                                        }
+                                        else
+                                        {
+                                            <MudMenu Label="Add" Variant="Variant.Outlined" Color="Color.Primary"
+                                                     Size="Size.Small" Dense EndIcon="@Icons.Material.Filled.ArrowDropDown">
+                                                @foreach (var mj in matchingJoins)
+                                                {
+                                                    var joinRef = mj;
+                                                    <MudMenuItem OnClick="() => AddField(c, joinRef)"
+                                                                 Disabled="IsFieldAlreadyAdded(c, joinRef)">
+                                                        @GetJoinMenuLabel(joinRef)
+                                                    </MudMenuItem>
+                                                }
+                                            </MudMenu>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    </MudPaper>
+                }
+
+                @* Configured fields *@
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Configured Fields (@_fields.Count)
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Add" OnClick="() => OpenFieldDialog(null, true)">
+                            Add Field
+                        </MudButton>
+                    </MudStack>
+
+                    @if (_fields.Any())
+                    {
+                        // Build the SourceTable → "Table AS Alias" map once
+                        // per render. Keyed by the Value that lands on each
+                        // field's SourceTable so the cell template's lookup
+                        // is a single Dictionary hit per row.
+                        var sourceLabels = GetAllAvailableSources(null)
+                            .ToDictionary(o => o.Value, o => o.Label, StringComparer.OrdinalIgnoreCase);
+                        <MudDataGrid T="FieldEntry" Items="_fields" Dense Hover Striped FixedHeader Height="500px" RowsPerPage="100">
+                            <Columns>
+                                <TemplateColumn T="FieldEntry" title="Label" HeaderStyle="min-width: 180px;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Label</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.Id</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="FieldEntry" title="Domain" HeaderStyle="min-width: 100px;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.Domain</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="FieldEntry" title="Type" HeaderStyle="min-width: 140px;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.FieldType</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.DataType</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="FieldEntry" title="Source" HeaderStyle="min-width: 240px;">
+                                    <CellTemplate>
+                                        @if (!string.IsNullOrWhiteSpace(context.Item.SqlExpression))
+                                        {
+                                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                                <MudIcon Icon="@Icons.Material.Filled.Functions" Size="Size.Small" Color="Color.Primary" />
+                                                <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;"
+                                                         title="@context.Item.SqlExpression">
+                                                    @context.Item.SqlExpression
+                                                </MudText>
+                                            </MudStack>
+                                        }
+                                        else
+                                        {
+                                            @* Show "Table AS Alias" when the field's SourceTable
+                                               is known in joins or the Table Aliases catalog; fall
+                                               back to the raw value for legacy rows that aren't in
+                                               either. Column stays below as a secondary caption. *@
+                                            var sourceLabel = sourceLabels.TryGetValue(
+                                                context.Item.SourceTable ?? string.Empty, out var lbl)
+                                                ? lbl
+                                                : context.Item.SourceTable;
+                                            <MudText Typo="Typo.body2">@sourceLabel</MudText>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.SourceColumn</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="FieldEntry" title="CodeSet" HeaderStyle="min-width: 80px;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@(context.Item.CodeSetId?.ToString() ?? "—")</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="FieldEntry" title="Aggregations" HeaderStyle="min-width: 130px;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption">@context.Item.AllowedAggregationsStr</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="FieldEntry" title="Sort" HeaderStyle="min-width: 60px;">
+                                    <CellTemplate>
+                                        @{ var fe = context.Item; }
+                                        <MudIconButton Icon="@Icons.Material.Filled.SortByAlpha" Size="Size.Small"
+                                                       Color="@(fe.ValueSortOrder?.Count > 0 ? Color.Primary : Color.Default)"
+                                                       OnClick="() => OpenSortDialog(fe)"
+                                                       Disabled="@(!fe.CodeSetId.HasValue && (fe.ValueSortOrder is null || fe.ValueSortOrder.Count == 0))"
+                                                       title="@(fe.CodeSetId.HasValue || fe.ValueSortOrder?.Count > 0 ? "Edit custom sort order" : "CodeSetId or existing sort order required")" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="FieldEntry" title=""
+                                                HeaderStyle="width: 1px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 1px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        @{ var fRow = context.Item; }
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                       Color="Color.Primary"
+                                                       OnClick="() => OpenFieldDialog(fRow, false)"
+                                                       title="Edit field" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                       Color="Color.Error" OnClick="() => RemoveField(fRow)"
+                                                       title="Delete field" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            No fields added yet. Select a table above and click Add on columns, or click Add Field to create one manually.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab 2: Joins ── *@
+        <MudTabPanel Text="Joins" Icon="@Icons.Material.Filled.Link">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Join Definitions (@_joins.Count)
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Add" OnClick="() => OpenJoinDialog(null, true)">
+                            Add Join
+                        </MudButton>
+                    </MudStack>
+
+                    @if (_joins.Any())
+                    {
+                        <MudDataGrid T="JoinEntry" Items="_joins" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                            <Columns>
+                                <TemplateColumn T="JoinEntry" title="Join ID" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title="Type" HeaderStyle="width: 10%;" CellStyle="width: 10%;">
+                                    <CellTemplate>
+                                        @if (context.Item.UseRawSql)
+                                        {
+                                            <MudChip T="string" Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small">Raw SQL</MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.body2">@context.Item.JoinType</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title="Target Table" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.TargetTable</MudText>
+                                        @if (!string.IsNullOrWhiteSpace(context.Item.Alias))
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">AS @context.Item.Alias</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title="SQL Preview">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px;"
+                                                 title="@context.Item.BuildSql()">
+                                            @context.Item.BuildSql()
+                                        </MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title=""
+                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        @{ var jRow = context.Item; }
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                       Color="Color.Primary"
+                                                       OnClick="() => OpenJoinDialog(jRow, false)"
+                                                       title="Edit join" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                       Color="Color.Error"
+                                                       OnClick="() => RemoveJoin(jRow)"
+                                                       title="Delete join" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            No joins defined yet. Click Add Join to create one.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab 3: Lookups ── *@
+        <MudTabPanel Text="Lookups" Icon="@Icons.Material.Filled.TableView">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Named Lookups / CTEs (@_lookups.Count)
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Add" OnClick="() => OpenLookupDialog(null, true)">
+                            Add Lookup
+                        </MudButton>
+                    </MudStack>
+
+                    @if (_lookups.Any())
+                    {
+                        <MudDataGrid T="LookupEntry" Items="_lookups" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                            <Columns>
+                                <TemplateColumn T="LookupEntry" title="ID" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupEntry" title="Label" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.Label</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupEntry" title="CTE Preview">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 350px;"
+                                                 title="@context.Item.SqlPreamble">
+                                            @context.Item.SqlPreamble
+                                        </MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupEntry" title="JOIN" HeaderStyle="width: 80px;" CellStyle="width: 80px;">
+                                    <CellTemplate>
+                                        @if (!string.IsNullOrWhiteSpace(context.Item.SqlJoin))
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success" />
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupEntry" title=""
+                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        @{ var luRow = context.Item; }
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                       Color="Color.Primary"
+                                                       OnClick="@(() => OpenLookupDialog(luRow, false))"
+                                                       title="Edit lookup" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                       Color="Color.Error"
+                                                       OnClick="@(() => _lookups.Remove(luRow))"
+                                                       title="Delete lookup" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            No lookups defined yet. Lookups are reusable CTE definitions that fields and custom filters can reference by ID.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab 4: Custom Filters ── *@
+        <MudTabPanel Text="Custom Filters" Icon="@Icons.Material.Filled.FilterAlt">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Custom Filters (@_customFilters.Count)
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Add" OnClick="() => OpenCustomFilterDialog(null, true)">
+                            Add Filter
+                        </MudButton>
+                    </MudStack>
+
+                    @if (_customFilters.Any())
+                    {
+                        <MudDataGrid T="CustomFilterEntry" Items="_customFilters" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                            <Columns>
+                                <TemplateColumn T="CustomFilterEntry" title="ID" HeaderStyle="width: 12%;" CellStyle="width: 12%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title="Label" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.Label</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title="Description" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.Description</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title="CTE" HeaderStyle="width: 60px; text-align: center;" CellStyle="width: 60px; text-align: center;">
+                                    <CellTemplate>
+                                        @if (!string.IsNullOrWhiteSpace(context.Item.SqlPreamble))
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success" />
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title="SQL Condition">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px;"
+                                                 title="@context.Item.SqlCondition">
+                                            @context.Item.SqlCondition
+                                        </MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title=""
+                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        @{ var cfRow = context.Item; }
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                       Color="Color.Primary"
+                                                       OnClick="() => OpenCustomFilterDialog(cfRow, false)"
+                                                       title="Edit filter" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                       Color="Color.Error"
+                                                       OnClick="() => _customFilters.Remove(cfRow)"
+                                                       title="Delete filter" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            No custom filters defined yet. Click Add Filter to create one.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab: Domains ── *@
+        <MudTabPanel Text="Domains" Icon="@Icons.Material.Filled.Category">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Domains (@_domainList.Count)
+                        </MudText>
+                        <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
+                            <MudTextField @bind-Value="_newDomainName"
+                                          Label="New domain" Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" Style="max-width: 240px;"
+                                          OnKeyDown="OnNewDomainKeyDown" />
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Add" OnClick="AddDomain"
+                                       Disabled="@(string.IsNullOrWhiteSpace(_newDomainName))">
+                                Add
+                            </MudButton>
+                        </MudStack>
+                    </MudStack>
+
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                        Domains are the groups shown in the Field Picker (e.g. Loan, Borrower, Dates).
+                        A domain can't be deleted while fields still reference it.
+                    </MudText>
+
+                    @if (_domainList.Any())
+                    {
+                        <MudDataGrid T="string" Items="_domainList" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                            <Columns>
+                                <TemplateColumn T="string" title="Name" HeaderStyle="width: 40%;" CellStyle="width: 40%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="string" title="Fields using it" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
+                                    <CellTemplate>
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                 Color="@(CountFieldsUsingDomain(context.Item) > 0 ? Color.Primary : Color.Default)">
+                                            @CountFieldsUsingDomain(context.Item)
+                                        </MudChip>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="string" title=""
+                                                HeaderStyle="width: 1px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 1px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                           Color="Color.Default" title="Rename"
+                                                           OnClick="() => RenameDomain(context.Item)" />
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                           Color="Color.Error" title="Delete"
+                                                           Disabled="@(CountFieldsUsingDomain(context.Item) > 0)"
+                                                           OnClick="() => DeleteDomain(context.Item)" />
+                                        </MudStack>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            No domains defined yet. Add one above — fields created after will be able to pick it.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab 4: Settings ── *@
+        <MudTabPanel Text="Settings" Icon="@Icons.Material.Filled.Settings">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Spacing="2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Query Settings</MudText>
+                        <MudStack Row Spacing="2">
+                            <MudNumericField @bind-Value="_maxRowLimit" Label="Max Row Limit" Variant="Variant.Outlined"
+                                             Margin="Margin.Dense" Style="max-width: 200px;" />
+                            <MudNumericField @bind-Value="_commandTimeout" Label="Command Timeout (sec)" Variant="Variant.Outlined"
+                                             Margin="Margin.Dense" Style="max-width: 200px;" />
+                            <MudNumericField @bind-Value="_defaultPageSize" Label="Default Page Size" Variant="Variant.Outlined"
+                                             Margin="Margin.Dense" Style="max-width: 200px;" />
+                        </MudStack>
+                    </MudStack>
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab 4: Preview & Export ── *@
+        <MudTabPanel Text="Export" Icon="@Icons.Material.Filled.Download">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Download" OnClick="DownloadJson"
+                               Disabled="string.IsNullOrEmpty(_jsonPreview)">
+                        Download schema_config.json
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="CopyToClipboard"
+                               Disabled="string.IsNullOrEmpty(_jsonPreview)">
+                        Copy to Clipboard
+                    </MudButton>
+                    <MudDivider Vertical FlexItem />
+                    <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                               StartIcon="@Icons.Material.Filled.Save" OnClick="Save"
+                               Disabled="string.IsNullOrEmpty(_jsonPreview)">
+                        Save
+                    </MudButton>
+                    <SaveStatusIndicator @ref="_saveIndicator" />
+                </MudStack>
+
+                @if (_savedMessage is not null)
+                {
+                    <MudAlert Severity="@_savedSeverity" Class="mt-2">@_savedMessage</MudAlert>
+                }
+
+                @if (!string.IsNullOrEmpty(_jsonPreview))
+                {
+                    <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; max-height: 600px; overflow: auto;">
+                        <pre style="padding: 16px; font-size: 0.8rem; margin: 0; white-space: pre-wrap;">@_jsonPreview</pre>
+                    </MudPaper>
+                }
+            </MudStack>
+        </MudTabPanel>
+    </MudTabs>
+</MudStack>
+
+@code {
+    private int _activeTab;
+    private SaveStatusIndicator? _saveIndicator;
+
+    // Connection scoping — every tab reads/writes the schema for this id.
+    // Null before the admin picks one; on first load we pre-select the
+    // TLE primary connection so existing workflows keep working.
+    private List<CompanySummary> _companies = new();
+    private Guid? _selectedCompanyId;
+    private List<CompanyConnectionRecord> _availableConnections = new();
+    private Guid? _selectedConnectionId;
+
+    // Admin-curated table/alias pairs for the currently-selected connection.
+    // Surfaced in the Source Table / Alias dropdown on the field editor so
+    // fields can reference aliases even when no join declares them.
+    private List<CustomPrimaryTableRecord> _tableAliases = new();
+
+    // Per-page cache of INFORMATION_SCHEMA.COLUMNS lookups keyed by
+    // "schema.table" (case-insensitive). Survives across field-edit dialogs
+    // but is cleared whenever the connection changes so we never serve a
+    // stale column list from the wrong DB.
+    private Dictionary<string, List<string>> _columnCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // Resolve the currently-selected connection's type for dialect-aware
+    // placeholders, help text, and feature gates.
+    private string CurrentConnectionType =>
+        (_selectedConnectionId is Guid id
+            ? _availableConnections.FirstOrDefault(c => c.Id == id)?.ConnectionType
+            : null) ?? "sqlserver";
+    private bool IsSqlServer => string.Equals(CurrentConnectionType, "sqlserver", StringComparison.OrdinalIgnoreCase);
+    private bool IsPostgres  => string.Equals(CurrentConnectionType, "postgres",  StringComparison.OrdinalIgnoreCase);
+
+    // Generic, dialect-flavored example used in placeholders so Postgres
+    // admins don't see Empower SQL Server table names.
+    private string TablePlaceholder() => IsPostgres ? "lead" : "LN_MTGTERMS";
+
+    // Table browser
+    private string _tableFilter = string.Empty;
+    private bool _loadingTables;
+    private List<DbTableInfo> _tables = new();
+    private DbTableInfo? _selectedTable;
+    private List<DbColumnInfo> _tableColumns = new();
+
+    // Table type detection
+    private TableType _selectedTableType = TableType.LoanSingle;
+
+    // Fields
+    private List<FieldEntry> _fields = new();
+
+    // Joins
+    private List<JoinEntry> _joins = new();
+
+    // Lookups
+    private List<LookupEntry> _lookups = new();
+
+    // Custom Filters
+    private List<CustomFilterEntry> _customFilters = new();
+
+    // Domains — the admin-curated list that drives the Field editor dropdown.
+    private List<string> _domainList = new();
+    private string _newDomainName = string.Empty;
+
+    // Settings
+    private int _maxRowLimit = 50000;
+    private int _commandTimeout = 30;
+    private int _defaultPageSize = 100;
+
+    // Export
+    private string _jsonPreview = string.Empty;
+    private string? _savedMessage;
+    private Severity _savedSeverity;
+
+    private string _userId = "anonymous";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _userId = authState.User.FindFirst("oid")?.Value
+                  ?? authState.User.Identity?.Name
+                  ?? "anonymous";
+
+        _companies = await CompanyRegistry.GetActiveAsync();
+
+        // Restore last-session picks in priority order:
+        //   1. Remembered company (explicit, survives when user changes
+        //      companies without yet selecting a connection).
+        //   2. Remembered connection → derive company from it (back-compat
+        //      with prefs saved before the company column shipped).
+        //   3. First active company.
+        Guid? rememberedCompany = null;
+        Guid? rememberedConn = null;
+        try
+        {
+            var prefs = await PreferenceService.GetPreferencesAsync(_userId);
+            rememberedCompany = prefs.SchemaBuilderCompanyId;
+            rememberedConn = prefs.SchemaBuilderConnectionId;
+        }
+        catch { /* migration not applied yet — fall through */ }
+
+        if (rememberedCompany is Guid rc && _companies.Any(c => c.Id == rc))
+        {
+            _selectedCompanyId = rc;
+        }
+        else if (rememberedConn is Guid r)
+        {
+            try
+            {
+                var rememberedRecord = await ConnectionAdminSvc.GetByIdAsync(r);
+                if (rememberedRecord is not null
+                    && _companies.Any(c => c.Id == rememberedRecord.CompanyId))
+                {
+                    _selectedCompanyId = rememberedRecord.CompanyId;
+                }
+            }
+            catch { /* ignore — fall through to default selection */ }
+        }
+
+        _selectedCompanyId ??= _companies.FirstOrDefault()?.Id;
+
+        if (_selectedCompanyId is Guid cid)
+        {
+            _availableConnections = await ConnectionAdminSvc.GetByCompanyAsync(cid);
+        }
+
+        _selectedConnectionId =
+            rememberedConn is Guid rem && _availableConnections.Any(c => c.IsActive && c.Id == rem)
+                ? rememberedConn
+                : _availableConnections
+                    .Where(c => c.IsActive)
+                    .OrderByDescending(c => c.IsDefault)
+                    .ThenBy(c => c.Name)
+                    .Select(c => (Guid?)c.Id)
+                    .FirstOrDefault();
+
+        LoadCurrentConfig();
+        await LoadTableAliasesAsync();
+    }
+
+    private async Task OnCompanyChanged(Guid? newCompanyId)
+    {
+        _selectedCompanyId = newCompanyId;
+        _columnCache.Clear();
+
+        // Reload the connection list for the new company. Pick its default
+        // (or first active) so the Connection picker isn't blank on arrival.
+        _availableConnections = newCompanyId is Guid cid
+            ? await ConnectionAdminSvc.GetByCompanyAsync(cid)
+            : new();
+
+        _selectedConnectionId = _availableConnections
+            .Where(c => c.IsActive)
+            .OrderByDescending(c => c.IsDefault)
+            .ThenBy(c => c.Name)
+            .Select(c => (Guid?)c.Id)
+            .FirstOrDefault();
+
+        LoadCurrentConfig();
+        await LoadTableAliasesAsync();
+
+        // Persist the newly-selected connection (if any). The company isn't
+        // stored separately — we derive it from the connection at next load.
+        await PersistSelectedConnectionAsync();
+    }
+
+    private async Task OnConnectionChanged(Guid? newId)
+    {
+        _selectedConnectionId = newId;
+        // Column cache is per-DB: switching connections invalidates it.
+        _columnCache.Clear();
+        LoadCurrentConfig();
+        await LoadTableAliasesAsync();
+        await PersistSelectedConnectionAsync();
+    }
+
+    // Renders a Guid? connection id to its display label by looking it up in
+    // _availableConnections. Matches the MudSelectItem child content so the
+    // select's display stays consistent after a company swap.
+    private string ConnectionToLabel(Guid? id)
+    {
+        if (id is null) return string.Empty;
+        var c = _availableConnections.FirstOrDefault(x => x.Id == id);
+        if (c is null) return string.Empty;
+        return $"{c.Name} ({c.ConnectionType}){(c.IsDefault ? " · default" : "")}";
+    }
+
+    // Best-effort preference save; a write failure shouldn't block editing.
+    // Persists both company and connection so the pair round-trips per user.
+    private async Task PersistSelectedConnectionAsync()
+    {
+        try
+        {
+            var prefs = await PreferenceService.GetPreferencesAsync(_userId);
+            prefs.UserId = _userId;
+            prefs.SchemaBuilderCompanyId = _selectedCompanyId;
+            prefs.SchemaBuilderConnectionId = _selectedConnectionId;
+            await PreferenceService.SavePreferencesAsync(prefs);
+        }
+        catch { /* ignore */ }
+    }
+
+    // Opens the Rename dialog with the current in-memory schema collections.
+    // The dialog scans, previews, and returns (old, new) on Apply; we do the
+    // actual mutation + save here so the UI and the store stay in sync.
+    private async Task OpenRenameDialog()
+    {
+        if (_selectedConnectionId is null) return;
+
+        var parameters = new DialogParameters<RenameReferenceDialog>
+        {
+            { x => x.Fields, _fields },
+            { x => x.Joins, _joins },
+            { x => x.Lookups, _lookups },
+            { x => x.CustomFilters, _customFilters }
+        };
+        var dlg = await DialogService.ShowAsync<RenameReferenceDialog>(
+            "Rename Table Reference", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+
+        var result = await dlg.Result;
+        if (result is null || result.Canceled) return;
+        if (result.Data is not RenameReferenceDialog.RenameResult r) return;
+
+        await ApplyTableRename(r);
+    }
+
+    private async Task ApplyTableRename(RenameReferenceDialog.RenameResult r)
+    {
+        string? Swap(string? value) =>
+            string.IsNullOrEmpty(value)
+                ? value
+                : value.Replace(r.OldText, r.NewText, StringComparison.OrdinalIgnoreCase);
+
+        if (r.IncludeFields)
+        {
+            foreach (var f in _fields)
+            {
+                f.SourceTable = Swap(f.SourceTable) ?? string.Empty;
+                f.SqlExpression = Swap(f.SqlExpression) ?? string.Empty;
+                f.SqlPreamble = Swap(f.SqlPreamble) ?? string.Empty;
+                f.SqlJoin = Swap(f.SqlJoin) ?? string.Empty;
+            }
+        }
+        if (r.IncludeJoins)
+        {
+            foreach (var j in _joins)
+            {
+                j.TargetTable = Swap(j.TargetTable) ?? string.Empty;
+                j.OnClause = Swap(j.OnClause) ?? string.Empty;
+                j.ExtraCondition = Swap(j.ExtraCondition) ?? string.Empty;
+                j.RawSql = Swap(j.RawSql) ?? string.Empty;
+            }
+        }
+        if (r.IncludeLookups)
+        {
+            foreach (var l in _lookups)
+            {
+                l.SqlPreamble = Swap(l.SqlPreamble) ?? string.Empty;
+                l.SqlJoin = Swap(l.SqlJoin) ?? string.Empty;
+            }
+        }
+        if (r.IncludeCustomFilters)
+        {
+            foreach (var cf in _customFilters)
+            {
+                cf.SqlPreamble = Swap(cf.SqlPreamble) ?? string.Empty;
+                cf.SqlJoin = Swap(cf.SqlJoin) ?? string.Empty;
+                cf.SqlCondition = Swap(cf.SqlCondition) ?? string.Empty;
+            }
+        }
+
+        if (r.Matches.Count == 0)
+        {
+            Snackbar.Add("No matches — nothing changed.", Severity.Info);
+            return;
+        }
+
+        // Refresh the preview JSON and commit through the normal save path
+        // so the store, file, and every subscribed circuit see the update.
+        GenerateJson();
+        await Save();
+        StateHasChanged();
+
+        // Show a summary of what just got written.
+        var resultParams = new DialogParameters<RenameReferenceResultsDialog>
+        {
+            { x => x.OldText, r.OldText },
+            { x => x.NewText, r.NewText },
+            { x => x.Matches, r.Matches }
+        };
+        await DialogService.ShowAsync<RenameReferenceResultsDialog>(
+            "Rename Applied", resultParams,
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+    }
+
+    private async Task OpenCloneDialog()
+    {
+        if (_selectedConnectionId is not Guid target) return;
+        var targetConn = _availableConnections.FirstOrDefault(c => c.Id == target);
+        if (targetConn is null) return;
+
+        var sameTypeSources = _availableConnections
+            .Where(c => c.IsActive && c.Id != target && string.Equals(c.ConnectionType, targetConn.ConnectionType, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (sameTypeSources.Count == 0)
+        {
+            Snackbar.Add($"No other active {targetConn.ConnectionType} connections to clone from.", Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters<CloneSchemaDialog>
+        {
+            { x => x.TargetConnection, targetConn },
+            { x => x.SameTypeSources, sameTypeSources },
+            { x => x.TargetHasSchema, await SchemaConfigStoreSvc.HasSchemaAsync(target) }
+        };
+        var dlg = await DialogService.ShowAsync<CloneSchemaDialog>("Clone schema from another connection", parameters);
+        var result = await dlg.Result;
+        if (result is null || result.Canceled || result.Data is not Guid sourceId) return;
+
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var updatedBy = authState.User.FindFirst("preferred_username")?.Value
+                ?? authState.User.Identity?.Name ?? "schema-builder";
+            await SchemaConfigStoreSvc.CloneAsync(sourceId, target, overwrite: true, updatedBy);
+            LoadCurrentConfig();
+            if (_saveIndicator is not null) _ = _saveIndicator.Flash("Cloned");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Clone failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // Refreshes the admin-curated table-alias list for the current connection.
+    // Non-fatal on failure so a DB hiccup doesn't block schema editing.
+    private async Task LoadTableAliasesAsync()
+    {
+        if (_selectedConnectionId is not Guid id)
+        {
+            _tableAliases = new();
+            return;
+        }
+        try
+        {
+            _tableAliases = await TableAliasSvc.GetByConnectionAsync(id);
+        }
+        catch
+        {
+            _tableAliases = new();
+        }
+    }
+
+    private void LoadCurrentConfig()
+    {
+        try
+        {
+            // When a connection is picked, load its schema; otherwise fall
+            // back to the store's Current (= TLE primary for now).
+            var config = _selectedConnectionId is Guid id
+                ? SchemaConfigStoreSvc.GetForConnection(id)
+                : SchemaConfigStoreSvc.Current;
+
+            // Load settings
+            _maxRowLimit = config.Settings.MaxRowLimit > 0 ? config.Settings.MaxRowLimit : 50000;
+            _commandTimeout = config.Settings.CommandTimeoutSeconds > 0 ? config.Settings.CommandTimeoutSeconds : 30;
+            _defaultPageSize = config.Settings.DefaultPageSize > 0 ? config.Settings.DefaultPageSize : 100;
+
+            // Load domains
+            _domainList = config.Domains is { Count: > 0 }
+                ? config.Domains.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList()
+                : new List<string>();
+
+            // Load joins, sorted by Target Table ascending
+            _joins.Clear();
+            foreach (var join in config.Joins)
+            {
+                _joins.Add(ParseJoinToEntry(join));
+            }
+            _joins = _joins.OrderBy(j => j.TargetTable, StringComparer.OrdinalIgnoreCase).ToList();
+
+            // Load lookups
+            _lookups.Clear();
+            foreach (var lu in config.Lookups)
+            {
+                _lookups.Add(new LookupEntry
+                {
+                    Id = lu.Id,
+                    Label = lu.Label,
+                    SqlPreamble = lu.SqlPreamble,
+                    SqlJoin = lu.SqlJoin ?? string.Empty
+                });
+            }
+
+            // Load custom filters
+            _customFilters.Clear();
+            foreach (var cf in config.CustomFilters)
+            {
+                _customFilters.Add(new CustomFilterEntry
+                {
+                    Id = cf.Id,
+                    Label = cf.Label,
+                    Description = cf.Description ?? string.Empty,
+                    SqlPreamble = cf.SqlPreamble ?? string.Empty,
+                    JoinId = cf.JoinId ?? string.Empty,
+                    SqlJoin = cf.SqlJoin ?? string.Empty,
+                    LookupIds = cf.LookupIds is not null ? new List<string>(cf.LookupIds) : null,
+                    SqlCondition = cf.SqlCondition,
+                    GroupName = cf.GroupName ?? string.Empty
+                });
+            }
+
+            // Load fields, sorted by Label ascending
+            _fields.Clear();
+            foreach (var field in config.Fields.OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase))
+            {
+                var aggStr = field.AllowedAggregations is not null
+                    ? string.Join(",", field.AllowedAggregations)
+                    : "";
+
+                _fields.Add(new FieldEntry
+                {
+                    Id = field.Id,
+                    Label = field.Label,
+                    Description = field.Description,
+                    Domain = field.Domain,
+                    DataType = field.DataType,
+                    FieldType = field.FieldType,
+                    MaxLength = field.MaxLength,
+                    CodeSetId = field.CodeSetId,
+                    AllowedAggregationsStr = aggStr,
+                    SourceTable = field.SourceTable,
+                    SourceColumn = field.SourceColumn,
+                    SqlExpression = field.SqlExpression,
+                    SqlPreamble = field.SqlPreamble,
+                    // Normalize legacy single JoinId into JoinIds for admin editing.
+                    JoinIds = MergeFieldJoinIds(field.JoinId, field.JoinIds),
+                    SqlJoin = field.SqlJoin,
+                    LookupIds = field.LookupIds is not null ? new List<string>(field.LookupIds) : null,
+                    RolesRequired = field.RolesRequired,
+                    ValueSortOrder = field.ValueSortOrder is not null
+                        ? new Dictionary<string, int>(field.ValueSortOrder)
+                        : null,
+                    Format = field.Format,
+                    ApplyTimezoneConversion = field.ApplyTimezoneConversion
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Could not load existing config: {ex.Message}", Severity.Warning);
+        }
+    }
+
+    // Combines a field's legacy singular JoinId with the new JoinIds list into
+    // a single deduped list for admin editing. Returns null when no joins referenced.
+    private static List<string>? MergeFieldJoinIds(string? legacy, List<string>? list)
+    {
+        var merged = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (list is not null)
+        {
+            foreach (var id in list)
+                if (!string.IsNullOrWhiteSpace(id) && seen.Add(id)) merged.Add(id);
+        }
+        if (!string.IsNullOrWhiteSpace(legacy) && seen.Add(legacy)) merged.Add(legacy);
+        return merged.Count == 0 ? null : merged;
+    }
+
+    private static JoinEntry ParseJoinToEntry(Configuration.JoinDefinition join)
+    {
+        var sql = join.Sql.Trim();
+        var entry = new JoinEntry { Id = join.Id };
+
+        // Detect nested/complex joins (multiple JOINs in one definition) — use raw SQL mode
+        var joinCount = System.Text.RegularExpressions.Regex.Matches(sql, @"\bJOIN\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+        if (joinCount > 1)
+        {
+            entry.UseRawSql = true;
+            entry.RawSql = sql;
+            // Extract the first schema.table name for display
+            var match = System.Text.RegularExpressions.Regex.Match(sql, @"\bJOIN\s+([\w.]+\.\w+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success) entry.TargetTable = match.Groups[1].Value;
+            return entry;
+        }
+
+        // Parse: "(INNER|LEFT) JOIN <table> [AS <alias>] ON <on_clause> [AND <extra>]"
+        var parts = sql.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2) return entry;
+
+        entry.JoinType = $"{parts[0].ToUpper()} {parts[1].ToUpper()}";
+
+        // Find table (index 2)
+        var tableIdx = 2;
+        if (tableIdx >= parts.Length) return entry;
+        entry.TargetTable = parts[tableIdx];
+
+        // Check for AS alias
+        var onIdx = tableIdx + 1;
+        if (onIdx < parts.Length && parts[onIdx].Equals("AS", StringComparison.OrdinalIgnoreCase))
+        {
+            entry.Alias = parts[onIdx + 1];
+            onIdx += 2;
+        }
+
+        // Skip "ON"
+        if (onIdx < parts.Length && parts[onIdx].Equals("ON", StringComparison.OrdinalIgnoreCase))
+            onIdx++;
+
+        // Collect ON clause until AND
+        var onParts = new List<string>();
+        var andParts = new List<string>();
+        bool pastAnd = false;
+
+        for (int i = onIdx; i < parts.Length; i++)
+        {
+            if (!pastAnd && parts[i].Equals("AND", StringComparison.OrdinalIgnoreCase))
+            {
+                pastAnd = true;
+                continue;
+            }
+            if (pastAnd)
+                andParts.Add(parts[i]);
+            else
+                onParts.Add(parts[i]);
+        }
+
+        entry.OnClause = string.Join(" ", onParts);
+        entry.ExtraCondition = string.Join(" ", andParts);
+
+        return entry;
+    }
+
+    private async Task LoadTables()
+    {
+        _loadingTables = true;
+        try
+        {
+            _tables = await DbService.GetTablesAsync(_selectedConnectionId, _tableFilter);
+            _selectedTable = null;
+            _tableColumns.Clear();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load tables: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loadingTables = false;
+        }
+    }
+
+    private async Task ClearSelectedTable()
+    {
+        _selectedTable = null;
+        _tableColumns.Clear();
+        await LoadTables();
+    }
+
+    private async Task SelectTable(DbTableInfo table)
+    {
+        _selectedTable = table;
+        _selectedTableType = TableType.LoanSingle;
+        try
+        {
+            // Service returns columns in ORDINAL_POSITION (DB-declared order).
+            // Admins picking a column out of the list want it alphabetical.
+            _tableColumns = (await DbService.GetColumnsAsync(_selectedConnectionId, table.SchemaName, table.TableName))
+                .OrderBy(c => c.ColumnName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var hasWhichBorr = _tableColumns.Any(c => c.ColumnName.Equals("WHICHBORR", StringComparison.OrdinalIgnoreCase));
+            var hasIdx = _tableColumns.Any(c => c.ColumnName.Equals("IDX", StringComparison.OrdinalIgnoreCase));
+
+            _selectedTableType = (hasWhichBorr, hasIdx) switch
+            {
+                (true, true) => TableType.BorrowerMultiple,
+                (true, false) => TableType.BorrowerSingle,
+                (false, true) => TableType.LoanMultiple,
+                _ => TableType.LoanSingle
+            };
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load columns: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private List<JoinEntry> GetMatchingJoins()
+    {
+        if (_selectedTable is null) return new();
+        var tableFull = _selectedTable.FullName;
+
+        // Find all joins whose TargetTable matches the selected table
+        return _joins.Where(j =>
+            j.TargetTable.Equals(tableFull, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    private string GetJoinMenuLabel(JoinEntry join)
+    {
+        if (!string.IsNullOrWhiteSpace(join.Alias))
+            return $"{join.Alias} ({join.ExtraCondition})";
+        if (!string.IsNullOrWhiteSpace(join.ExtraCondition))
+            return $"{join.Id} ({join.ExtraCondition})";
+        return join.Id;
+    }
+
+    private string GetSourceTableRef(JoinEntry? join)
+    {
+        if (join is not null && !string.IsNullOrWhiteSpace(join.Alias))
+            return join.Alias;
+        if (join is not null)
+            return join.TargetTable;
+        return _selectedTable?.FullName ?? string.Empty;
+    }
+
+    private bool IsFieldAlreadyAdded(DbColumnInfo col, JoinEntry? join)
+    {
+        var sourceTable = GetSourceTableRef(join);
+        return _fields.Any(f => f.SourceTable.Equals(sourceTable, StringComparison.OrdinalIgnoreCase)
+                              && f.SourceColumn.Equals(col.ColumnName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task AddField(DbColumnInfo col, JoinEntry? join)
+    {
+        if (_selectedTable is null) return;
+
+        // Skip structural columns
+        if (col.ColumnName.Equals("LNKEY", StringComparison.OrdinalIgnoreCase) ||
+            col.ColumnName.Equals("WHICHBORR", StringComparison.OrdinalIgnoreCase) ||
+            col.ColumnName.Equals("IDX", StringComparison.OrdinalIgnoreCase))
+        {
+            Snackbar.Add($"{col.ColumnName} is a structural key column — not added as a field.", Severity.Warning);
+            return;
+        }
+
+        var sourceTable = GetSourceTableRef(join);
+        var suffix = join is not null && !string.IsNullOrWhiteSpace(join.Alias)
+            ? $"_{join.Alias.ToLowerInvariant()}" : "";
+
+        var dataType = SchemaBuilderService.MapDbTypeToFieldDataType(col.DataType);
+        var maxLen = SchemaBuilderService.ComputeMaxLength(col);
+        var id = col.ColumnName.ToLowerInvariant().Replace(" ", "_") + suffix;
+        var label = FormatLabel(col.ColumnName);
+        if (!string.IsNullOrWhiteSpace(join?.Alias))
+            label += $" ({join.Alias})";
+
+        var fieldType = dataType switch
+        {
+            "currency" or "percent" or "decimal" => "Measure",
+            "integer" when col.ColumnName.Contains("AMT", StringComparison.OrdinalIgnoreCase) => "Measure",
+            "integer" when col.ColumnName.Contains("SCORE", StringComparison.OrdinalIgnoreCase) => "Measure",
+            _ => "Dimension"
+        };
+
+        // Auto-create join if no join exists for this table yet (so it shows up in the source dropdown)
+        if (join is null)
+            AutoCreateJoin();
+
+        var prepopulated = new FieldEntry
+        {
+            Id = id,
+            Label = label,
+            Description = $"{_selectedTable.TableName}.{col.ColumnName} ({col.DataType}){(join?.Alias is not null ? $" via {join.Alias}" : "")}",
+            Domain = GuessDomain(_selectedTable.TableName, _domainList),
+            DataType = dataType,
+            FieldType = fieldType,
+            MaxLength = maxLen,
+            SourceTable = sourceTable,
+            SourceColumn = col.ColumnName,
+            AllowedAggregationsStr = fieldType == "Measure" ? "SUM,AVG,MAX,MIN" : ""
+        };
+
+        await OpenFieldDialog(prepopulated, isNew: true);
+    }
+
+    private async Task OpenFieldDialog(FieldEntry? field, bool isNew)
+    {
+        var sources = GetAllAvailableSources(field).ToList();
+        // No default for SourceTable on new fields — user must pick one
+        // explicitly. Defaulting masked cases where a connection hasn't
+        // authored its loan table yet.
+        // Column loader: given a table reference (schema.table OR bare name),
+        // return its column names from INFORMATION_SCHEMA on the current
+        // connection. Results are cached per-table so revisits are
+        // free; the cache is cleared whenever the connection changes.
+        //
+        // Exceptions propagate to the dialog so it can distinguish "DB
+        // returned empty" from "DB query failed" in its helper text.
+        Func<string, Task<List<string>>> columnLoader = async tableName =>
+        {
+            if (string.IsNullOrWhiteSpace(tableName)) return new();
+            if (_columnCache.TryGetValue(tableName, out var cached))
+                return cached;
+
+            var parts = tableName.Split('.');
+            var schema = parts.Length == 2 ? parts[0].Trim('[', ']') : null;
+            var table = (parts.Length == 2 ? parts[1] : parts[0]).Trim('[', ']');
+
+            var cols = await DbService.GetColumnsAsync(_selectedConnectionId, schema, table);
+            // Bare-name queries (no schema filter) may return the same
+            // column name from multiple schemas — dedupe so the picker
+            // isn't cluttered with "Id, Id, Id". Sort A–Z so the picker
+            // behaves like a natural alphabetical list regardless of the
+            // table's ORDINAL_POSITION ordering.
+            var names = cols
+                .Select(c => c.ColumnName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            _columnCache[tableName] = names;
+            return names;
+        };
+
+        var parameters = new DialogParameters
+        {
+            { "Field", field ?? new FieldEntry { SourceTable = string.Empty } },
+            { "IsNew", isNew },
+            { "AvailableSources", sources },
+            { "AvailableLookups", _lookups.AsEnumerable() },
+            { "AvailableJoins", _joins },
+            { "AvailableDomains", _domainList.AsEnumerable() },
+            { "ConnectionType", CurrentConnectionType },
+            { "LoadColumnsAsync", columnLoader }
+        };
+        var dialog = await DialogService.ShowAsync<FieldEditDialog>(
+            isNew ? "Add Field" : "Edit Field", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not FieldEntry edited) return;
+
+        if (isNew)
+        {
+            _fields.Add(edited);
+        }
+        else if (field is not null)
+        {
+            // If the ID changed, cascade the rename across saved reports and grid
+            // templates so existing references don't break. Prompt the user first
+            // so an accidental ID tweak can't silently rewrite their data.
+            if (!string.Equals(field.Id, edited.Id, StringComparison.Ordinal))
+            {
+                var oldId = field.Id;
+                var newId = edited.Id;
+                var confirm = await DialogService.ShowMessageBoxAsync(
+                    "Rename field references?",
+                    $"You changed the ID from \"{oldId}\" to \"{newId}\". " +
+                    $"Saved reports, grid templates, and dashboard configs that reference \"{oldId}\" will be rewritten to use \"{newId}\". Proceed?",
+                    yesText: "Rename everywhere", cancelText: "Cancel");
+
+                if (confirm != true)
+                    return; // abort: leave _fields and _originalFields untouched
+
+                try
+                {
+                    var rows = await FieldReferenceService.RenameAsync(oldId, newId);
+                    Snackbar.Add($"Renamed field references in {rows} row(s).", Severity.Success);
+                }
+                catch (Exception ex)
+                {
+                    Snackbar.Add($"Field rename failed: {ex.Message}", Severity.Error);
+                    return;
+                }
+            }
+
+            // Copy edited values back to the original instance (preserves identity for any other references)
+            field.Id = edited.Id;
+            field.Label = edited.Label;
+            field.Description = edited.Description;
+            field.Domain = edited.Domain;
+            field.DataType = edited.DataType;
+            field.FieldType = edited.FieldType;
+            field.MaxLength = edited.MaxLength;
+            field.CodeSetId = edited.CodeSetId;
+            field.AllowedAggregationsStr = edited.AllowedAggregationsStr;
+            field.SourceTable = edited.SourceTable;
+            field.SourceColumn = edited.SourceColumn;
+            field.SqlExpression = edited.SqlExpression;
+            field.SqlPreamble = edited.SqlPreamble;
+            field.JoinIds = edited.JoinIds;
+            field.SqlJoin = edited.SqlJoin;
+            field.LookupIds = edited.LookupIds;
+            field.RolesRequired = edited.RolesRequired;
+            field.Format = edited.Format;
+            field.ApplyTimezoneConversion = edited.ApplyTimezoneConversion;
+            // ValueSortOrder is managed via the separate Sort dialog — preserve the original
+        }
+
+        // Re-sort by Label after add/edit
+        _fields = _fields.OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase).ToList();
+        StateHasChanged();
+    }
+
+    private IEnumerable<SourceOption> GetAllAvailableSources(FieldEntry? field)
+    {
+        // Sources come from three places, deduplicated case-insensitively by
+        // Value (what lands on the field's SourceTable):
+        //   1. Joins — structured Alias/TargetTable, plus regex-extracted
+        //      (table, alias) pairs from raw-SQL joins.
+        //   2. Admin-curated Table Aliases catalog (Admin → Table Aliases).
+        //   3. The field's current SourceTable (so editing an existing row
+        //      doesn't drop its value from the list).
+        // When a Value appears twice, prefer the richer label (one that
+        // shows "Table AS Alias") and the known TableName for column loads.
+        var byValue = new Dictionary<string, SourceOption>(StringComparer.OrdinalIgnoreCase);
+        void AddOrPromote(SourceOption opt)
+        {
+            if (string.IsNullOrWhiteSpace(opt.Value)) return;
+            if (!byValue.TryGetValue(opt.Value, out var existing))
+            {
+                byValue[opt.Value] = opt;
+                return;
+            }
+            var existingRich = existing.Label.Contains(" AS ", StringComparison.Ordinal);
+            var incomingRich = opt.Label.Contains(" AS ", StringComparison.Ordinal);
+            if (!existingRich && incomingRich) byValue[opt.Value] = opt;
+            else if (existing.TableName is null && opt.TableName is not null)
+                byValue[opt.Value] = existing with { TableName = opt.TableName };
+        }
+
+        foreach (var j in _joins)
+        {
+            if (!string.IsNullOrWhiteSpace(j.Alias))
+            {
+                var label = !string.IsNullOrWhiteSpace(j.TargetTable)
+                    ? $"{j.TargetTable} AS {j.Alias}"
+                    : j.Alias;
+                AddOrPromote(new SourceOption(j.Alias, label,
+                    string.IsNullOrWhiteSpace(j.TargetTable) ? null : j.TargetTable));
+            }
+            else if (!string.IsNullOrWhiteSpace(j.TargetTable))
+            {
+                AddOrPromote(new SourceOption(j.TargetTable, j.TargetTable, j.TargetTable));
+            }
+
+            // Raw SQL joins: capture the table too (not just the alias) so
+            // the dropdown label reads "SCHEMA.TABLE AS ALIAS" and the
+            // column loader has a table to query.
+            if (j.UseRawSql && !string.IsNullOrWhiteSpace(j.RawSql))
+            {
+                var matches = System.Text.RegularExpressions.Regex.Matches(j.RawSql,
+                    @"\bJOIN\s+(?<table>[\w\.\[\]]+)\s+(?:AS\s+)?(?<alias>\w+)\b",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                foreach (System.Text.RegularExpressions.Match m in matches)
+                {
+                    var alias = m.Groups["alias"].Value;
+                    var table = m.Groups["table"].Value.Trim('[', ']');
+                    if (alias.Equals("ON", StringComparison.OrdinalIgnoreCase)
+                        || alias.Equals("WITH", StringComparison.OrdinalIgnoreCase)
+                        || alias.Equals("LEFT", StringComparison.OrdinalIgnoreCase)
+                        || alias.Equals("INNER", StringComparison.OrdinalIgnoreCase)
+                        || alias.Equals("RIGHT", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    AddOrPromote(new SourceOption(alias, $"{table} AS {alias}", table));
+                }
+            }
+        }
+
+        foreach (var ta in _tableAliases)
+        {
+            if (!string.IsNullOrEmpty(ta.Alias))
+                AddOrPromote(new SourceOption(ta.Alias, $"{ta.TableName} AS {ta.Alias}", ta.TableName));
+            else if (!string.IsNullOrWhiteSpace(ta.TableName))
+                AddOrPromote(new SourceOption(ta.TableName, ta.TableName, ta.TableName));
+        }
+
+        // Legacy safety net: keep the field's current SourceTable in the
+        // list even if the catalog no longer references it. TableName null
+        // here means columns can't be auto-listed for it — the admin will
+        // need to repoint to a known source to pick from a column list.
+        if (field is not null && !string.IsNullOrWhiteSpace(field.SourceTable)
+            && !byValue.ContainsKey(field.SourceTable))
+        {
+            byValue[field.SourceTable] = new SourceOption(field.SourceTable, field.SourceTable, null);
+        }
+
+        return byValue.Values.OrderBy(o => o.Label, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void RemoveField(FieldEntry field)
+    {
+        _fields.Remove(field);
+        StateHasChanged();
+    }
+
+    private void AutoCreateJoin()
+    {
+        if (_selectedTable is null) return;
+        var tableFull = _selectedTable.FullName;
+
+        // The auto-join template assumes the Empower SQL Server schema
+        // (primary table EMPOWER.LN_MTGTERMS, join column LNKEY). It has no
+        // meaning for Postgres, for a Salesforce schema, or for any non-
+        // Empower SQL Server DB — gate strictly to avoid generating bad
+        // defaults that the admin then has to hunt down and fix.
+        var currentConn = _selectedConnectionId is Guid connId
+            ? _availableConnections.FirstOrDefault(c => c.Id == connId)
+            : null;
+        var isEmpowerSqlServer =
+            currentConn is not null
+            && string.Equals(currentConn.ConnectionType, "sqlserver", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_selectedTable.SchemaName, "EMPOWER", StringComparison.OrdinalIgnoreCase);
+        if (!isEmpowerSqlServer) return;
+
+        // Skip if it's the primary table
+        if (tableFull.Equals("EMPOWER.LN_MTGTERMS", StringComparison.OrdinalIgnoreCase)) return;
+
+        // Skip if a join already exists for this table
+        if (_joins.Any(j => j.TargetTable.Equals(tableFull, StringComparison.OrdinalIgnoreCase) ||
+                            (!string.IsNullOrEmpty(j.Alias) && _fields.Any(f => f.SourceTable.Equals(j.Alias, StringComparison.OrdinalIgnoreCase)))))
+            return;
+
+        var joinId = _selectedTable.TableName.ToLowerInvariant() + "_join";
+        if (_joins.Any(j => j.Id == joinId)) return;
+
+        var joinType = _selectedTableType == TableType.LoanSingle ? "INNER JOIN" : "LEFT JOIN";
+        var onClause = $"EMPOWER.LN_MTGTERMS.LNKEY = {tableFull}.LNKEY";
+
+        var extraCondition = _selectedTableType switch
+        {
+            TableType.BorrowerSingle => $"{tableFull}.WHICHBORR=1",
+            TableType.BorrowerMultiple => $"{tableFull}.WHICHBORR=1 AND {tableFull}.IDX=1",
+            TableType.LoanMultiple => $"{tableFull}.IDX=1",
+            _ => ""
+        };
+
+        _joins.Add(new JoinEntry
+        {
+            Id = joinId,
+            JoinType = joinType,
+            TargetTable = tableFull,
+            OnClause = onClause,
+            ExtraCondition = extraCondition
+        });
+        SortJoins();
+
+        Snackbar.Add($"Auto-created {joinType} for {_selectedTable.TableName} ({GetTableTypeLabel()})", Severity.Info);
+    }
+
+    private async Task OpenJoinDialog(JoinEntry? join, bool isNew)
+    {
+        var prefilled = join ?? new JoinEntry
+        {
+            Id = $"join_{_joins.Count + 1}",
+            JoinType = "LEFT JOIN",
+            TargetTable = string.Empty,
+            OnClause = string.Empty
+        };
+
+        var parameters = new DialogParameters
+        {
+            { "Join", prefilled },
+            { "IsNew", isNew },
+            { "ConnectionType", CurrentConnectionType },
+            { "AvailableAliases", _tableAliases.AsEnumerable() }
+        };
+        var dialog = await DialogService.ShowAsync<JoinEditDialog>(
+            isNew ? "Add Join" : "Edit Join", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not JoinEditDialog.JoinEditResult res) return;
+
+        var edited = res.Edited;
+
+        if (isNew)
+        {
+            _joins.Add(edited);
+        }
+        else if (join is not null)
+        {
+            // Copy edited values back to the original instance
+            join.Id = edited.Id;
+            join.JoinType = edited.JoinType;
+            join.TargetTable = edited.TargetTable;
+            join.Alias = edited.Alias;
+            join.OnClause = edited.OnClause;
+            join.ExtraCondition = edited.ExtraCondition;
+            join.UseRawSql = edited.UseRawSql;
+            join.RawSql = edited.RawSql;
+
+            // If the alias/target reference changed, update any fields that pointed at the old reference
+            if (!string.IsNullOrWhiteSpace(res.OriginalRef) &&
+                !string.Equals(res.OriginalRef, res.NewRef, StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var f in _fields.Where(f => f.SourceTable.Equals(res.OriginalRef, StringComparison.OrdinalIgnoreCase)))
+                {
+                    f.SourceTable = res.NewRef;
+                }
+            }
+        }
+
+        SortJoins();
+    }
+
+    private void RemoveJoin(JoinEntry join)
+    {
+        _joins.Remove(join);
+        StateHasChanged();
+    }
+
+    private void SortJoins()
+    {
+        _joins = _joins.OrderBy(j => j.TargetTable, StringComparer.OrdinalIgnoreCase).ToList();
+        StateHasChanged();
+    }
+
+    // Index 6 = the Export tab (Fields, Joins, Lookups, Custom Filters,
+    // Domains, Settings, Export). Kept as a named constant so reordering the
+    // panels only requires updating one place.
+    // Index order after adding Table Aliases as tab 0:
+    //   0 Table Aliases, 1 Fields, 2 Joins, 3 Lookups, 4 Custom Filters,
+    //   5 Domains, 6 Settings, 7 Export.
+    private const int ExportTabIndex = 7;
+
+    private void OnActiveTabChanged(int newIndex)
+    {
+        _activeTab = newIndex;
+        if (newIndex == ExportTabIndex)
+        {
+            GenerateJson();
+        }
+    }
+
+    private void GenerateJson()
+    {
+        var config = new
+        {
+            Settings = new
+            {
+                MaxRowLimit = _maxRowLimit,
+                CommandTimeoutSeconds = _commandTimeout,
+                DefaultPageSize = _defaultPageSize,
+                RelativeDateOperators = new object[]
+                {
+                    new { Id = "today", Label = "Today", SqlTemplate = "CAST(GETDATE() AS DATE)" },
+                    new { Id = "yesterday", Label = "Yesterday", SqlTemplate = "DATEADD(day, -1, CAST(GETDATE() AS DATE))" },
+                    new { Id = "last_7_days", Label = "Last 7 Days", SqlTemplate = "DATEADD(day, -7, CAST(GETDATE() AS DATE))" },
+                    new { Id = "last_30_days", Label = "Last 30 Days", SqlTemplate = "DATEADD(day, -30, CAST(GETDATE() AS DATE))" },
+                    new { Id = "current_month", Label = "Current Month", SqlTemplate = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)" },
+                    new { Id = "last_month", Label = "Last Month", SqlTemplate = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) - 1, 0)" },
+                    new { Id = "ytd", Label = "Year to Date", SqlTemplate = "DATEFROMPARTS(YEAR(GETDATE()), 1, 1)" },
+                    new { Id = "custom_range", Label = "Custom Range", SqlTemplate = (string?)null }
+                }
+            },
+            Joins = _joins.Select(j => new { j.Id, Sql = j.BuildSql() }),
+            Fields = _fields.Select(f => BuildFieldOutput(f)),
+            Lookups = _lookups.Select(lu =>
+            {
+                var obj = new Dictionary<string, object?> { ["Id"] = lu.Id, ["Label"] = lu.Label, ["SqlPreamble"] = lu.SqlPreamble };
+                if (!string.IsNullOrWhiteSpace(lu.SqlJoin)) obj["SqlJoin"] = lu.SqlJoin;
+                return obj;
+            }),
+            CustomFilters = _customFilters.Select(cf =>
+            {
+                var obj = new Dictionary<string, object?> { ["Id"] = cf.Id, ["Label"] = cf.Label };
+                if (!string.IsNullOrWhiteSpace(cf.Description)) obj["Description"] = cf.Description;
+                if (!string.IsNullOrWhiteSpace(cf.SqlPreamble)) obj["SqlPreamble"] = cf.SqlPreamble;
+                if (!string.IsNullOrWhiteSpace(cf.JoinId)) obj["JoinId"] = cf.JoinId;
+                if (!string.IsNullOrWhiteSpace(cf.SqlJoin)) obj["SqlJoin"] = cf.SqlJoin;
+                if (cf.LookupIds is not null && cf.LookupIds.Count > 0) obj["LookupIds"] = cf.LookupIds;
+                obj["SqlCondition"] = cf.SqlCondition;
+                if (!string.IsNullOrWhiteSpace(cf.GroupName)) obj["GroupName"] = cf.GroupName;
+                return obj;
+            }),
+            Domains = _domainList.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList()
+        };
+
+        _jsonPreview = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        });
+    }
+
+    // ── Domain CRUD ──────────────────────────────────────────────────────
+
+    private int CountFieldsUsingDomain(string domain) =>
+        _fields.Count(f => string.Equals(f.Domain, domain, StringComparison.OrdinalIgnoreCase));
+
+    private void AddDomain()
+    {
+        var name = _newDomainName?.Trim();
+        if (string.IsNullOrWhiteSpace(name)) return;
+        if (_domainList.Any(d => string.Equals(d, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            Snackbar.Add($"Domain \"{name}\" already exists.", Severity.Warning);
+            return;
+        }
+        _domainList.Add(name);
+        _domainList = _domainList.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList();
+        _newDomainName = string.Empty;
+    }
+
+    private void OnNewDomainKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") AddDomain();
+    }
+
+    private async Task RenameDomain(string oldName)
+    {
+        var parameters = new DialogParameters<RenameDialog>
+        {
+            { x => x.InitialValue, oldName },
+            { x => x.Title, "Rename domain" },
+            { x => x.Label, "Domain name" }
+        };
+        var dlg = await DialogService.ShowAsync<RenameDialog>("Rename domain", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+        var result = await dlg.Result;
+        if (result is null || result.Canceled || result.Data is not string newName) return;
+        newName = newName.Trim();
+        if (string.IsNullOrWhiteSpace(newName) || string.Equals(newName, oldName, StringComparison.Ordinal)) return;
+
+        if (_domainList.Any(d => string.Equals(d, newName, StringComparison.OrdinalIgnoreCase)
+                                 && !string.Equals(d, oldName, StringComparison.Ordinal)))
+        {
+            Snackbar.Add($"Domain \"{newName}\" already exists.", Severity.Warning);
+            return;
+        }
+
+        var idx = _domainList.FindIndex(d => string.Equals(d, oldName, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+        _domainList[idx] = newName;
+        _domainList = _domainList.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList();
+
+        // Cascade: update every field currently using the old domain name.
+        var renamedCount = 0;
+        foreach (var f in _fields)
+        {
+            if (string.Equals(f.Domain, oldName, StringComparison.OrdinalIgnoreCase))
+            {
+                f.Domain = newName;
+                renamedCount++;
+            }
+        }
+        Snackbar.Add($"Renamed. Updated {renamedCount} field(s).", Severity.Success);
+    }
+
+    private async Task DeleteDomain(string name)
+    {
+        if (CountFieldsUsingDomain(name) > 0)
+        {
+            Snackbar.Add($"Can't delete \"{name}\" — fields still reference it. Move them first.", Severity.Warning);
+            return;
+        }
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Delete domain",
+            $"Remove \"{name}\" from the domain list?",
+            yesText: "Delete", cancelText: "Cancel");
+        if (confirmed != true) return;
+
+        _domainList.RemoveAll(d => string.Equals(d, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task OpenSortDialog(FieldEntry field)
+    {
+        var parameters = new DialogParameters
+        {
+            { "FieldLabel", field.Label },
+            { "CodeSetId", field.CodeSetId },
+            { "Initial", field.ValueSortOrder }
+        };
+        var dialog = await DialogService.ShowAsync<SortOrderDialog>("Custom Sort Order", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled && result.Data is Dictionary<string, int> map)
+        {
+            field.ValueSortOrder = map.Count > 0 ? map : null;
+            Snackbar.Add($"Saved {map.Count} sort entries for {field.Label}", Severity.Success);
+        }
+    }
+
+    private object BuildFieldOutput(FieldEntry f)
+    {
+        var result = new Dictionary<string, object?>
+        {
+            ["Id"] = f.Id,
+            ["Label"] = f.Label,
+            ["Description"] = f.Description,
+            ["Domain"] = f.Domain,
+            ["DataType"] = f.DataType,
+            ["FieldType"] = f.FieldType
+        };
+
+        if (f.MaxLength.HasValue) result["MaxLength"] = f.MaxLength.Value;
+
+        if (!string.IsNullOrWhiteSpace(f.AllowedAggregationsStr))
+            result["AllowedAggregations"] = f.AllowedAggregationsStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (f.CodeSetId.HasValue) result["CodeSetId"] = f.CodeSetId.Value;
+
+        if (f.ValueSortOrder is not null && f.ValueSortOrder.Count > 0)
+            result["ValueSortOrder"] = f.ValueSortOrder;
+
+        result["SourceTable"] = f.SourceTable;
+        result["SourceColumn"] = f.SourceColumn;
+
+        if (!string.IsNullOrWhiteSpace(f.SqlExpression))
+        {
+            result["SqlExpression"] = f.SqlExpression;
+            if (!string.IsNullOrWhiteSpace(f.SqlPreamble))
+                result["SqlPreamble"] = f.SqlPreamble;
+        }
+        // JoinIds and SqlJoin apply regardless of inline-SQL mode: a plain
+        // SourceTable/SourceColumn field can still need a JOIN (e.g. column on a
+        // joined table). Both contribute at query time.
+        if (f.JoinIds is not null && f.JoinIds.Count > 0)
+            result["JoinIds"] = f.JoinIds;
+        if (!string.IsNullOrWhiteSpace(f.SqlJoin))
+            result["SqlJoin"] = f.SqlJoin;
+        // LookupIds can exist on any field (e.g. a plain SourceTable/Column field
+        // that uses a lookup CTE for custom sort order) — not just SqlExpression fields.
+        if (f.LookupIds is not null && f.LookupIds.Count > 0)
+            result["LookupIds"] = f.LookupIds;
+
+        if (!string.IsNullOrWhiteSpace(f.RolesRequired))
+        {
+            result["RolesRequired"] = f.RolesRequired;
+            result["DefaultRedactionValue"] = "'*** REDACTED ***'";
+        }
+
+        if (!string.IsNullOrWhiteSpace(f.Format))
+            result["Format"] = f.Format;
+
+        if (f.ApplyTimezoneConversion)
+            result["ApplyTimezoneConversion"] = true;
+
+        return result;
+    }
+
+    private async Task DownloadJson()
+    {
+        if (string.IsNullOrEmpty(_jsonPreview)) return;
+        var bytes = System.Text.Encoding.UTF8.GetBytes(_jsonPreview);
+        await JS.InvokeVoidAsync("downloadFile", "schema_config.json",
+            Convert.ToBase64String(bytes), "application/json");
+    }
+
+    private async Task CopyToClipboard()
+    {
+        if (string.IsNullOrEmpty(_jsonPreview)) return;
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", _jsonPreview);
+        Snackbar.Add("Copied to clipboard", Severity.Success);
+    }
+
+    private async Task Save()
+    {
+        if (string.IsNullOrEmpty(_jsonPreview)) return;
+        _savedMessage = null;
+
+        try
+        {
+            // Deserialize the preview into a SchemaConfig and route through the
+            // store. In live mode it persists to RPT_schema_config; in mock
+            // mode it updates the in-memory copy only. Either way Current
+            // hot-swaps so every circuit sees the new schema immediately.
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<TleReportingDashboard.Web.Configuration.SchemaConfig>(
+                _jsonPreview,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (parsed is null)
+            {
+                _savedSeverity = Severity.Error;
+                _savedMessage = "Could not parse preview JSON as SchemaConfig.";
+                Snackbar.Add("Save failed: invalid JSON preview.", Severity.Error);
+                return;
+            }
+
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var updatedBy = authState.User.FindFirst("preferred_username")?.Value
+                ?? authState.User.Identity?.Name ?? "schema-builder";
+
+            if (_selectedConnectionId is not Guid targetConnectionId)
+            {
+                _savedSeverity = Severity.Error;
+                _savedMessage = "Pick a connection before saving.";
+                return;
+            }
+            await SchemaConfigStoreSvc.SaveAsync(parsed, targetConnectionId, updatedBy);
+
+            // Success path — inline indicator flashes near the Save button.
+            // _savedMessage is reserved for error display below.
+            if (_saveIndicator is not null) _ = _saveIndicator.Flash("Saved");
+        }
+        catch (Exception ex)
+        {
+            _savedSeverity = Severity.Error;
+            _savedMessage = $"Failed to save: {ex.Message}";
+            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private static string FormatLabel(string columnName)
+    {
+        // BORR_NAME → Borr Name, LOANAMT → Loanamt
+        var parts = columnName.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(" ", parts.Select(p =>
+            p.Length > 1
+                ? char.ToUpper(p[0]) + p[1..].ToLower()
+                : p.ToUpper()));
+    }
+
+    // Heuristic guesses for the Empower-era TLE schema. Only accepted if the
+    // guessed domain is actually in the current connection's domain list —
+    // otherwise we return empty so the user picks from their own list rather
+    // than seeing a stray "Loan (legacy)" on every Postgres connection.
+    private static string GuessDomain(string tableName, IEnumerable<string> availableDomains)
+    {
+        var guess = tableName.ToUpperInvariant() switch
+        {
+            _ when tableName.Contains("BORR", StringComparison.OrdinalIgnoreCase) => "Borrower",
+            _ when tableName.Contains("PROP", StringComparison.OrdinalIgnoreCase) => "Property",
+            _ when tableName.Contains("CONTACT", StringComparison.OrdinalIgnoreCase) => "Organization",
+            _ when tableName.Contains("REGULAT", StringComparison.OrdinalIgnoreCase) => "Compliance",
+            _ when tableName.Contains("INCOME", StringComparison.OrdinalIgnoreCase) => "Borrower",
+            _ when tableName.Contains("CODES", StringComparison.OrdinalIgnoreCase) => "Loan",
+            _ => "Loan"
+        };
+        return availableDomains.Any(d => string.Equals(d, guess, StringComparison.OrdinalIgnoreCase))
+            ? guess
+            : string.Empty;
+    }
+
+    public class FieldEntry
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Domain { get; set; } = string.Empty;
+        public string DataType { get; set; } = "text";
+        public string FieldType { get; set; } = "Dimension";
+        public int? MaxLength { get; set; }
+        public int? CodeSetId { get; set; }
+        public string AllowedAggregationsStr { get; set; } = string.Empty;
+        public string SourceTable { get; set; } = string.Empty;
+        public string SourceColumn { get; set; } = string.Empty;
+        public string? SqlExpression { get; set; }
+        public string? SqlPreamble { get; set; }
+        public List<string>? JoinIds { get; set; }  // References to existing joins from the Joins tab
+        public string? SqlJoin { get; set; }
+        public List<string>? LookupIds { get; set; }
+        public string? RolesRequired { get; set; }
+        public Dictionary<string, int>? ValueSortOrder { get; set; }
+        // Display format — applied at render/export time, not in SQL.
+        public string? Format { get; set; }
+        // When true and the connection is Postgres with a display timezone
+        // configured, the emitter wraps this field's expression with
+        // `AT TIME ZONE '<tz>'`. Persisted to schema_config.json alongside
+        // the rest of the field shape.
+        public bool ApplyTimezoneConversion { get; set; }
+    }
+
+    public class JoinEntry
+    {
+        public string Id { get; set; } = string.Empty;
+        public string JoinType { get; set; } = "LEFT JOIN";
+        public string TargetTable { get; set; } = string.Empty;
+        public string Alias { get; set; } = string.Empty;
+        public string OnClause { get; set; } = string.Empty;
+        public string ExtraCondition { get; set; } = string.Empty;
+        public bool UseRawSql { get; set; }
+        public string RawSql { get; set; } = string.Empty;
+
+        public string BuildSql()
+        {
+            if (UseRawSql && !string.IsNullOrWhiteSpace(RawSql))
+                return RawSql;
+
+            var target = string.IsNullOrWhiteSpace(Alias)
+                ? TargetTable
+                : $"{TargetTable} AS {Alias}";
+            var sql = $"{JoinType} {target} ON {OnClause}";
+            if (!string.IsNullOrWhiteSpace(ExtraCondition))
+                sql += $" AND {ExtraCondition}";
+            return sql;
+        }
+    }
+
+    public enum TableType
+    {
+        LoanSingle,      // No WHICHBORR, no IDX — one row per loan
+        LoanMultiple,    // IDX only — multiple rows per loan
+        BorrowerSingle,  // WHICHBORR only — one row per borrower
+        BorrowerMultiple // WHICHBORR + IDX — multiple rows per borrower
+    }
+
+    private string GetTableTypeLabel() => _selectedTableType switch
+    {
+        TableType.LoanSingle => "Loan Single",
+        TableType.LoanMultiple => "Loan Multiple (IDX)",
+        TableType.BorrowerSingle => "Borrower Single (WHICHBORR)",
+        TableType.BorrowerMultiple => "Borrower Multiple (WHICHBORR+IDX)",
+        _ => "Unknown"
+    };
+
+    private string GetTableTypeHint() => _selectedTableType switch
+    {
+        TableType.LoanSingle => "One row per loan. Join directly on LNKEY.",
+        TableType.LoanMultiple => "Multiple rows per loan. Join needs IDX filter (e.g. IDX=1 for first record).",
+        TableType.BorrowerSingle => "One row per borrower. Join needs WHICHBORR=1 for primary borrower.",
+        TableType.BorrowerMultiple => "Multiple rows per borrower. Join needs WHICHBORR=1 AND IDX=1.",
+        _ => ""
+    };
+
+    private Color GetTableTypeColor() => _selectedTableType switch
+    {
+        TableType.LoanSingle => Color.Success,
+        TableType.LoanMultiple => Color.Warning,
+        TableType.BorrowerSingle => Color.Info,
+        TableType.BorrowerMultiple => Color.Error,
+        _ => Color.Default
+    };
+
+    // ── Custom Filters ──
+
+    private async Task OpenLookupDialog(LookupEntry? lookup, bool isNew)
+    {
+        var parameters = new DialogParameters
+        {
+            { "Lookup", lookup ?? new LookupEntry() },
+            { "IsNew", isNew },
+            { "ConnectionType", CurrentConnectionType }
+        };
+        var dialog = await DialogService.ShowAsync<LookupEditDialog>(
+            isNew ? "Add Lookup" : "Edit Lookup", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not LookupEntry edited) return;
+
+        if (isNew)
+        {
+            _lookups.Add(edited);
+        }
+        else if (lookup is not null)
+        {
+            lookup.Id = edited.Id;
+            lookup.Label = edited.Label;
+            lookup.SqlPreamble = edited.SqlPreamble;
+            lookup.SqlJoin = edited.SqlJoin;
+        }
+        StateHasChanged();
+    }
+
+    private async Task OpenCustomFilterDialog(CustomFilterEntry? filter, bool isNew)
+    {
+        var parameters = new DialogParameters
+        {
+            { "Filter", filter ?? new CustomFilterEntry() },
+            { "IsNew", isNew },
+            { "AvailableJoins", _joins },
+            { "AvailableLookups", _lookups.AsEnumerable() },
+            { "AvailableDomains", _domainList.AsEnumerable() },
+            { "ConnectionType", CurrentConnectionType }
+        };
+        var dialog = await DialogService.ShowAsync<CustomFilterEditDialog>(
+            isNew ? "Add Custom Filter" : "Edit Custom Filter", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not CustomFilterEntry edited) return;
+
+        if (isNew)
+        {
+            _customFilters.Add(edited);
+        }
+        else if (filter is not null)
+        {
+            filter.Id = edited.Id;
+            filter.Label = edited.Label;
+            filter.Description = edited.Description;
+            filter.SqlPreamble = edited.SqlPreamble;
+            filter.JoinId = edited.JoinId;
+            filter.SqlJoin = edited.SqlJoin;
+            filter.SqlCondition = edited.SqlCondition;
+            filter.GroupName = edited.GroupName;
+        }
+        StateHasChanged();
+    }
+
+    public class LookupEntry
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        public string SqlPreamble { get; set; } = string.Empty;
+        public string SqlJoin { get; set; } = string.Empty;
+    }
+
+    // One row in the Source Table / Alias picker. Value is what gets stored
+    // on the field (matches the alias in JoinResolver / the FROM clause);
+    // Label shows table + alias together so admins can tell which is which;
+    // TableName is the fully-qualified schema.table used to load that table's
+    // columns via SchemaBuilderService. Null TableName = the source was
+    // extracted from raw SQL and we couldn't resolve a real table, so
+    // column enumeration isn't available for it.
+    public record SourceOption(string Value, string Label, string? TableName);
+
+    public class CustomFilterEntry
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string SqlPreamble { get; set; } = string.Empty;
+        public string JoinId { get; set; } = string.Empty;  // Reference to an existing join from the Joins tab
+        public string SqlJoin { get; set; } = string.Empty;  // Custom inline JOIN (used when JoinId is empty)
+        public List<string>? LookupIds { get; set; }
+        public string SqlCondition { get; set; } = string.Empty;
+        // Group label used by the Report Builder to bucket presets in the UI.
+        // Typically matches a Domain. Blank = "Misc".
+        public string GroupName { get; set; } = string.Empty;
+    }
+}

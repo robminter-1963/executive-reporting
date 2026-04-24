@@ -1,0 +1,518 @@
+@inherits LayoutComponentBase
+@using TleReportingDashboard.Web.Services
+@inject TleReportingDashboard.Web.Services.UserPreferenceState PreferenceState
+@inject TleReportingDashboard.Web.Services.CurrentCompanyState CurrentCompany
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject TleReportingDashboard.Web.Services.IUserManagementService UserManagement
+@inject TleReportingDashboard.Web.Services.ICompanyRegistry CompanyRegistry
+@inject TleReportingDashboard.Web.Services.IAdminService AdminService
+@inject IWebHostEnvironment HostEnv
+@inject IConfiguration Configuration
+@inject ILogger<MainLayout> Logger
+@implements IDisposable
+
+<MudThemeProvider Theme="_theme" IsDarkMode="@PreferenceState.Current.IsDarkMode" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="1" Dense Fixed Style="z-index: 1300; background-color: #3C4043; color: #E8EAED;">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Style="width: 100%;">
+            @* Kiosk mode (detail view opened from a Master Dashboard tile): render
+               the logo as a static element and hide the Help button so the only
+               way off the page is closing the tab. *@
+            @if (_kioskMode)
+            {
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <img src="ralis.webp" alt="Ralis" style="height: 32px;" />
+                    <span style="font-weight: 600; font-size: 1rem; color: #E8EAED;">Executive Reporting Suite</span>
+                </div>
+            }
+            else
+            {
+                @* Ralis logo always goes to the picker (?all=1 suppresses the
+                   auto-redirect to last-visited), so users can explicitly
+                   switch companies regardless of where they are in the app. *@
+                <div style="cursor: pointer; display: flex; align-items: center; gap: 8px;" @onclick="@(() => Navigation.NavigateTo("/?all=1"))">
+                    <img src="ralis.webp" alt="Ralis" style="height: 32px;" />
+                    <span style="font-weight: 600; font-size: 1rem; color: #E8EAED;">Executive Reporting Suite</span>
+                </div>
+            }
+            @foreach (var crumb in _crumbs)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" Style="color: #BDC1C6;" />
+                @if (!string.IsNullOrEmpty(crumb.Url))
+                {
+                    <MudLink Href="@crumb.Url" Typo="Typo.body2"
+                             Style="color: #BDC1C6; cursor: pointer;">@crumb.Label</MudLink>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Style="color: #E8EAED;">@crumb.Label</MudText>
+                }
+            }
+            <div style="flex: 1;"></div>
+            @if (!_kioskMode && !string.IsNullOrEmpty(_userName))
+            {
+                @* Signed-in user name + email, right-aligned, to the
+                   left of the Help button. Appears on every page via
+                   the layout so individual pages don't need to render
+                   it themselves. Clicking opens a menu with user-level
+                   actions (preferences, etc.). Hidden in kiosk mode
+                   where nothing else in the app bar is interactive. *@
+                @* MudMenu 9.3's ActivatorContent wrapper wires its own click,
+                   but a MudButton inside swallows the click before it bubbles
+                   to the wrapper — you'd see the ripple flash but the menu
+                   would never open. Drive open-state manually via @ref so
+                   the button's OnClick directly opens the menu. *@
+                <MudMenu @ref="_userMenu" AnchorOrigin="Origin.BottomRight"
+                         TransformOrigin="Origin.TopRight" Dense>
+                    <ActivatorContent>
+                        <MudButton Variant="Variant.Text" DisableElevation
+                                   Style="text-transform: none; color: #E8EAED; padding: 2px 8px; min-width: 0;"
+                                   EndIcon="@Icons.Material.Filled.ArrowDropDown"
+                                   OnClick="ToggleUserMenu">
+                            <MudStack Spacing="0" Style="text-align: right; line-height: 1.1;">
+                                <MudText Typo="Typo.body2" Style="font-weight: 500; color: #E8EAED;">
+                                    @_userName
+                                </MudText>
+                                @if (!string.IsNullOrEmpty(_userEmail))
+                                {
+                                    <MudText Typo="Typo.caption" Style="color: #BDC1C6;">@_userEmail</MudText>
+                                }
+                            </MudStack>
+                        </MudButton>
+                    </ActivatorContent>
+                    <ChildContent>
+                        <MudMenuItem Icon="@Icons.Material.Filled.Settings"
+                                     OnClick="@(() => Navigation.NavigateTo("/preferences"))">
+                            User Preferences
+                        </MudMenuItem>
+                        @if (_isAdmin)
+                        {
+                            @* Admin entry moved off the Report Library's top
+                               bar (where it was oddly scoped to that page)
+                               into the user menu — reachable from every page. *@
+                            <MudMenuItem Icon="@Icons.Material.Filled.AdminPanelSettings"
+                                         OnClick="@(() => Navigation.NavigateTo("/admin"))">
+                                Admin
+                            </MudMenuItem>
+                        }
+                        @if (_isDevMode && _simUsers.Count > 0)
+                        {
+                            @* Dev-only user switcher. forceLoad:true so the
+                               browser does a real HTTP GET to /dev/switch-user,
+                               which sets the cookie and redirects — the new
+                               circuit then sees the impersonated identity. *@
+                            <MudDivider />
+                            <MudText Typo="Typo.overline" Class="px-4 pt-2" Style="color: #9AA0A6;">
+                                Simulate user (dev)
+                            </MudText>
+                            @foreach (var u in _simUsers)
+                            {
+                                <MudMenuItem Icon="@(u.IsAdmin ? Icons.Material.Filled.AdminPanelSettings : Icons.Material.Filled.Person)"
+                                             OnClick="@(() => Navigation.NavigateTo($"/dev/switch-user?email={Uri.EscapeDataString(u.Email)}", forceLoad: true))">
+                                    @(u.DisplayName ?? u.Email)
+                                    @if (string.Equals(u.Email, _userEmail, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <span style="color: #9AA0A6; margin-left: 8px;">(current)</span>
+                                    }
+                                </MudMenuItem>
+                            }
+                            @* Ghost user — not in RPT_users. Useful for
+                               testing the "authenticated but no access"
+                               flow: the picker's empty-state card,
+                               /master-dashboard/{code} bouncing back, etc.
+                               StubAuthenticationHandler synthesizes claims
+                               from the email alone when RPT_users has no
+                               matching row. *@
+                            <MudMenuItem Icon="@Icons.Material.Filled.PersonOff"
+                                         OnClick="@(() => Navigation.NavigateTo($"/dev/switch-user?email={Uri.EscapeDataString(GhostEmail)}", forceLoad: true))">
+                                @GhostLabel
+                                @if (string.Equals(GhostEmail, _userEmail, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    <span style="color: #9AA0A6; margin-left: 8px;">(current)</span>
+                                }
+                            </MudMenuItem>
+                            <MudMenuItem Icon="@Icons.Material.Filled.RestartAlt"
+                                         OnClick="@(() => Navigation.NavigateTo("/dev/clear-user", forceLoad: true))">
+                                Reset to default
+                            </MudMenuItem>
+                        }
+                    </ChildContent>
+                </MudMenu>
+            }
+            @if (!_kioskMode)
+            {
+                <MudTooltip Text="Help" Placement="Placement.Bottom">
+                    <MudIconButton Icon="@Icons.Material.Filled.HelpOutline" Size="Size.Small"
+                                   Style="color: #E8EAED;" OnClick="OpenHelp" />
+                </MudTooltip>
+            }
+        </MudStack>
+    </MudAppBar>
+
+    <MudMainContent Style="padding-top: 48px;">
+        @Body
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private record Crumb(string Label, string? Url);
+
+    private List<Crumb> _crumbs = new();
+    private bool _kioskMode;
+    private string _userName = string.Empty;
+    private string _userEmail = string.Empty;
+    // How many companies the signed-in user can see. Drives whether the
+    // master-dashboard breadcrumb shows an "All Companies" link — the breadcrumb
+    // is only useful when there's actually another company to switch to.
+    private int _accessibleCompanyCount;
+    private bool _isAdmin;
+    private MudMenu? _userMenu;
+    // Dev-only user switcher. Populated in OnInitializedAsync when the app
+    // is running with the stub auth scheme. Outside Development the list
+    // stays empty and the menu section doesn't render.
+    private bool _isDevMode;
+    private List<UserRecord> _simUsers = new();
+
+    // Ghost user — not in RPT_users. Used by the dev switcher to exercise
+    // the no-access code path (picker empty state, dashboard redirect, etc).
+    // StubAuthenticationHandler synthesizes claims from any unknown email,
+    // so switching to this one leaves the user authenticated but with no
+    // company grants and is_admin=false.
+    private const string GhostEmail = "no-access@example.com";
+    private const string GhostLabel = "No-access user (dev)";
+
+    private async Task ToggleUserMenu()
+    {
+        // Refresh the dev user switcher list every time the menu opens so
+        // admins who just added/edited/deleted a user in Admin → Users see
+        // the change without a page reload. Cheap — RPT_users is tiny.
+        // Runs before OpenMenuAsync so the menu renders with the fresh list.
+        if (_isDevMode)
+        {
+            try { _simUsers = await UserManagement.GetAllAsync(); }
+            catch { /* non-fatal — last known list stays visible */ }
+        }
+
+        // Always call OpenMenuAsync — if the menu is already open the outside-
+        // click on the button will close it first, and MudMenu's internal
+        // state guards against a double-open. Avoids reading the Open state
+        // directly (MudBlazor's analyzer disallows external reads).
+        if (_userMenu is not null)
+            await _userMenu.OpenMenuAsync(new MouseEventArgs());
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        PreferenceState.OnChange += StateHasChanged;
+        CurrentCompany.OnChange += OnCurrentCompanyChanged;
+        Navigation.LocationChanged += OnLocationChanged;
+        UpdateCurrentPage();
+
+        // Pull the signed-in user from the current auth state so the app bar
+        // can show "Name / email" on every page without each page having to
+        // resolve it. Safe under stub auth too — the claims are populated
+        // identically there.
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+            _userEmail = user.FindFirst("preferred_username")?.Value ?? string.Empty;
+            _userName = user.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
+                        ?? (string.IsNullOrEmpty(_userEmail) ? "User" : _userEmail);
+
+            // First-sign-in binding: upsert RPT_users with the Entra OID and
+            // rebind any email-keyed pre-provisioned access rows. Idempotent,
+            // cheap, and tolerant of the table not existing yet (swallowed
+            // below). Runs once per circuit — MainLayout is instantiated once
+            // per connected session.
+            var userId = user.FindFirst("oid")?.Value
+                         ?? user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (!string.IsNullOrEmpty(_userEmail) && !string.IsNullOrEmpty(userId))
+            {
+                try
+                {
+                    await UserManagement.BindSignedInUserAsync(_userEmail, userId, _userName);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "BindSignedInUserAsync failed for {Email} — non-fatal", _userEmail);
+                }
+            }
+
+            // Count of companies this user can navigate to. Cached for the
+            // circuit — rebuilt only on demand (no OnChange subscription on
+            // the admin or registry caches). Rare that a user's access list
+            // changes mid-session; they'll see the new count on next reload.
+            try
+            {
+                _isAdmin = AdminService.IsAdmin(_userEmail);
+                if (_isAdmin)
+                {
+                    _accessibleCompanyCount = (await CompanyRegistry.GetActiveAsync()).Count;
+                }
+                else if (!string.IsNullOrEmpty(_userEmail))
+                {
+                    _accessibleCompanyCount = (await UserManagement.GetCompanyAccessAsync(_userEmail)).Count;
+                }
+
+                // Dev mode = IsDevelopment AND Entra ID isn't configured
+                // (same check ReportLibrary uses to toggle its DEV MODE
+                // banner). Only admins see the switcher — there's no case
+                // where impersonation makes sense for a non-admin dev user.
+                _isDevMode = HostEnv.IsDevelopment()
+                             && string.IsNullOrEmpty(Configuration["AzureAd:ClientId"]);
+                // Switcher stays available to *every* impersonated identity
+                // in dev mode, not just admins — otherwise switching to a
+                // non-admin user strands the dev with no way back. The stub
+                // auth scheme is Dev-only anyway, so there's no privilege
+                // path to protect against here.
+                if (_isDevMode)
+                {
+                    _simUsers = await UserManagement.GetAllAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Access-count load failed — breadcrumb will hide the picker link");
+            }
+
+            // Now that _accessibleCompanyCount is settled, re-run the crumb
+            // builder — the master-dashboard path depends on it.
+            UpdateCurrentPage();
+        }
+        catch
+        {
+            // Auth state isn't critical for the layout to render — leave
+            // the name/email empty and the display simply won't show.
+        }
+    }
+
+    private void OnCurrentCompanyChanged()
+    {
+        UpdateCurrentPage();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        UpdateCurrentPage();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OpenHelp()
+    {
+        var path = new Uri(Navigation.Uri).AbsolutePath.Trim('/');
+        var helpSection = path switch
+        {
+            "" => "master-dashboard",
+            _ when path.StartsWith("master-dashboard/") => "master-dashboard",
+            "reports" => "report-library",
+            "builder" => "building-reports",
+            _ when path.StartsWith("builder/") => "building-reports",
+            _ when path.StartsWith("viewer/") && path.Contains("/detail") => "viewer",
+            _ when path.StartsWith("viewer/") => "viewer",
+            "grid-templates" => "grid-templates",
+            _ when path.StartsWith("grid-templates/") => "grid-templates",
+            "preferences" => "preferences",
+            _ => "getting-started"
+        };
+        await JS.InvokeVoidAsync("open", $"/help/{helpSection}", "_blank");
+    }
+
+    // Builds the breadcrumb chain from the current URL path. Parents come from the
+    // app's logical hierarchy, not the user's actual history — predictable and
+    // survives refresh. The last crumb (current page) has no Url and isn't clickable.
+    private void UpdateCurrentPage()
+    {
+        var uri = new Uri(Navigation.Uri);
+        var path = uri.AbsolutePath.Trim('/');
+        var crumbs = new List<Crumb>();
+        // Reset each navigation — kiosk mode is opt-in per-page.
+        _kioskMode = false;
+
+        // Optional origin hint — pages that deep-link into the detail view
+        // append ?from=dashboard so the breadcrumb can reflect that instead
+        // of the default "Report Library → Report Viewer" chain.
+        var fromQuery = Microsoft.AspNetCore.WebUtilities.QueryHelpers
+            .ParseQuery(uri.Query)
+            .TryGetValue("from", out var fromValues) ? fromValues.ToString() : null;
+
+        switch (path)
+        {
+            case "":
+                // Company picker — no breadcrumb, the picker itself is the
+                // top of the hierarchy for signed-in users.
+                break;
+
+            case "reports":
+                crumbs.Add(new("Report Library", null));
+                break;
+
+            case "builder":
+                crumbs.Add(new("Report Library", "/reports"));
+                crumbs.Add(new("New Report", null));
+                break;
+
+            case "grid-templates":
+                crumbs.Add(new("Report Library", "/reports"));
+                crumbs.Add(new("Grid Templates", null));
+                break;
+
+            case "preferences":
+                crumbs.Add(new("Preferences", null));
+                break;
+
+            case "help":
+                crumbs.Add(new("Help", null));
+                break;
+
+            case "admin":
+                crumbs.Add(new("Admin", null));
+                break;
+
+            case "admin/schema-builder":
+                crumbs.Add(new("Admin", "/admin"));
+                crumbs.Add(new("Schema Builder", null));
+                break;
+
+            default:
+                if (path.StartsWith("master-dashboard/"))
+                {
+                    // /master-dashboard/{companyCode}. Show an "All Companies"
+                    // link back to the picker only when the user can actually
+                    // pick something else — otherwise the link dead-ends on
+                    // a one-item picker. The company label is taken from
+                    // CurrentCompanyState (set by the dashboard page on load);
+                    // until it's populated, fall back to the URL segment.
+                    var label = !string.IsNullOrEmpty(CurrentCompany.Name)
+                        ? CurrentCompany.Name
+                        : path["master-dashboard/".Length..];
+                    if (_accessibleCompanyCount > 1)
+                    {
+                        crumbs.Add(new("All Companies", "/?all=1"));
+                        crumbs.Add(new(label, null));
+                    }
+                    // Single-company users see no breadcrumb — the chain
+                    // would be meaningless.
+                }
+                else if (path.StartsWith("builder/"))
+                {
+                    crumbs.Add(new("Report Library", "/reports"));
+                    crumbs.Add(new("Report Editor", null));
+                }
+                else if (path.StartsWith("viewer/") && path.Contains("/detail"))
+                {
+                    // /viewer/{reportId}/detail/{key}
+                    // When ?from=dashboard is present the user came from the Master
+                    // Dashboard tile click — lock the page down to "export + close tab"
+                    // by enabling kiosk mode (hides breadcrumbs and nav chrome).
+                    if (string.Equals(fromQuery, "dashboard", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _kioskMode = true;
+                    }
+                    else
+                    {
+                        var segments = path.Split('/');
+                        var reportId = segments.Length > 1 ? segments[1] : null;
+                        crumbs.Add(new("Report Library", "/reports"));
+                        crumbs.Add(new("Report Viewer", reportId is not null ? $"/viewer/{reportId}" : null));
+                        crumbs.Add(new("Detail View", null));
+                    }
+                }
+                else if (path.StartsWith("viewer/"))
+                {
+                    crumbs.Add(new("Report Library", "/reports"));
+                    crumbs.Add(new("Report Viewer", null));
+                }
+                else if (path.StartsWith("grid-templates/"))
+                {
+                    crumbs.Add(new("Report Library", "/reports"));
+                    crumbs.Add(new("Grid Templates", "/grid-templates"));
+                    crumbs.Add(new("Template Editor", null));
+                }
+                else if (path.StartsWith("help/"))
+                {
+                    crumbs.Add(new("Help", null));
+                }
+                else
+                {
+                    crumbs.Add(new(path, null));
+                }
+                break;
+        }
+
+        _crumbs = crumbs;
+    }
+
+    public void Dispose()
+    {
+        PreferenceState.OnChange -= StateHasChanged;
+        CurrentCompany.OnChange -= OnCurrentCompanyChanged;
+        Navigation.LocationChanged -= OnLocationChanged;
+    }
+
+    private readonly MudTheme _theme = new()
+    {
+        PaletteLight = new PaletteLight()
+        {
+            Primary = "#1A73E8",
+            Secondary = "#5F6368",
+            Tertiary = "#1E8E3E",
+            Background = "#FFFFFF",
+            Surface = "#F8F9FA",
+            AppbarBackground = "#FFFFFF",
+            AppbarText = "#202124",
+            DrawerBackground = "#F8F9FA",
+            DrawerText = "#202124",
+            TextPrimary = "#202124",
+            TextSecondary = "#5F6368",
+            ActionDefault = "#5F6368",
+            Error = "#D93025",
+            Warning = "#F9AB00",
+            Info = "#1A73E8",
+            Success = "#1E8E3E",
+            TableLines = "#E8EAED",
+            LinesDefault = "#E8EAED",
+            Divider = "#DADCE0",
+        },
+        PaletteDark = new PaletteDark()
+        {
+            Primary = "#8AB4F8",
+            Secondary = "#9AA0A6",
+            Tertiary = "#81C995",
+            Background = "#1E1E1E",
+            Surface = "#292929",
+            AppbarBackground = "#292929",
+            AppbarText = "#E8EAED",
+            DrawerBackground = "#292929",
+            DrawerText = "#E8EAED",
+            TextPrimary = "#E8EAED",
+            TextSecondary = "#9AA0A6",
+            ActionDefault = "#9AA0A6",
+            Error = "#F28B82",
+            Warning = "#FDD663",
+            Info = "#8AB4F8",
+            Success = "#81C995",
+            TableLines = "#3C4043",
+            LinesDefault = "#3C4043",
+            Divider = "#5F6368",
+        },
+        LayoutProperties = new LayoutProperties()
+        {
+            DefaultBorderRadius = "4px",
+        },
+        Typography = new Typography()
+        {
+            Default = new DefaultTypography()
+            {
+                FontFamily = new[] { "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif" },
+            }
+        }
+    };
+}

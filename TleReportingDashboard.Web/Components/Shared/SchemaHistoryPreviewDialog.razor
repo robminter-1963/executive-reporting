@@ -1,0 +1,82 @@
+@* Read-only preview of a single schema_config_history JSON blob. Loaded
+   lazily on open so the history list stays light. *@
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 720px; max-width: 90vw;">
+            <MudText Typo="Typo.subtitle2" Color="Color.Secondary">
+                Saved @(SavedAt?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "—")
+                by @(UpdatedBy ?? "—")
+            </MudText>
+            @if (_loading)
+            {
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+            }
+            else if (string.IsNullOrEmpty(_pretty))
+            {
+                <MudAlert Severity="Severity.Warning" Dense Variant="Variant.Outlined">
+                    This history row has no JSON payload (or it was already purged).
+                </MudAlert>
+            }
+            else
+            {
+                <MudPaper Elevation="0" Class="pa-2"
+                          Style="background: #F8F9FA; border: 1px solid #DADCE0; max-height: 60vh; overflow: auto;">
+                    <pre style="margin: 0; font-family: Consolas, 'Courier New', monospace; font-size: 12px;
+                                white-space: pre; color: #202124;">@_pretty</pre>
+                </MudPaper>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public long HistoryId { get; set; }
+    [Parameter] public DateTime? SavedAt { get; set; }
+    [Parameter] public string? UpdatedBy { get; set; }
+    [Parameter] public Func<long, Task<string?>>? FetchJsonAsync { get; set; }
+
+    private bool _loading = true;
+    private string _pretty = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (FetchJsonAsync is null)
+        {
+            _loading = false;
+            return;
+        }
+
+        try
+        {
+            var raw = await FetchJsonAsync(HistoryId);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                _pretty = string.Empty;
+                return;
+            }
+
+            // Pretty-print when the payload is valid JSON; otherwise show raw.
+            // A bad roundtrip (malformed blob) shouldn't crash the preview.
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(raw);
+                _pretty = System.Text.Json.JsonSerializer.Serialize(doc.RootElement,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            }
+            catch
+            {
+                _pretty = raw;
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
+}

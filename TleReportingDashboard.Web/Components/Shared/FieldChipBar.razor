@@ -1,0 +1,175 @@
+@* Field chip bar doubles as the column reorder bar for the report table.
+   Drag a chip (grab the grip icon or anywhere on the chip) to reorder columns;
+   click the X to remove. When locked to a grid template, drag and remove are
+   disabled — the template owns the order. *@
+
+<MudStack Spacing="1">
+    @* Header / lock hint. *@
+    @if (TemplateLocked && SelectedFields.Any())
+    {
+        <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined"
+                  Icon="@Icons.Material.Filled.Lock">
+            Columns are locked by the grid template. Reordering, adding, and removing fields is not allowed.
+        </MudAlert>
+    }
+    else if (SelectedFields.Any())
+    {
+        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
+            Columns (drag to reorder)
+        </MudText>
+    }
+
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+        <div class="field-chip-zone">
+            @for (var i = 0; i < SelectedFields.Count; i++)
+            {
+                var idx = i;
+                var field = SelectedFields[i];
+                <div @key="field.Id"
+                     class="field-chip-wrap @(_dragSource == idx ? "dragging" : "") @(TemplateLocked ? "locked" : "draggable")"
+                     draggable="@(TemplateLocked ? "false" : "true")"
+                     @ondragstart="() => OnDragStart(idx)"
+                     @ondragend="OnDragEnd"
+                     @ondragover:preventDefault
+                     @ondragover="() => OnDragOver(idx)"
+                     @ondrop="() => OnDrop(idx)"
+                     title="@(TemplateLocked ? field.Label : $"{field.Label} — drag to move")">
+                    @if (_dropTarget == idx && _dragSource != idx && _dragSource >= 0)
+                    {
+                        <div class="drop-indicator"></div>
+                    }
+                    @if (TemplateLocked)
+                    {
+                        <MudChip T="string" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small">
+                            @field.Label
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                 Icon="@Icons.Material.Filled.DragIndicator"
+                                 OnClose="() => OnFieldRemoved.InvokeAsync(field.Id)">
+                            @field.Label
+                        </MudChip>
+                    }
+                </div>
+            }
+            @* Drop zone at the end for placing items after the last chip. *@
+            @if (!TemplateLocked && SelectedFields.Any())
+            {
+                <div class="field-chip-end"
+                     @ondragover:preventDefault
+                     @ondragover="() => OnDragOver(SelectedFields.Count)"
+                     @ondrop="() => OnDrop(SelectedFields.Count)">
+                    @if (_dropTarget == SelectedFields.Count)
+                    {
+                        <div class="drop-indicator"></div>
+                    }
+                </div>
+            }
+        </div>
+
+        @if (!TemplateLocked && SelectedFields.Any())
+        {
+            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary"
+                       OnClick="OnClearAll">
+                Clear All
+            </MudButton>
+        }
+    </MudStack>
+</MudStack>
+
+<style>
+    .field-chip-zone {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+        flex: 1;
+    }
+    .field-chip-wrap {
+        position: relative;
+        transition: opacity 0.15s, transform 0.1s;
+    }
+    /* Show grab cursor on the chip itself AND all MudBlazor inner wrappers
+       (the icon and label have their own elements that otherwise override
+       cursor to default on hover). */
+    .field-chip-wrap.draggable,
+    .field-chip-wrap.draggable .mud-chip,
+    .field-chip-wrap.draggable .mud-chip-content,
+    .field-chip-wrap.draggable .mud-chip-icon {
+        cursor: grab;
+    }
+    .field-chip-wrap.draggable:hover .mud-chip {
+        filter: brightness(1.05);
+    }
+    .field-chip-wrap.dragging {
+        opacity: 0.35;
+        cursor: grabbing;
+    }
+    .field-chip-end {
+        width: 20px;
+        min-height: 28px;
+        position: relative;
+    }
+    .drop-indicator {
+        position: absolute;
+        left: -3px;
+        top: 2px;
+        bottom: 2px;
+        width: 3px;
+        background: #1A73E8;
+        border-radius: 2px;
+        z-index: 10;
+    }
+</style>
+
+@code {
+    [Parameter] public List<FieldDefinition> SelectedFields { get; set; } = new();
+    [Parameter] public EventCallback<string> OnFieldRemoved { get; set; }
+    [Parameter] public EventCallback OnClearAll { get; set; }
+    [Parameter] public EventCallback<List<string>> OnFieldOrderChanged { get; set; }
+    [Parameter] public bool TemplateLocked { get; set; }
+
+    private int _dragSource = -1;
+    private int _dropTarget = -1;
+
+    private void OnDragStart(int idx)
+    {
+        if (TemplateLocked) return;
+        _dragSource = idx;
+    }
+
+    private void OnDragOver(int idx)
+    {
+        if (_dragSource < 0 || idx == _dragSource) return;
+        _dropTarget = idx;
+    }
+
+    private void OnDragEnd()
+    {
+        _dragSource = -1;
+        _dropTarget = -1;
+    }
+
+    private async Task OnDrop(int targetIndex)
+    {
+        if (_dragSource < 0 || _dragSource == targetIndex)
+        {
+            OnDragEnd();
+            return;
+        }
+
+        var reordered = SelectedFields.Select(f => f.Id).ToList();
+        var item = reordered[_dragSource];
+        reordered.RemoveAt(_dragSource);
+        var insertAt = targetIndex > _dragSource ? targetIndex - 1 : targetIndex;
+        insertAt = Math.Clamp(insertAt, 0, reordered.Count);
+        reordered.Insert(insertAt, item);
+
+        OnDragEnd();
+
+        if (OnFieldOrderChanged.HasDelegate)
+            await OnFieldOrderChanged.InvokeAsync(reordered);
+    }
+}

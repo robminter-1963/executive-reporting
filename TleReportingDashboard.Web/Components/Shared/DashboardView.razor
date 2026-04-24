@@ -516,6 +516,7 @@
                     <ReportGrid Data="DetailData"
                                 InitialColumnWidths="ColumnWidths"
                                 InitialColumnOrder="ColumnOrder"
+                                InitialHiddenColumns="InitialHiddenColumns"
                                 DefaultSortField="@TableSortField"
                                 DefaultSortDirection="@TableSortDirection"
                                 ReadOnly="true" />
@@ -670,6 +671,10 @@
     // page breadcrumb shows the user came from the Master Dashboard instead of
     // the Report Library.
     [Parameter] public bool DetailFromDashboard { get; set; }
+    // Field ids to suppress from any grid the view renders (drill-down
+    // detail, fallback table). Merged template + report hidden lists,
+    // computed upstream. Null means "no hides" — same as empty list.
+    [Parameter] public List<string>? InitialHiddenColumns { get; set; }
 
     private string _groupByField = string.Empty;
     private string _measureField = string.Empty;

@@ -1011,10 +1011,18 @@
                     if (root.TryGetProperty("DetailSortDirection", out var dsdEl))
                         _detailSortDirection = dsdEl.GetString() ?? "asc";
 
-                    // Extract hidden columns
+                    // Extract hidden columns. Union with the template's list
+                    // (set earlier at line ~953) instead of overwriting — a
+                    // stale per-report list was blocking fields newly hidden
+                    // at the template level. Matches the fix in ReportViewer
+                    // / DetailViewer / MasterDashboard.
                     if (root.TryGetProperty("HiddenColumns", out var hcElement))
                     {
-                        _currentConfig.HiddenColumns = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcElement.GetRawText());
+                        var reportHidden = System.Text.Json.JsonSerializer
+                            .Deserialize<List<string>>(hcElement.GetRawText()) ?? new();
+                        _currentConfig.HiddenColumns = _currentConfig.HiddenColumns is null
+                            ? reportHidden
+                            : _currentConfig.HiddenColumns.Union(reportHidden, StringComparer.OrdinalIgnoreCase).ToList();
                     }
 
                     // Extract custom filter IDs

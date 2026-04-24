@@ -308,6 +308,7 @@
                                                     @if (_tileData.TryGetValue(tl.ReportId, out var td))
                                                     {
                                                         <DashboardView Data="td.Data" InitialConfig="td.Config"
+                                                                       InitialHiddenColumns="td.HiddenColumns"
                                                                        ReadOnly="true" DetailFromDashboard="true" ReportId="tl.ReportId"
                                                                        GridHeight="@($"{Math.Max(150, tl.Height - 120)}px")"
                                                                        Compact="true"
@@ -883,7 +884,16 @@
         };
         request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, report.ConnectionId, report.PrimaryTable);
         var data = await QueryService.ExecuteQueryAsync(request);
-        return new TileLoadResult(data, config);
+
+        // Union template-level and report-level hidden column lists so a
+        // field marked hidden on the template is honored everywhere,
+        // regardless of the individual report's saved override. Matches
+        // the fix in ReportViewer + DetailViewer.
+        var mergedHidden = ((templateHiddenColumns ?? new List<string>())
+            .Union(reportHiddenColumns ?? new List<string>(), StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        return new TileLoadResult(data, config, mergedHidden.Count > 0 ? mergedHidden : null);
     }
 
     // ── Tab management ──
@@ -1178,7 +1188,7 @@
         }
     }
 
-    private record TileLoadResult(QueryResponse Data, DashboardView.DashboardConfig? Config);
+    private record TileLoadResult(QueryResponse Data, DashboardView.DashboardConfig? Config, List<string>? HiddenColumns);
 
     // Right-click on any tile opens the SQL debug dialog. Unfiltered by
     // role — any user can see what query produced their tile, which is
@@ -1200,4 +1210,12 @@
             { "ScopingNote", result.Data.ScopingNote },
             { "ScopingForceNoMatch", result.Data.ScopingForceNoMatch }
         };
-        var options = new DialogOp
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true
+        };
+        await DialogService.ShowAsync<ShowQueryDialog>($"SQL — {tile.ReportName}", parameters, options);
+    }
+}

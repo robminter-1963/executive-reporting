@@ -22,7 +22,10 @@ public static class AggregationBuilder
                 GroupByExpressions: []);
         }
 
-        var fieldLookup = fields.ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+        // First-wins dedupe — see SchemaService.GetFieldConfigsAsync.
+        var fieldLookup = fields
+            .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var aggLookup = new Dictionary<string, string>(aggregations, StringComparer.OrdinalIgnoreCase);
 
         var selectExpressions = new List<string>(columns.Count);

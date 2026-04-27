@@ -77,6 +77,7 @@ try
     builder.Services.AddScoped<IRoleService, RoleService>();
     builder.Services.AddScoped<IUserManagementService, UserManagementService>();
     builder.Services.AddScoped<IQueryScopeResolver, QueryScopeResolver>();
+    builder.Services.AddScoped<ITeamSourceService, TeamSourceService>();
 
     // Email service
     builder.Services.AddScoped<IEmailService, EmailService>();

@@ -137,15 +137,20 @@ public static class QueryBuilder
         return set;
     }
 
+    // SQL keywords that follow a JOIN's table name and would otherwise be
+    // captured as if they were the alias (e.g. "JOIN tbl ON …" matches "ON"
+    // as the alias group). Used to reject false positives in any
+    // alias-extraction regex below.
+    private static readonly HashSet<string> _joinAliasKeywords = new(StringComparer.OrdinalIgnoreCase)
+        { "ON", "WITH", "LEFT", "INNER", "RIGHT", "CROSS", "FULL", "OUTER", "AND", "OR" };
+
     private static bool ContainsAlias(string rawSql, string alias)
     {
-        var keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "ON", "WITH", "LEFT", "INNER", "RIGHT", "CROSS", "FULL", "OUTER", "AND", "OR" };
         var matches = Regex.Matches(rawSql, @"\bJOIN\s+[\w.]+\s+(?:AS\s+)?(\w+)\b", RegexOptions.IgnoreCase);
         foreach (Match m in matches)
         {
             var a = m.Groups[1].Value;
-            if (!keywords.Contains(a) && a.Equals(alias, StringComparison.OrdinalIgnoreCase))
+            if (!_joinAliasKeywords.Contains(a) && a.Equals(alias, StringComparison.OrdinalIgnoreCase))
                 return true;
         }
         return false;
@@ -191,8 +196,12 @@ public static class QueryBuilder
         // Deduplicate field IDs while preserving order
         var dedupedFieldIds = request.FieldIds.Distinct().ToList();
 
-        // Build a lookup for fast validation
-        var fieldLookup = fieldConfigs.ToDictionary(f => f.Id, f => f);
+        // Build a lookup for fast validation. First-wins dedupe matches
+        // SchemaService.GetFieldConfigsAsync — defensive against any caller
+        // that passes a non-deduped list directly.
+        var fieldLookup = fieldConfigs
+            .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         // Validate every field ID exists in the whitelist
         var unknownFields = dedupedFieldIds.Where(id => !fieldLookup.ContainsKey(id)).ToList();
@@ -282,6 +291,24 @@ public static class QueryBuilder
             AddFilterFieldTable(ownerFieldIdForJoins);
         }
 
+        // Same problem for team scope: each TeamScopeEntry's owner column
+        // may be qualified with an alias for a joined table that isn't
+        // referenced by any selected/filtered field. Register those aliases
+        // here so the JOIN-collection loop pulls them in. Bare column names
+        // (no alias prefix) skip this — the emitter falls back to the
+        // primary alias and no extra join is needed.
+        if (request.Scoping?.TeamScope is { Teams.Count: > 0 } teamScope)
+        {
+            foreach (var entry in teamScope.Teams)
+            {
+                var dot = entry.OwnerColumn.IndexOf('.');
+                if (dot <= 0) continue;
+                var alias = entry.OwnerColumn[..dot].Trim();
+                if (string.IsNullOrEmpty(alias)) continue;
+                requiredTables.Add(alias);
+            }
+        }
+
         var sb = new StringBuilder();
         var parameters = new List<System.Data.Common.DbParameter>();
 
@@ -346,6 +373,28 @@ public static class QueryBuilder
         // fragment whose ON clause references another fragment's alias is emitted
         // AFTER the fragment defining that alias. Previously we emitted as we went,
         // which could place a dependent JOIN before its dependency.
+        //
+        // The previous primary-exclusion check compared each requiredTables
+        // entry to the raw rootTable string ("schema.table AS alias"), so an
+        // alias like "l" never matched and a join targeting the primary would
+        // get emitted as a redundant self-join with the same alias = invalid
+        // SQL. Build the full identifier set up front and check membership.
+        var (primaryName, primaryAlias) = PrimaryTableRef.Parse(rootTable);
+        var primaryIdentifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(rootTable))      primaryIdentifiers.Add(rootTable);
+        if (!string.IsNullOrWhiteSpace(primaryName))    primaryIdentifiers.Add(primaryName);
+        if (!string.IsNullOrWhiteSpace(primaryAlias))   primaryIdentifiers.Add(primaryAlias!);
+        if (!string.IsNullOrWhiteSpace(primaryName))
+        {
+            // Bare table name without schema prefix ("salesforce.lead" → "lead").
+            var dot = primaryName.LastIndexOf('.');
+            if (dot >= 0)
+            {
+                var bare = primaryName[(dot + 1)..].Trim('[', ']');
+                if (!string.IsNullOrWhiteSpace(bare)) primaryIdentifiers.Add(bare);
+            }
+        }
+
         var joinedTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootTable };
         var emittedJoinIds = new HashSet<int>();
         var emittedJoinSql = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -357,12 +406,52 @@ public static class QueryBuilder
             if (emittedJoinSql.Add(sql.Trim())) joinFragments.Add(sql);
         }
 
-        foreach (var table in requiredTables.Where(t => !string.Equals(t, rootTable, StringComparison.OrdinalIgnoreCase)))
+        // Skip any join whose target is the primary — it'd self-join the
+        // primary to itself with the same alias. Two checks because the
+        // target can live in either place:
+        //   * Structured joins: j.ToTable holds the schema-qualified name.
+        //   * Raw-SQL-only joins: j.ToTable is empty and the target lives
+        //     inside RawSql. Peek the first JOIN's table + alias and match
+        //     either against the primary's identifiers. The (?:AS\s+)?
+        //     branch handles both "JOIN ... AS l" and bare "JOIN ... l".
+        bool TargetsPrimary(JoinConfig j)
+        {
+            if (!string.IsNullOrEmpty(j.ToTable) && primaryIdentifiers.Contains(j.ToTable))
+                return true;
+            if (string.IsNullOrEmpty(j.RawSql)) return false;
+
+            var m = Regex.Match(j.RawSql,
+                @"\bJOIN\s+(?<table>[\w\.\[\]""]+)(?:\s+(?:AS\s+)?(?<alias>[A-Za-z_][A-Za-z0-9_]*))?\b",
+                RegexOptions.IgnoreCase);
+            if (!m.Success) return false;
+
+            var rawTable = m.Groups["table"].Value.Trim('[', ']', '"');
+            if (primaryIdentifiers.Contains(rawTable)) return true;
+            // Strip schema prefix to compare bare names ("salesforce.lead" → "lead").
+            var dot = rawTable.LastIndexOf('.');
+            if (dot >= 0)
+            {
+                var bare = rawTable[(dot + 1)..].Trim('[', ']', '"');
+                if (primaryIdentifiers.Contains(bare)) return true;
+            }
+            // Alias capture is optional (no-AS form). Skip SQL-keyword
+            // false positives (e.g. "JOIN tbl ON …" captures "ON" as alias).
+            if (m.Groups["alias"].Success)
+            {
+                var a = m.Groups["alias"].Value;
+                if (!_joinAliasKeywords.Contains(a) && primaryIdentifiers.Contains(a))
+                    return true;
+            }
+            return false;
+        }
+
+        foreach (var table in requiredTables.Where(t => !primaryIdentifiers.Contains(t)))
         {
             var joinConfig = joinConfigs.FirstOrDefault(j =>
-                string.Equals(j.ToTable, table, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(j.FromTable, table, StringComparison.OrdinalIgnoreCase) ||
-                (!string.IsNullOrEmpty(j.RawSql) && ContainsAlias(j.RawSql, table)));
+                !TargetsPrimary(j) &&
+                (string.Equals(j.ToTable, table, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(j.FromTable, table, StringComparison.OrdinalIgnoreCase) ||
+                 (!string.IsNullOrEmpty(j.RawSql) && ContainsAlias(j.RawSql, table))));
 
             if (joinConfig != null && emittedJoinIds.Add(joinConfig.Id))
             {
@@ -423,6 +512,7 @@ public static class QueryBuilder
             foreach (var jid in f.JoinIds)
             {
                 if (!joinConfigLookup.TryGetValue(jid, out var referencedJoin)) continue;
+                if (TargetsPrimary(referencedJoin)) continue; // self-join to the primary — skip
                 AddFragment(referencedJoin.RawSql);
             }
             if (!string.IsNullOrWhiteSpace(f.SqlJoin)) AddFragment(f.SqlJoin);
@@ -436,9 +526,14 @@ public static class QueryBuilder
             {
                 string? joinSql = null;
                 if (!string.IsNullOrWhiteSpace(cf.JoinId) && joinConfigLookup.TryGetValue(cf.JoinId, out var referencedJoin))
+                {
+                    if (TargetsPrimary(referencedJoin)) continue; // skip self-join to primary
                     joinSql = referencedJoin.RawSql;
+                }
                 else if (!string.IsNullOrWhiteSpace(cf.SqlJoin))
+                {
                     joinSql = cf.SqlJoin;
+                }
 
                 if (!string.IsNullOrWhiteSpace(joinSql)) AddFragment(joinSql!);
             }
@@ -549,17 +644,17 @@ public static class QueryBuilder
             {
                 if (scope.ForceNoMatch)
                 {
-                    // Self-scoped user with missing owner-field or external
-                    // id — fail safe to empty result set.
+                    // Scoped user with missing configuration — fail safe to
+                    // empty result set. Applies to both self and team scope.
                     whereClauses.Add("1 = 0");
                 }
                 else if (!string.IsNullOrEmpty(scope.OwnerFieldId)
                          && !string.IsNullOrEmpty(scope.ExternalUserId)
                          && fieldLookup.TryGetValue(scope.OwnerFieldId, out var ownerField))
                 {
-                    // Resolve the owner field's qualified column name. Use
-                    // SqlExpression when present (supports computed
-                    // columns); otherwise fall back to SourceTable.SourceColumn.
+                    // Self-scope. Resolve the owner field's qualified column
+                    // name — use SqlExpression when present (computed columns)
+                    // otherwise SourceTable.SourceColumn.
                     var ownerCol = !string.IsNullOrWhiteSpace(ownerField.SqlExpression)
                         ? ownerField.SqlExpression
                         : $"{ownerField.SourceTable}.{ownerField.SourceColumn}";
@@ -568,10 +663,45 @@ public static class QueryBuilder
                     parameters.Add(dialect.CreateParameter(paramName, scope.ExternalUserId));
                     whereClauses.Add($"{ownerCol} = {paramName}");
                 }
-                // Silent fallthrough: Scoping with no ForceNoMatch and an
-                // unresolvable OwnerFieldId would be a schema misconfig; we
-                // don't want to fail open. Upstream resolver is expected to
-                // set ForceNoMatch=true in that case.
+                else if (scope.TeamScope is { Teams.Count: > 0 } team
+                         && !string.IsNullOrWhiteSpace(team.MembersSql))
+                {
+                    // Team-scope. One OR'd EXISTS per team assignment,
+                    // wrapping the admin's members SQL as a subquery so
+                    // nothing about the source schema is baked into the
+                    // emitter. The subquery is inlined per-EXISTS — SQL
+                    // Server collapses the repeat references under a
+                    // single operator in the plan, so this stays cheap.
+                    //
+                    // Owner-column qualification:
+                    //   * Plain column ("PROCESSOR_USERID") — auto-prefixed
+                    //     with the primary table's alias (convenience for the
+                    //     common case where the column lives on the primary).
+                    //   * Already-qualified ("JOINALIAS.PROCESSOR_USERID") —
+                    //     used as-is so admins can target a column on a
+                    //     joined table instead of the primary.
+                    var ors = new List<string>(team.Teams.Count);
+                    for (var i = 0; i < team.Teams.Count; i++)
+                    {
+                        var entry = team.Teams[i];
+                        var teamParam = $"@__team_{i}";
+                        parameters.Add(dialect.CreateParameter(teamParam, entry.TeamId));
+                        var ownerCol = entry.OwnerColumn.Contains('.')
+                            ? entry.OwnerColumn
+                            : string.IsNullOrWhiteSpace(team.PrimaryAlias)
+                                ? entry.OwnerColumn
+                                : $"{team.PrimaryAlias}.{entry.OwnerColumn}";
+                        ors.Add(
+                            $"EXISTS (SELECT 1 FROM ({team.MembersSql}) AS __tm "
+                            + $"WHERE __tm.team_id = {teamParam} "
+                            + $"AND __tm.member_ext_id = {ownerCol})");
+                    }
+                    whereClauses.Add("(" + string.Join(" OR ", ors) + ")");
+                }
+                // Silent fallthrough: Scoping with no ForceNoMatch and no
+                // populated branch would be a misconfig; we don't fail open.
+                // The resolver is expected to set ForceNoMatch=true in that
+                // case so this path is effectively unreachable.
             }
 
             if (whereClauses.Count > 0)

@@ -83,6 +83,17 @@
                                 {
                                     <MudText Typo="Typo.caption" Style="color: #BDC1C6;">@_userEmail</MudText>
                                 }
+                                @* TEMP: role + per-company access. Amber tint
+                                   marks this as transient debug surface — see
+                                   _currentRoleLabel comment for the cleanup
+                                   trigger. *@
+                                @if (!string.IsNullOrEmpty(_currentRoleLabel))
+                                {
+                                    <MudText Typo="Typo.caption"
+                                             Style="color: #FFD54F; font-size: 0.65rem; font-weight: 500;">
+                                        @_currentRoleLabel
+                                    </MudText>
+                                }
                             </MudStack>
                         </MudButton>
                     </ActivatorContent>
@@ -172,6 +183,12 @@
     // is only useful when there's actually another company to switch to.
     private int _accessibleCompanyCount;
     private bool _isAdmin;
+    // TEMP: surface the user's job-function role + per-company access type
+    // under their name in the app bar so admins can sanity-check what role
+    // they're running as while the role/scope features bake. Refreshed when
+    // the current company changes. Remove this + RefreshRoleLabelAsync once
+    // the auth model stabilizes.
+    private string? _currentRoleLabel;
     private MudMenu? _userMenu;
     // Dev-only user switcher. Populated in OnInitializedAsync when the app
     // is running with the stub auth scheme. Outside Development the list
@@ -261,6 +278,8 @@
                     _accessibleCompanyCount = (await UserManagement.GetCompanyAccessAsync(_userEmail)).Count;
                 }
 
+                await RefreshRoleLabelAsync();
+
                 // Dev mode = IsDevelopment AND Entra ID isn't configured
                 // (same check ReportLibrary uses to toggle its DEV MODE
                 // banner). Only admins see the switcher — there's no case
@@ -296,7 +315,56 @@
     private void OnCurrentCompanyChanged()
     {
         UpdateCurrentPage();
-        InvokeAsync(StateHasChanged);
+        // Role is per-company — refresh the label whenever the active
+        // company switches. Awaited inside InvokeAsync so the StateHasChanged
+        // happens after the new label is computed.
+        _ = InvokeAsync(async () =>
+        {
+            await RefreshRoleLabelAsync();
+            StateHasChanged();
+        });
+    }
+
+    // TEMP — see comment on _currentRoleLabel.
+    private async Task RefreshRoleLabelAsync()
+    {
+        if (string.IsNullOrEmpty(_userEmail))
+        {
+            _currentRoleLabel = null;
+            return;
+        }
+
+        // Job-function role from RPT_users.role_id (Manager, Loan Officer, etc.).
+        string? functionRole = null;
+        try
+        {
+            var user = await UserManagement.GetByEmailAsync(_userEmail);
+            functionRole = user?.RoleName;
+        }
+        catch { /* non-fatal — leave functionRole null */ }
+
+        // Per-company access type. Global admins win regardless of grants;
+        // otherwise look up the grant for the active company. No active
+        // company = no access type to show.
+        string? accessType = null;
+        if (_isAdmin)
+        {
+            accessType = "Admin (global)";
+        }
+        else if (CurrentCompany.IsSet && CurrentCompany.Id is Guid cid)
+        {
+            try
+            {
+                var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
+                accessType = access.FirstOrDefault(a => a.CompanyId == cid)?.Role;
+            }
+            catch { /* non-fatal — leave accessType null */ }
+        }
+
+        var parts = new List<string>();
+        if (!string.IsNullOrEmpty(functionRole)) parts.Add(functionRole);
+        if (!string.IsNullOrEmpty(accessType))   parts.Add(accessType);
+        _currentRoleLabel = parts.Count > 0 ? string.Join(" · ", parts) : null;
     }
 
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)

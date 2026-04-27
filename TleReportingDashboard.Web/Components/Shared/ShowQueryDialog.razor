@@ -10,6 +10,19 @@
     </TitleContent>
     <DialogContent>
         <MudStack Spacing="2" Style="min-width: 700px;">
+            @* Execution-error banner. Surfaced when the dialog is opened on a
+               tile that failed at run time — the SQL block below shows what
+               was sent (or attempted) so admins can debug invalid SQL or
+               source-DB rejections without tailing logs. *@
+            @if (!string.IsNullOrEmpty(ErrorMessage))
+            {
+                <MudAlert Severity="Severity.Error" Dense Variant="Variant.Outlined"
+                          Icon="@Icons.Material.Filled.ErrorOutline">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Query failed</MudText>
+                    <pre style="margin: 4px 0 0 0; white-space: pre-wrap; font-family: inherit; font-size: 0.85rem;">@ErrorMessage</pre>
+                </MudAlert>
+            }
+
             @* Row-level-scoping banner. Warning color when scoping force-
                matched to zero rows (admin has something to fix); info color
                when scoping resolved successfully (useful to confirm the
@@ -18,6 +31,18 @@
             {
                 <MudAlert Severity="@(ScopingForceNoMatch ? Severity.Warning : Severity.Info)" Dense Variant="Variant.Outlined">
                     @ScopingNote
+                </MudAlert>
+            }
+
+            @* Client-side filter note — describes any in-memory filter the
+               caller applies after the query runs (e.g. the detail view
+               narrowing rows to the tile group the user clicked). Separate
+               from the SQL so the admin can see the full picture. *@
+            @if (!string.IsNullOrEmpty(ClientSideFilter))
+            {
+                <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined"
+                          Icon="@Icons.Material.Filled.FilterAlt">
+                    <strong>After the query:</strong> @ClientSideFilter
                 </MudAlert>
             }
 
@@ -44,9 +69,18 @@
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Close">Close</MudButton>
-        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+        <MudButton Color="Color.Primary" Variant="Variant.Outlined"
                    StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="CopyActiveToClipboard">
-            Copy to Clipboard
+            Copy SQL
+        </MudButton>
+        @* Inlined-values copy — substitutes each @parameter with a SQL
+           literal so the result pastes directly into SSMS / pgAdmin.
+           Booleans land as 1/0 (SQL Server bit-friendly); Postgres users
+           with strict boolean comparisons may need a one-character tweak. *@
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.ContentPaste"
+                   OnClick="CopyActiveWithValuesToClipboard">
+            Copy SQL with values
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -66,6 +100,16 @@
     // returned zero rows on purpose.
     [Parameter] public string? ScopingNote { get; set; }
     [Parameter] public bool ScopingForceNoMatch { get; set; }
+    // In-memory filter applied after the query — e.g. the detail view
+    // narrowing to the clicked tile group. Plain text, rendered in its own
+    // banner so the full row-selection story is visible (SQL plus the
+    // post-query filter = the rows the grid actually shows).
+    [Parameter] public string? ClientSideFilter { get; set; }
+    // When the caller opens the dialog for a tile/report that errored out
+    // at execution, this carries the source-DB error message. Rendered as
+    // a red banner above the SQL so the admin sees the failure context
+    // alongside the query.
+    [Parameter] public string? ErrorMessage { get; set; }
 
     private int _activeIndex;
 
@@ -107,5 +151,57 @@
         var sql = HasDetail && _activeIndex == 1 ? (DetailSql ?? string.Empty) : Sql;
         await JS.InvokeVoidAsync("navigator.clipboard.writeText", sql);
         Snackbar.Add("SQL copied to clipboard.", Severity.Success);
+    }
+
+    private async Task CopyActiveWithValuesToClipboard()
+    {
+        var sql        = HasDetail && _activeIndex == 1 ? (DetailSql ?? string.Empty) : Sql;
+        var parameters = HasDetail && _activeIndex == 1 ? DetailParameters             : Parameters;
+        var inlined    = InlineParameters(sql, parameters);
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", inlined);
+        Snackbar.Add("SQL copied with values inlined.", Severity.Success);
+    }
+
+    // Substitute every @parameter reference in the SQL with the value it
+    // would bind to, formatted as a SQL literal. Word-boundary regex so a
+    // match on @__af_1 doesn't also chew up the prefix of @__af_10.
+    // Parameters not in the dictionary are left untouched.
+    private static string InlineParameters(string sql, Dictionary<string, object?>? parameters)
+    {
+        if (string.IsNullOrEmpty(sql) || parameters is null || parameters.Count == 0)
+            return sql;
+        return System.Text.RegularExpressions.Regex.Replace(
+            sql,
+            @"@\w+",
+            match =>
+            {
+                var name = match.Value;
+                if (!parameters.TryGetValue(name, out var value)) return name;
+                return FormatLiteral(value);
+            });
+    }
+
+    // Render a parameter value as a portable SQL literal. The values that
+    // hit this method come from ADO.NET DbParameter.Value, so the .NET
+    // runtime types decide formatting. Both pgAdmin and SSMS accept the
+    // forms below for the columns they target most often.
+    private static string FormatLiteral(object? value)
+    {
+        if (value is null) return "NULL";
+        return value switch
+        {
+            bool b                        => b ? "1" : "0",
+            DateTime dt                   => $"'{dt:yyyy-MM-dd HH:mm:ss.fff}'",
+            DateTimeOffset dto            => $"'{dto:yyyy-MM-dd HH:mm:ss.fffzzz}'",
+            DateOnly d                    => $"'{d:yyyy-MM-dd}'",
+            TimeOnly t                    => $"'{t:HH:mm:ss.fff}'",
+            Guid g                        => $"'{g}'",
+            byte[] bytes                  => "0x" + Convert.ToHexString(bytes),
+            byte or sbyte or short or ushort or int or uint or long or ulong
+                                          => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!,
+            decimal or double or float    => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!,
+            string s                      => $"'{s.Replace("'", "''")}'",
+            _                             => $"'{value.ToString()!.Replace("'", "''")}'"
+        };
     }
 }

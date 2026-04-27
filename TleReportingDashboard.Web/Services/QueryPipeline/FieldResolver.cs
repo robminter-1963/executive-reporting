@@ -11,7 +11,10 @@ public static class FieldResolver
         if (fieldIds is null || fieldIds.Count == 0)
             throw new ArgumentException("At least one field ID must be specified.");
 
-        var lookup = schemaFields.ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+        // First-wins dedupe — see SchemaService.GetFieldConfigsAsync.
+        var lookup = schemaFields
+            .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         var unknowns = fieldIds.Where(id => !lookup.ContainsKey(id)).Distinct().ToList();
         if (unknowns.Count > 0)

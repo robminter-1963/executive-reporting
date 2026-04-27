@@ -27,6 +27,7 @@
                            Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;">
                     <MudSelectItem T="string" Value="@ScopeRules.All">All records</MudSelectItem>
                     <MudSelectItem T="string" Value="@ScopeRules.Self">Only their own</MudSelectItem>
+                    <MudSelectItem T="string" Value="@ScopeRules.Team">Only for their team</MudSelectItem>
                 </MudSelect>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
                            StartIcon="@Icons.Material.Filled.Add"
@@ -77,6 +78,7 @@
                                        Variant="Variant.Outlined" Margin="Margin.Dense">
                                 <MudSelectItem T="string" Value="@ScopeRules.All">All records</MudSelectItem>
                                 <MudSelectItem T="string" Value="@ScopeRules.Self">Only their own</MudSelectItem>
+                                <MudSelectItem T="string" Value="@ScopeRules.Team">Only for their team</MudSelectItem>
                             </MudSelect>
                         }
                     </MudTd>
@@ -131,6 +133,13 @@
                             <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled"
                                      Icon="@Icons.Material.Filled.FilterAlt">
                                 Only their own
+                            </MudChip>
+                        }
+                        else if (context.ScopeRule == ScopeRules.Team)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled"
+                                     Icon="@Icons.Material.Filled.Groups">
+                                Only for their team
                             </MudChip>
                         }
                         else

@@ -1,0 +1,643 @@
+@inject ICompanyConnectionAdminService ConnectionSvc
+@inject ICompanyRegistry CompanyRegistry
+@inject ITeamSourceService TeamSource
+@inject ICustomPrimaryTableService TableAliasSvc
+@inject ISnackbar Snackbar
+@using MudBlazor
+@using TleReportingDashboard.Web.Models
+@using TleReportingDashboard.Web.Services
+
+@* Scoped scroll matching the other admin tabs. *@
+<MudStack Spacing="3" Class="pa-2"
+          Style="max-height: calc(100vh - 180px); overflow-y: auto;">
+    <MudText Typo="Typo.body2" Color="Color.Secondary">
+        Configure how teams are read from each connection. Teams are fetched live from the source database — no copy is stored in the reporting dashboard — so changes in the LOS show up immediately. Three pieces per connection: a <strong>Teams SQL</strong> that returns the team list, a <strong>Members SQL</strong> that returns team-member rows used by the team-scope filter at query time, and a <strong>team type → owner column</strong> map that tells the query pipeline which column on the primary table each team type filters against.
+    </MudText>
+
+    @* ── Company + Connection pickers ───────────────────────────────── *@
+    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+            <MudSelect T="Guid?" Value="_selectedCompanyId" ValueChanged="OnCompanyChanged"
+                       Label="Company" Variant="Variant.Outlined" Margin="Margin.Dense"
+                       ToStringFunc="@CompanyToLabel"
+                       Style="min-width: 240px;">
+                @foreach (var c in _companies)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
+                }
+            </MudSelect>
+            <MudSelect T="Guid?" Value="_selectedConnectionId" ValueChanged="OnConnectionChanged"
+                       Label="Connection" Variant="Variant.Outlined" Margin="Margin.Dense"
+                       ToStringFunc="@ConnectionToLabel"
+                       Disabled="@(_selectedCompanyId is null || _availableConnections.Count == 0)"
+                       Style="min-width: 280px;">
+                @foreach (var c in _availableConnections
+                    .Where(c => c.IsActive)
+                    .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">
+                        @c.Name (@c.ConnectionType)@(c.IsDefault ? " · default" : "")
+                    </MudSelectItem>
+                }
+            </MudSelect>
+            @if (_savedAt is not null)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined"
+                         Icon="@Icons.Material.Filled.Save">
+                    Saved @_savedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                    @(string.IsNullOrEmpty(_savedBy) ? "" : $" by {_savedBy}")
+                </MudChip>
+            }
+            else if (_selectedConnectionId is not null)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
+                         Icon="@Icons.Material.Filled.EditNote">
+                    Not configured
+                </MudChip>
+            }
+        </MudStack>
+    </MudPaper>
+
+    @if (_selectedConnectionId is null)
+    {
+        <MudAlert Severity="Severity.Info" Dense>
+            Pick a company and a connection to configure its team source.
+        </MudAlert>
+    }
+    else
+    {
+        @* ── Teams SQL editor ───────────────────────────────────────── *@
+        <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudStack Spacing="2">
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Teams SQL</MudText>
+                <MudTextField T="string" @bind-Value="_teamsSql"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="10"
+                              Style="font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85rem;"
+                              HelperText="Must return: team_id, team_name, manager_ext_id, manager_name, team_type." />
+            </MudStack>
+        </MudPaper>
+
+        @* ── Members SQL editor ─────────────────────────────────────── *@
+        <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudStack Spacing="2">
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Members SQL</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Returned rows let the query pipeline check "is this loan's role-holder on one of the user's teams?" Without it, team-scope falls back to zero rows.
+                </MudText>
+                <MudTextField T="string" @bind-Value="_membersSql"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="6"
+                              Style="font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85rem;"
+                              HelperText="Must return: team_id, member_ext_id. member_ext_id is the login ID on the LOS/CRM." />
+            </MudStack>
+        </MudPaper>
+
+        @* ── Team type → owner column editor ────────────────────────── *@
+        <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudStack Spacing="2">
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Team type → owner column</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    For each team type, pick the table alias and column that holds the role-holder's login ID. <strong>Aliases</strong> come from this connection's <em>Table Aliases</em> admin tab (label format: <code>alias · schema.table</code>). <strong>Columns</strong> are read live from the source database (<code>INFORMATION_SCHEMA.COLUMNS</code>) — every column on the table is offered, not just schema-modeled fields. If the chosen alias isn't already in a report's join chain when the team-scope predicate runs, the QueryBuilder pulls its join in automatically.
+                </MudText>
+                <MudTable Items="_typeRows" Dense T="TypeRow" Class="pa-0">
+                    <HeaderContent>
+                        <MudTh Style="width: 200px;">Team type</MudTh>
+                        <MudTh Style="width: 220px;">Table alias</MudTh>
+                        <MudTh>Column</MudTh>
+                        <MudTh Style="width: 40px;"></MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <MudTextField T="string" @bind-Value="context.TeamType"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                          Placeholder="Processor" />
+                        </MudTd>
+                        <MudTd>
+                            <MudSelect T="string" Value="@context.AliasName"
+                                       ValueChanged="@(v => OnAliasChanged(context, v))"
+                                       ToStringFunc="@AliasLabel"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                       Clearable Placeholder="(unqualified)">
+                                @foreach (var alias in _aliasOrder)
+                                {
+                                    <MudSelectItem T="string" Value="@alias">@AliasLabel(alias)</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudTd>
+                        <MudTd>
+                            <MudSelect T="string" @bind-Value="context.ColumnName"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                       Disabled="@(string.IsNullOrEmpty(context.AliasName) && !_columnsByAlias.ContainsKey(string.Empty))"
+                                       Placeholder="@(ColumnsForAlias(context.AliasName).Count == 0 ? "(no columns for this alias)" : "Select column…")">
+                                @foreach (var col in ColumnsForAlias(context.AliasName))
+                                {
+                                    <MudSelectItem T="string" Value="@col">@col</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudTd>
+                        <MudTd>
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                           Color="Color.Default"
+                                           OnClick="@(() => _typeRows.Remove(context))" />
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+                <MudStack Row Spacing="2">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddTypeRow">
+                        Add type
+                    </MudButton>
+                    @if (_discoveredTypes.Count > 0)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                                   StartIcon="@Icons.Material.Filled.AutoAwesome"
+                                   OnClick="ImportDiscoveredTypes">
+                            Import types from last preview (@_discoveredTypes.Count)
+                        </MudButton>
+                    }
+                </MudStack>
+            </MudStack>
+        </MudPaper>
+
+        @* ── Actions ────────────────────────────────────────────────── *@
+        <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
+                <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                           StartIcon="@Icons.Material.Filled.Visibility"
+                           OnClick="Preview"
+                           Disabled="@(_busy || string.IsNullOrWhiteSpace(_teamsSql))">
+                    Preview teams
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Save"
+                           OnClick="Save"
+                           Disabled="@(_busy || string.IsNullOrWhiteSpace(_teamsSql))">
+                    Save
+                </MudButton>
+                @if (_busy)
+                {
+                    <MudProgressCircular Indeterminate Size="Size.Small" />
+                }
+            </MudStack>
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense Class="mt-2">@_error</MudAlert>
+            }
+        </MudPaper>
+
+        @* ── Preview results ────────────────────────────────────────── *@
+        @if (_previewRows is not null)
+        {
+            <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudStack Row AlignItems="AlignItems.Center" Class="pa-3" Spacing="2">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                        Preview — @_previewRows.Count team@(_previewRows.Count == 1 ? "" : "s")
+                    </MudText>
+                    <MudSpacer />
+                    @if (_previewTypes.Count > 1)
+                    {
+                        <MudSelect T="string" @bind-Value="_typeFilter" Label="Type"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense Clearable
+                                   Style="min-width: 160px;">
+                            <MudSelectItem T="string" Value="@("")">All types</MudSelectItem>
+                            @foreach (var t in _previewTypes.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                            {
+                                <MudSelectItem T="string" Value="@t">@t</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                </MudStack>
+                <MudTable Items="FilteredPreview()" Dense Hover Class="pa-0" T="TeamRecord">
+                    <HeaderContent>
+                        <MudTh Style="width: 80px;">ID</MudTh>
+                        <MudTh>Name</MudTh>
+                        <MudTh Style="width: 140px;">Type</MudTh>
+                        <MudTh>Manager</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.TeamId</MudTd>
+                        <MudTd><strong>@(context.TeamName ?? "—")</strong></MudTd>
+                        <MudTd>
+                            @if (!string.IsNullOrEmpty(context.TeamType))
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                                    @context.TeamType
+                                </MudChip>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
+                                @if (!string.IsNullOrEmpty(context.ManagerName))
+                                {
+                                    <MudText Typo="Typo.body2">@context.ManagerName</MudText>
+                                    @if (!string.IsNullOrEmpty(context.ManagerExtId))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            login: @context.ManagerExtId
+                                        </MudText>
+                                    }
+                                }
+                                else if (!string.IsNullOrEmpty(context.ManagerExtId))
+                                {
+                                    <MudText Typo="Typo.body2">@context.ManagerExtId</MudText>
+                                }
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+        }
+    }
+</MudStack>
+
+@code {
+    [Parameter] public string? CurrentUserEmail { get; set; }
+
+    private sealed class TypeRow
+    {
+        public string TeamType { get; set; } = string.Empty;
+        // Split form: alias picked from the schema's table list; column
+        // picked from the alias's column list. The DB still stores a single
+        // owner_column string, so OnSave/OnLoad combine/split on the dot.
+        public string AliasName { get; set; } = string.Empty;
+        public string ColumnName { get; set; } = string.Empty;
+
+        public string ToOwnerColumn() =>
+            string.IsNullOrWhiteSpace(AliasName)
+                ? ColumnName.Trim()
+                : $"{AliasName.Trim()}.{ColumnName.Trim()}";
+
+        public static TypeRow FromOwnerColumn(string teamType, string ownerColumn)
+        {
+            var row = new TypeRow { TeamType = teamType };
+            var dot = ownerColumn.IndexOf('.');
+            if (dot > 0)
+            {
+                row.AliasName = ownerColumn[..dot];
+                row.ColumnName = ownerColumn[(dot + 1)..];
+            }
+            else
+            {
+                row.AliasName = string.Empty;
+                row.ColumnName = ownerColumn;
+            }
+            return row;
+        }
+    }
+
+    private List<CompanySummary> _companies = new();
+    private List<CompanyConnectionRecord> _availableConnections = new();
+    private Guid? _selectedCompanyId;
+    private Guid? _selectedConnectionId;
+
+    private string _teamsSql = string.Empty;
+    private string _membersSql = string.Empty;
+    private List<TypeRow> _typeRows = new();
+    private HashSet<string> _discoveredTypes = new(StringComparer.OrdinalIgnoreCase);
+
+    // Aliases come from the connection's Table Aliases catalog
+    // (RPT_custom_primary_tables) — the canonical list of (alias, schema.table)
+    // pairs available on the connection. Picking an alias kicks off a live
+    // INFORMATION_SCHEMA lookup against the source DB for that alias's
+    // underlying table; the result is cached per alias for the lifetime of
+    // this component instance so re-clicking is free.
+    private List<string> _aliasOrder = new();
+    private Dictionary<string, string> _aliasLabel =
+        new(StringComparer.OrdinalIgnoreCase); // alias → "alias · schema.table"
+    private Dictionary<string, string> _aliasToTable =
+        new(StringComparer.OrdinalIgnoreCase); // alias → schema.table
+    private Dictionary<string, List<string>> _columnsByAlias =
+        new(StringComparer.OrdinalIgnoreCase); // alias → live source columns
+    private HashSet<string> _columnsLoading =
+        new(StringComparer.OrdinalIgnoreCase); // aliases currently being fetched
+
+    private DateTime? _savedAt;
+    private string? _savedBy;
+
+    private List<TeamRecord>? _previewRows;
+    private HashSet<string> _previewTypes = new();
+    private string _typeFilter = string.Empty;
+
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _companies = (await CompanyRegistry.GetActiveAsync())
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (_companies.Count > 0)
+        {
+            _selectedCompanyId = _companies[0].Id;
+            await ReloadConnectionsAsync();
+        }
+    }
+
+    private async Task OnCompanyChanged(Guid? id)
+    {
+        _selectedCompanyId = id;
+        _selectedConnectionId = null;
+        ClearEditor();
+        await ReloadConnectionsAsync();
+    }
+
+    private async Task OnConnectionChanged(Guid? id)
+    {
+        _selectedConnectionId = id;
+        ClearEditor();
+        if (id is not null)
+        {
+            await LoadConfigAsync(id.Value);
+        }
+    }
+
+    private async Task ReloadConnectionsAsync()
+    {
+        if (_selectedCompanyId is Guid id)
+        {
+            _availableConnections = await ConnectionSvc.GetByCompanyAsync(id);
+            var pick = _availableConnections.FirstOrDefault(c => c.IsActive && c.IsDefault)
+                       ?? _availableConnections.FirstOrDefault(c => c.IsActive);
+            if (pick is not null)
+            {
+                _selectedConnectionId = pick.Id;
+                await LoadConfigAsync(pick.Id);
+            }
+        }
+        else
+        {
+            _availableConnections = new();
+        }
+    }
+
+    private async Task LoadConfigAsync(Guid connectionId)
+    {
+        _error = null;
+        try
+        {
+            // Load schema-derived alias→columns map up-front so the type-row
+            // dropdowns have data ready by the time the rows render.
+            await LoadSchemaAliasesAsync(connectionId);
+
+            var cfg = await TeamSource.GetConfigAsync(connectionId);
+            if (cfg is null)
+            {
+                // Empty state when nothing is configured for this connection.
+                // No starter templates — the source schema can be any LOS or
+                // CRM, so any literal table name we shipped would be wrong
+                // for most customers. Helper text on each editor documents
+                // the required output column aliases.
+                _teamsSql = string.Empty;
+                _membersSql = string.Empty;
+                _savedAt = null;
+                _savedBy = null;
+            }
+            else
+            {
+                _teamsSql = cfg.TeamsSql;
+                _membersSql = cfg.MembersSql ?? string.Empty;
+                _savedAt = cfg.UpdatedAt;
+                _savedBy = cfg.UpdatedBy;
+            }
+
+            var typeMap = await TeamSource.GetTypeColumnsAsync(connectionId);
+            _typeRows = typeMap
+                .Select(kv => TypeRow.FromOwnerColumn(kv.Key, kv.Value))
+                .ToList();
+
+            // Pre-fetch columns for every alias already referenced by a
+            // saved row. Done in parallel because these are independent
+            // INFORMATION_SCHEMA round-trips against the same connection.
+            // Without this the column dropdowns render empty until the
+            // admin re-picks the alias.
+            var aliasesToWarm = _typeRows
+                .Select(r => r.AliasName)
+                .Where(a => !string.IsNullOrEmpty(a))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (aliasesToWarm.Count > 0)
+            {
+                await Task.WhenAll(aliasesToWarm.Select(EnsureSourceColumnsLoadedAsync));
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't load config: {ex.Message}";
+        }
+    }
+
+    private async Task LoadSchemaAliasesAsync(Guid connectionId)
+    {
+        // Source of truth: the Table Aliases admin tab. Every row gets a
+        // dropdown entry — primary or not — so admins can target columns
+        // on any joined table the connection knows about. The "key" used
+        // in the dropdown is the alias when set, otherwise the bare table
+        // name (so unaliased tables still get a dropdown entry).
+        var catalog = await TableAliasSvc.GetByConnectionAsync(connectionId);
+
+        _aliasLabel.Clear();
+        _aliasToTable.Clear();
+        _columnsByAlias.Clear();
+        _columnsLoading.Clear();
+
+        foreach (var rec in catalog)
+        {
+            var key = !string.IsNullOrWhiteSpace(rec.Alias) ? rec.Alias : rec.TableName;
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            _aliasToTable[key] = rec.TableName;
+            _aliasLabel[key] =
+                string.Equals(rec.Alias, rec.TableName, StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(rec.Alias)
+                    ? rec.TableName
+                    : $"{rec.Alias} · {rec.TableName}";
+        }
+        // Sort by the display label (e.g. "BORR · EMPOWER.U_INFO_BORROWER")
+        // rather than the alias key — the dropdown shows labels, so the
+        // visible order should match what the admin reads top-to-bottom.
+        _aliasOrder = _aliasLabel
+            .OrderBy(kv => kv.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(kv => kv.Key)
+            .ToList();
+    }
+
+    private string AliasLabel(string alias) =>
+        _aliasLabel.TryGetValue(alias, out var label) ? label : alias;
+
+    // Fetch (and cache) the list of every column on the alias's underlying
+    // table by querying INFORMATION_SCHEMA on the source DB. Idempotent —
+    // a second call for the same alias is a no-op once cached. Errors are
+    // surfaced in _error rather than thrown so a transient source-DB
+    // failure on one alias doesn't poison the whole editor.
+    private async Task EnsureSourceColumnsLoadedAsync(string alias)
+    {
+        if (string.IsNullOrEmpty(alias)) return;
+        if (_selectedConnectionId is not Guid cid) return;
+        if (_columnsByAlias.ContainsKey(alias)) return;
+        if (!_aliasToTable.TryGetValue(alias, out var tableName)) return;
+        if (!_columnsLoading.Add(alias)) return;
+        try
+        {
+            var cols = await TeamSource.GetSourceTableColumnsAsync(cid, tableName);
+            _columnsByAlias[alias] = cols;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't load columns for {AliasLabel(alias)}: {ex.Message}";
+            _columnsByAlias[alias] = new List<string>();
+        }
+        finally
+        {
+            _columnsLoading.Remove(alias);
+        }
+    }
+
+    // Returns the column list for the given alias, plus a fallback to
+    // every distinct column across the schema when the alias is blank
+    // (admin hasn't picked one yet) so the picker isn't empty.
+    private List<string> ColumnsForAlias(string? alias)
+    {
+        if (!string.IsNullOrEmpty(alias) && _columnsByAlias.TryGetValue(alias, out var cols))
+            return cols;
+        return new List<string>();
+    }
+
+    // Reset the column choice when the alias changes — a column from the
+    // previous alias almost certainly doesn't exist on the new one and
+    // would silently emit invalid SQL. Triggers a live INFORMATION_SCHEMA
+    // fetch for the new alias if it hasn't been loaded yet.
+    private async Task OnAliasChanged(TypeRow row, string? newAlias)
+    {
+        row.AliasName = newAlias ?? string.Empty;
+        if (!string.IsNullOrEmpty(row.AliasName))
+        {
+            await EnsureSourceColumnsLoadedAsync(row.AliasName);
+        }
+        if (!string.IsNullOrEmpty(row.ColumnName)
+            && !ColumnsForAlias(row.AliasName).Contains(row.ColumnName, StringComparer.OrdinalIgnoreCase))
+        {
+            row.ColumnName = string.Empty;
+        }
+    }
+
+    private async Task Preview()
+    {
+        if (_selectedConnectionId is not Guid id) return;
+        _error = null;
+        _busy = true;
+        StateHasChanged();
+        try
+        {
+            _previewRows = await TeamSource.PreviewTeamsAsync(id, _teamsSql);
+            _previewTypes = _previewRows
+                .Select(t => t.TeamType)
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Select(t => t!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // Surface types not yet mapped so the admin can add them to
+            // the type → column table with one click.
+            var mapped = _typeRows
+                .Select(r => r.TeamType)
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _discoveredTypes = _previewTypes
+                .Where(t => !mapped.Contains(t))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _previewRows = null;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task Save()
+    {
+        if (_selectedConnectionId is not Guid id) return;
+        _error = null;
+        _busy = true;
+        StateHasChanged();
+        try
+        {
+            var trimmedMembers = string.IsNullOrWhiteSpace(_membersSql) ? null : _membersSql;
+            await TeamSource.SaveConfigAsync(id, _teamsSql, trimmedMembers, CurrentUserEmail);
+
+            // De-dup and drop empty rows before saving the type map so the
+            // UI's "blank row awaiting input" pattern doesn't round-trip to
+            // a useless DB row. Combine alias + column at save time.
+            var dedup = _typeRows
+                .Where(r => !string.IsNullOrWhiteSpace(r.TeamType) && !string.IsNullOrWhiteSpace(r.ColumnName))
+                .GroupBy(r => r.TeamType.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Last().ToOwnerColumn(), StringComparer.OrdinalIgnoreCase);
+            await TeamSource.SaveTypeColumnsAsync(id, dedup);
+
+            var cfg = await TeamSource.GetConfigAsync(id);
+            _savedAt = cfg?.UpdatedAt;
+            _savedBy = cfg?.UpdatedBy;
+            Snackbar.Add("Team source saved.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Snackbar.Add("Save failed.", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void AddTypeRow() => _typeRows.Add(new TypeRow());
+
+    private void ImportDiscoveredTypes()
+    {
+        foreach (var t in _discoveredTypes.OrderBy(x => x))
+        {
+            _typeRows.Add(new TypeRow { TeamType = t });
+        }
+        _discoveredTypes.Clear();
+    }
+
+    private void ClearEditor()
+    {
+        _teamsSql = string.Empty;
+        _membersSql = string.Empty;
+        _typeRows = new();
+        _discoveredTypes.Clear();
+        _savedAt = null;
+        _savedBy = null;
+        _previewRows = null;
+        _previewTypes.Clear();
+        _typeFilter = string.Empty;
+        _error = null;
+    }
+
+    private IEnumerable<TeamRecord> FilteredPreview()
+    {
+        if (_previewRows is null) return Enumerable.Empty<TeamRecord>();
+        return string.IsNullOrEmpty(_typeFilter)
+            ? _previewRows
+            : _previewRows.Where(t => string.Equals(t.TeamType, _typeFilter, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string CompanyToLabel(Guid? id)
+    {
+        if (id is null) return string.Empty;
+        var c = _companies.FirstOrDefault(x => x.Id == id);
+        return c is null ? string.Empty : $"{c.Name} ({c.Code})";
+    }
+
+    private string ConnectionToLabel(Guid? id)
+    {
+        if (id is null) return string.Empty;
+        var c = _availableConnections.FirstOrDefault(x => x.Id == id);
+        if (c is null) return string.Empty;
+        return $"{c.Name} ({c.ConnectionType}){(c.IsDefault ? " · default" : "")}";
+    }
+}

@@ -22,7 +22,9 @@
     <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
             <MudSelect T="Guid?" Value="_selectedCompanyId" ValueChanged="OnCompanyChanged"
-                       Label="Company" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 280px;">
+                       Label="Company" Variant="Variant.Outlined" Margin="Margin.Dense"
+                       ToStringFunc="@CompanyToLabel"
+                       Style="min-width: 280px;">
                 @foreach (var c in _companies)
                 {
                     <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
@@ -344,6 +346,13 @@
         _editing = false;
         _form = null;
         await ReloadConnectionsAsync();
+    }
+
+    private string CompanyToLabel(Guid? id)
+    {
+        if (id is null) return string.Empty;
+        var c = _companies.FirstOrDefault(x => x.Id == id);
+        return c is null ? string.Empty : $"{c.Name} ({c.Code})";
     }
 
     private async Task ReloadConnectionsAsync()

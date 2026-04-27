@@ -55,9 +55,15 @@ public static class ScopeRules
 {
     public const string All  = "all";
     public const string Self = "self";
+    // Matches rows where the loan's owner column (chosen per team_type on
+    // the connection's Team Builder config) is a member of any team the
+    // user is assigned to in RPT_user_teams. Scope fails closed when the
+    // connection is missing members SQL, the user has no team assignments,
+    // or a team's type has no column mapping.
+    public const string Team = "team";
 
-    public static readonly IReadOnlyList<string> Allowed = new[] { All, Self };
+    public static readonly IReadOnlyList<string> Allowed = new[] { All, Self, Team };
 
     public static bool IsValid(string? value) =>
-        !string.IsNullOrEmpty(value) && (value == All || value == Self);
+        !string.IsNullOrEmpty(value) && (value == All || value == Self || value == Team);
 }

@@ -243,8 +243,16 @@
                                gutter reserved so the table doesn't reflow when vertical
                                scroll appears (which was causing a horizontal scrollbar). *@
                             <div class="dash-table-wrap"
-                                 style="@(Compact ? "flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable;" : $"max-height: {GridHeight ?? "370px"}; overflow-y: auto; scrollbar-gutter: stable;")">
-                                <table class="dash-summary-table">
+                                 style="@(Compact ? "flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable;" : $"max-height: {GridHeight ?? "370px"}; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable;")">
+                                @{
+                                    // Lock the table's min width to the sum of fixed-numeric/date
+                                    // widths plus a floor for each text column. With
+                                    // overflow-x: auto on the wrap above, this turns into a
+                                    // horizontal scrollbar at narrow tile widths instead of
+                                    // letting numeric columns squish out of view.
+                                    var tableMinWidth = ComputeTableMinWidthPx();
+                                }
+                                <table class="dash-summary-table" style="@($"min-width: {tableMinWidth}px;")">
                                     <thead>
                                         <tr>
                                             @foreach (var colKey in _dashColumnOrder)
@@ -252,8 +260,15 @@
                                                 var ck = colKey;
                                                 @if (ck == "groupBy")
                                                 {
-                                                    var a = GetAlign("groupBy", IsNumericDataType(GetGroupByDataType()) ? "right" : "left");
-                                                    <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                    var gbType = GetGroupByDataType();
+                                                    var gbFixedWidth = FixedColumnWidthPx(gbType);
+                                                    var alignDefault = gbFixedWidth > 0 || IsNumericDataType(gbType) ? "right" : "left";
+                                                    var a = GetAlign("groupBy", alignDefault);
+                                                    // Pin width for date / datetime / currency / integer /
+                                                    // percent / numeric group-bys; leave text auto so the
+                                                    // group label column flexes with the tile.
+                                                    var gbStyle = (gbFixedWidth > 0 ? $"width: {gbFixedWidth}px; " : string.Empty) + AlignToCss(a);
+                                                    <th class="@SortHeaderClass(ck)" style="@gbStyle" @onclick="@(() => ToggleGridSort(ck))">
                                                         <span class="dash-th-inner">
                                                             <EditableHeader Label="@GetLabel("groupBy", GetGroupByLabel())"
                                                                             OnLabelChanged="@(v => SetLabel("groupBy", v))"
@@ -267,7 +282,7 @@
                                                 else if (ck == "measure")
                                                 {
                                                     var a = GetAlign("measure", "right");
-                                                    <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                    <th class="@SortHeaderClass(ck)" style="width: 130px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
                                                         <span class="dash-th-inner">
                                                             <EditableHeader Label="@GetLabel("measure", $"{_aggregation} of {GetMeasureLabel()}")"
                                                                             OnLabelChanged="@(v => SetLabel("measure", v))"
@@ -281,7 +296,7 @@
                                                 else if (ck == "count")
                                                 {
                                                     var a = GetAlign("count", "right");
-                                                    <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                    <th class="@SortHeaderClass(ck)" style="width: 90px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
                                                         <span class="dash-th-inner">
                                                             <EditableHeader Label="@GetLabel("count", "Count")"
                                                                             OnLabelChanged="@(v => SetLabel("count", v))"
@@ -295,7 +310,7 @@
                                                 else if (ck == "pct")
                                                 {
                                                     var a = GetAlign("pct", "right");
-                                                    <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                    <th class="@SortHeaderClass(ck)" style="width: 110px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
                                                         <span class="dash-th-inner">
                                                             <EditableHeader Label="@GetLabel("pct", "% of Total")"
                                                                             OnLabelChanged="@(v => SetLabel("pct", v))"
@@ -314,7 +329,9 @@
                                                     {
                                                         var a = GetAlign($"extra_{ec.Key}", "right");
                                                         var ecRef = ec;
-                                                        <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                        // Extras are aggregations (always numeric output) — pin
+                                                        // their width so they don't squish out at narrow tile sizes.
+                                                        <th class="@SortHeaderClass(ck)" style="width: 130px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
                                                             <span class="dash-th-inner">
                                                                 <EditableHeader Label="@GetLabel($"extra_{ecRef.Key}", $"{ecRef.Aggregation} of {GetFieldLabel(ecRef.FieldId)}")"
                                                                                 OnLabelChanged="@(v => SetLabel($"extra_{ecRef.Key}", v))"
@@ -340,9 +357,19 @@
                                                     if (_extraDimensions.Contains(dimFid, StringComparer.OrdinalIgnoreCase))
                                                     {
                                                         var dimCol = Data?.Columns.FirstOrDefault(c => c.FieldId.Equals(dimFid, StringComparison.OrdinalIgnoreCase));
-                                                        var a = GetAlign($"dim_{dimFid}", IsNumericDataType(dimCol?.DataType ?? "") ? "right" : "left");
+                                                        var dimDataType = dimCol?.DataType ?? "";
+                                                        // Right-align numeric and date-like columns; text stays
+                                                        // left-aligned. Fixed-width branch covers date / datetime /
+                                                        // currency / integer / percent — anything with a
+                                                        // predictable max formatted width.
+                                                        var dimFixedWidth = FixedColumnWidthPx(dimDataType);
+                                                        var alignDefault = dimFixedWidth > 0 || IsNumericDataType(dimDataType) ? "right" : "left";
+                                                        var a = GetAlign($"dim_{dimFid}", alignDefault);
                                                         var dimFidRef = dimFid;
-                                                        <th class="@SortHeaderClass(ck)" style="@AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                        // Pinned width when the type has one; auto otherwise so
+                                                        // text columns shrink/grow with the tile.
+                                                        var dimStyle = (dimFixedWidth > 0 ? $"width: {dimFixedWidth}px; " : string.Empty) + AlignToCss(a);
+                                                        <th class="@SortHeaderClass(ck)" style="@dimStyle" @onclick="@(() => ToggleGridSort(ck))">
                                                             <span class="dash-th-inner">
                                                                 <EditableHeader Label="@GetLabel($"dim_{dimFidRef}", GetFieldLabel(dimFidRef))"
                                                                                 OnLabelChanged="@(v => SetLabel($"dim_{dimFidRef}", v))"
@@ -389,8 +416,12 @@
                                                         var ck = colKey;
                                                         @if (ck == "groupBy")
                                                         {
-                                                            <td style="@AlignToCss(GetAlign("groupBy", IsNumericDataType(GetGroupByDataType()) ? "right" : "left"))">
-                                                                <span style="font-weight: 500;">@FormatGroupKey(row.GroupKey)</span>
+                                                            @* title attribute = native browser tooltip on hover.
+                                                               Surfaces the full group label when the cell ellipsises
+                                                               at narrow tile widths. *@
+                                                            var gkText = FormatGroupKey(row.GroupKey);
+                                                            <td title="@gkText" style="@AlignToCss(GetAlign("groupBy", IsNumericDataType(GetGroupByDataType()) ? "right" : "left"))">
+                                                                <span style="font-weight: 500;">@gkText</span>
                                                             </td>
                                                         }
                                                         else if (ck == "measure")
@@ -420,7 +451,8 @@
                                                         else if (ck.StartsWith("dim:"))
                                                         {
                                                             var dimFid = ck[4..];
-                                                            <td style="@AlignToCss(GetAlign($"dim_{dimFid}", "left"))">@FormatDimensionValue(row, dimFid)</td>
+                                                            var dimVal = FormatDimensionValue(row, dimFid);
+                                                            <td title="@dimVal" style="@AlignToCss(GetAlign($"dim_{dimFid}", "left"))">@dimVal</td>
                                                         }
                                                     }
                                                 </tr>
@@ -560,7 +592,18 @@
        rather than forcing a scroll when the layout is tight. */
     .dash-table-wrap {
         border-top: 1px solid #E8EAED;
+        /* Vertical scroll on demand; horizontal scroll is intentionally
+           suppressed. Text columns shrink with ellipsis down to a 10px
+           floor (see TextColumnFloorPx); numeric/date columns stay at
+           their pinned widths. If the tile gets so narrow that even the
+           floor + numerics don't fit, the rightmost edge clips — by design,
+           since no scrollbar is preferable to scrolling per UX choice. */
+        overflow-y: auto;
         overflow-x: hidden;
+        /* Reserve the vertical-scrollbar gutter at all times so the table
+           layout doesn't reflow when the scrollbar appears (which used to
+           push content sideways and clip a column off the right edge). */
+        scrollbar-gutter: stable;
     }
     .dash-summary-table {
         width: 100%;
@@ -681,7 +724,10 @@
     // Default to COUNT so new dashboards show row counts per group out of the
     // box — no Primary Measure selection required.
     private string _aggregation = "COUNT";
-    private string _chartTypeStr = "Bar";
+    // Default to None for new reports — most reports don't need a chart by
+    // default, and the legacy "Bar" default forced authors to actively turn
+    // it off. Existing reports keep their saved ChartType via InitialConfig.
+    private string _chartTypeStr = "";
 
     [Parameter] public bool HideChart { get; set; }
     /// <summary>Fires when the group-by field changes to a field not currently in the query result.</summary>
@@ -713,8 +759,14 @@
     private List<string> _dashColumnOrder = new() { "groupBy", "count", "pct" };
     private string _defaultSortColumn = string.Empty;
     private string _defaultSortDir = "asc";
-    private bool _showPercentColumn = true;
-    private bool _showKpiCards = true;
+    // Default off for new reports. Legacy reports load their state from the
+    // saved column order ("pct" presence at line ~892) so this only affects
+    // brand-new reports that have no InitialConfig yet.
+    private bool _showPercentColumn = false;
+    // Default off for new reports. Legacy reports load their saved value
+    // via InitialConfig.ShowKpiCards (line ~897), so this only affects
+    // brand-new reports.
+    private bool _showKpiCards = false;
     private bool _showOnMaster;
     private int _dashDragSource = -1;
     private int _dashDropTarget = -1;
@@ -1711,6 +1763,71 @@
         "decimal" or "float" or "double" or "numeric" or "real" or "number" => true,
         _ => false
     };
+
+    // Floor width applied to text-bearing (auto) columns when computing the
+    // table's min-width. 10px = "shrink essentially to nothing" — content
+    // ellipsises down to a couple of pixels of the leading character before
+    // the column hits this floor. Numeric / date columns are pinned at their
+    // per-type widths regardless, so they stay readable while text disappears.
+    private const int TextColumnFloorPx = 10;
+
+    // Columns whose content has a predictable max width (formatted dates,
+    // currency, etc.) get pinned widths so they don't squish out at narrow
+    // tile widths. Text-bearing columns are intentionally excluded — they
+    // absorb tile-width changes via auto-width + ellipsis + title tooltip.
+    // Returns 0 to signal "auto width" (caller should not emit a width).
+    private static int FixedColumnWidthPx(string dataType) => dataType.ToLowerInvariant() switch
+    {
+        "currency" or "money" or "smallmoney"                            => 130,
+        "percent" or "percentage"                                        => 110,
+        "integer" or "int" or "bigint" or "smallint" or "tinyint"        => 90,
+        "decimal" or "float" or "double" or "numeric" or "real" or "number" => 130,
+        "date"                                                           => 110,
+        "datetime" or "datetime2" or "smalldatetime" or "timestamp"
+            or "timestamp without time zone" or "timestamp with time zone" => 150,
+        "time"                                                           => 90,
+        _                                                                => 0
+    };
+
+    // Sums the per-column fixed widths (pinned numeric/date types) plus a
+    // floor for each text-bearing column, so the table always has enough
+    // room to render its numerics at full size + readable text. Applied
+    // as min-width on the <table>; combined with overflow-x: auto on the
+    // wrap, this means narrow tiles get a horizontal scrollbar instead of
+    // squishing the numeric columns or hiding them entirely.
+    private int ComputeTableMinWidthPx()
+    {
+        var total = 0;
+        foreach (var ck in _dashColumnOrder)
+        {
+            if (ck == "groupBy")
+            {
+                var w = FixedColumnWidthPx(GetGroupByDataType());
+                total += w > 0 ? w : TextColumnFloorPx;
+            }
+            else if (ck == "measure" || ck.StartsWith("extra:"))
+            {
+                // Aggregations always emit numeric output.
+                total += 130;
+            }
+            else if (ck == "count")
+            {
+                total += 90;
+            }
+            else if (ck == "pct")
+            {
+                total += 110;
+            }
+            else if (ck.StartsWith("dim:"))
+            {
+                var dimFid = ck[4..];
+                var dimCol = Data?.Columns.FirstOrDefault(c => c.FieldId.Equals(dimFid, StringComparison.OrdinalIgnoreCase));
+                var w = FixedColumnWidthPx(dimCol?.DataType ?? "");
+                total += w > 0 ? w : TextColumnFloorPx;
+            }
+        }
+        return total;
+    }
 
     // In compact (tile) mode, pin non-text columns to content-hugging widths so resizing
     // the tile only grows/shrinks the dimension (groupBy) column. groupBy gets a minimum

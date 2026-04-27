@@ -12,8 +12,10 @@
 @inject IQueryScopeResolver ScopeResolver
 @inject AuthenticationStateProvider AuthStateProvider
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @inject IJSRuntime JS
 @inject IConfiguration Config
+@inject NavigationManager Navigation
 
 <PageTitle>@_title - Executive Reporting Suite</PageTitle>
 
@@ -36,7 +38,7 @@
         .grouped-detail-table thead th {
             position: sticky;
             top: 0;
-            background: #F8F9FA;
+            background: #f7f7f7;
             border-bottom: 1px solid #DADCE0;
             padding: 6px 8px;
             text-align: left;
@@ -48,7 +50,7 @@
             text-align: right;
         }
         .grouped-detail-table tr.group-header td {
-            background: cornflowerblue;
+            background: #FFEFD5;
             font-weight: 700;
             padding: 6px 8px;
         }
@@ -71,7 +73,7 @@
         .grouped-detail-table tfoot tr.grand-total td {
             position: sticky;
             bottom: 0;
-            background: darkgray;
+            background: #f7f7f7;
             color: #202124;
             font-weight: 700;
             padding: 8px;
@@ -89,23 +91,28 @@
     <MudStack Spacing="3">
         <MudPaper Elevation="0" Class="pa-4" Style="border-bottom: 1px solid #E8EAED;">
             <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
-                <MudStack Spacing="0">
-                    <MudText Typo="Typo.h5" Style="font-weight: 600;">@_title</MudText>
-                    @if (!string.IsNullOrEmpty(_groupLabel) && !string.IsNullOrEmpty(GroupKey))
-                    {
-                        <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="mt-1">
-                            <MudChip T="string" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small">
-                                @_groupLabel
-                            </MudChip>
-                            <MudText Typo="Typo.body1" Style="font-weight: 500;">
-                                @GroupKey
-                            </MudText>
-                        </MudStack>
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1">All Records</MudText>
-                    }
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                                   OnClick="GoBack"
+                                   title="Back" />
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.h5" Style="font-weight: 600;">@_title</MudText>
+                        @if (!string.IsNullOrEmpty(_groupLabel) && !string.IsNullOrEmpty(GroupKey))
+                        {
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="mt-1">
+                                <MudChip T="string" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small">
+                                    @_groupLabel
+                                </MudChip>
+                                <MudText Typo="Typo.body1" Style="font-weight: 500;">
+                                    @GroupKey
+                                </MudText>
+                            </MudStack>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1">All Records</MudText>
+                        }
+                    </MudStack>
                 </MudStack>
                 <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
                     @if (_detailData is not null)
@@ -114,6 +121,15 @@
                             @_detailData.Rows.Count.ToString("N0") rows
                         </MudText>
                     }
+                    @* Debug affordance — same dialog the master dashboard
+                       tiles surface on right-click. Available to any user;
+                       the Code icon keeps it visually distinct from the
+                       user-facing Export menu. *@
+                    <MudTooltip Text="Show the SQL that produced this view">
+                        <MudIconButton Icon="@Icons.Material.Filled.Code" Size="Size.Small"
+                                       Color="Color.Default" OnClick="ShowDetailQuery"
+                                       Disabled="@(_detailData?.Sql is null)" />
+                    </MudTooltip>
                     <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
                                 Disabled="@(_detailData is null || !_detailData.Rows.Any())" />
                 </MudStack>
@@ -160,7 +176,7 @@
                             <tr>
                                 @foreach (var col in GetVisibleColumns())
                                 {
-                                    <th class="@(IsCurrencyColumn(col) ? "num" : "")">@col.Label</th>
+                                    <th class="@(IsNumericColumn(col) ? "num" : "")">@col.Label</th>
                                 }
                             </tr>
                         </thead>
@@ -175,7 +191,7 @@
                                     <tr class="detail-row">
                                         @foreach (var col in GetVisibleColumns())
                                         {
-                                            <td class="@(IsCurrencyColumn(col) ? "num" : "")">
+                                            <td class="@(IsNumericColumn(col) ? "num" : "")">
                                                 @FormatCell(row, col)
                                             </td>
                                         }
@@ -188,7 +204,7 @@
                                         var col = visibleCols[ci];
                                         if (ci == 0)
                                         {
-                                            <td>@group.Rows.Count Loan(s)</td>
+                                            <td>@group.Rows.Count Record(s)</td>
                                         }
                                         else if (IsCurrencyColumn(col))
                                         {
@@ -214,7 +230,7 @@
                                     var col = grandVisibleCols[ci];
                                     if (ci == 0)
                                     {
-                                        <td>TOTAL &mdash; @totalRows Loan(s)</td>
+                                        <td>TOTAL &mdash; @totalRows Record(s)</td>
                                     }
                                     else if (IsCurrencyColumn(col) && grand.TryGetValue(col.FieldId, out var sum))
                                     {
@@ -535,6 +551,23 @@
             AddIds(_dashConfig?.ExtraGroupByFieldIds);
             AddIds(_dashConfig?.ExtraDimensionFieldIds);
 
+            // Detail view shows raw rows, so strip aggregate fields
+            // (SUM/COUNT/AVG/etc). Leaving them in causes QueryBuilder to
+            // auto-add GROUP BY — the query then returns the same
+            // aggregated summary as the tile instead of individual records.
+            // IsAggregateField only flags outer-level aggregates, so scalar-
+            // subquery measures (which read as row-scalars) are preserved.
+            try
+            {
+                var fieldCatalog = await SchemaService.GetFieldConfigsAsync(_connectionId);
+                var byId = fieldCatalog.ToDictionary(f => f.Id, f => f, StringComparer.OrdinalIgnoreCase);
+                fieldIds = fieldIds
+                    .Where(id => !(byId.TryGetValue(id, out var fc)
+                                   && TleReportingDashboard.Web.Services.QueryBuilder.IsAggregateField(fc)))
+                    .ToList();
+            }
+            catch { /* non-fatal — if the catalog lookup fails, run unstripped */ }
+
             // Sort precedence: group-by field first (rows cluster per bucket),
             // detail default second (each bucket internally ordered). When
             // no group-by is set, detail default becomes the primary sort.
@@ -617,7 +650,14 @@
             {
                 Columns = fullData.Columns,
                 Rows = rows,
-                TotalCount = rows.Count
+                TotalCount = rows.Count,
+                // Carry the query metadata over so the "Show query" button
+                // has something to display. Without this, the in-memory
+                // group-filtering re-wraps the data but loses the SQL.
+                Sql = fullData.Sql,
+                Parameters = fullData.Parameters,
+                ScopingNote = fullData.ScopingNote,
+                ScopingForceNoMatch = fullData.ScopingForceNoMatch
             };
         }
         catch (Exception ex)
@@ -684,6 +724,20 @@
 
     private bool IsCurrencyColumn(ColumnMeta c) =>
         string.Equals(c.DataType, "currency", StringComparison.OrdinalIgnoreCase);
+
+    // Right-align any numeric column, not just currency. Mirrors
+    // ReportGrid.IsNumeric so the Builder's table preview and the detail
+    // grid agree on alignment for int/decimal/percent fields. Currency
+    // still gets its own formatter + total pass — this is only about
+    // text-align.
+    private static bool IsNumericColumn(ColumnMeta c) => c.DataType?.ToLowerInvariant() switch
+    {
+        "currency" or "money" or "smallmoney" => true,
+        "percent" or "percentage" => true,
+        "integer" or "int" or "bigint" or "smallint" or "tinyint" => true,
+        "decimal" or "float" or "double" or "numeric" or "real" or "number" => true,
+        _ => false
+    };
 
     // Groups the rows by the picked field. Sorts groups per the direction
     // setting; within a group, rows keep whatever order the query returned.
@@ -802,6 +856,49 @@
         }
     }
 
+    // Opens the same "Show query" dialog the master-dashboard tiles surface
+    // on right-click. Surfaces the generated SQL, bound parameters, the
+    // scoping banner, plus a "client-side filter" note describing the in-
+    // memory group narrowing this page applies after the query runs.
+    private async Task ShowDetailQuery()
+    {
+        if (_detailData?.Sql is null)
+        {
+            Snackbar.Add("Query hasn't finished loading yet.", Severity.Info);
+            return;
+        }
+        var parameters = new DialogParameters
+        {
+            { "Sql", _detailData.Sql },
+            { "Parameters", _detailData.Parameters },
+            { "ScopingNote", _detailData.ScopingNote },
+            { "ScopingForceNoMatch", _detailData.ScopingForceNoMatch },
+            { "ClientSideFilter", BuildClientSideFilterNote() }
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true
+        };
+        await DialogService.ShowAsync<ShowQueryDialog>($"SQL — {_title}", parameters, options);
+    }
+
+    // Mirrors the in-memory group filter the page applies after the query
+    // (see the `rows = fullData.Rows.Where(...)` block). Returns null when
+    // nothing is narrowed — the dialog then hides the banner entirely.
+    private string? BuildClientSideFilterNote()
+    {
+        var groupFieldId = _dashConfig?.GroupByFieldId;
+        if (string.IsNullOrEmpty(groupFieldId) || string.IsNullOrEmpty(GroupKey))
+            return null;
+
+        var label = _fieldLabelsById.TryGetValue(groupFieldId, out var lbl) ? lbl : groupFieldId;
+        return GroupKey == "(empty)"
+            ? $"Showing only rows where {label} is empty or null."
+            : $"Showing only rows where {label} = \"{GroupKey}\".";
+    }
+
     private async Task ExportExcel()
     {
         if (_detailData is null) return;
@@ -836,5 +933,16 @@
             Rows = source.Rows,
             TotalCount = source.TotalCount
         };
+    }
+
+    // Back button — prefer the browser's history stack so we land where the
+    // user came from. Falls back to /reports when there's no prior entry.
+    private async Task GoBack()
+    {
+        var hasHistory = await JS.InvokeAsync<bool>("eval", "window.history.length > 1");
+        if (hasHistory)
+            await JS.InvokeVoidAsync("history.back");
+        else
+            Navigation.NavigateTo("/reports");
     }
 }

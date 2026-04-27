@@ -289,9 +289,18 @@
         var placeholder = op is FilterOperators.InList or FilterOperators.NotInList
             ? "comma-separated" : null;
 
+        // For list operators (in_list / not_in_list) the textbox is the
+        // joined display of every Values entry; scalar operators show only
+        // the single value at index 0. Without the join, re-opening a saved
+        // filter would only render Values[0] in the box and the rest would
+        // be lost on the next save.
+        var displayValue = op is FilterOperators.InList or FilterOperators.NotInList
+            ? (Clause.Values.Count > 0 ? string.Join(", ", Clause.Values) : null)
+            : (Clause.Values.Count > 0 ? Clause.Values[0] : null);
+
         builder.OpenComponent<MudTextField<string>>(0);
         builder.AddAttribute(1, "Label", "Value");
-        builder.AddAttribute(2, "Value", Clause.Values.Count > 0 ? Clause.Values[0] : null);
+        builder.AddAttribute(2, "Value", displayValue);
         builder.AddAttribute(3, "ValueChanged", Cb<string>(v =>
         {
             // in_list / not_in_list store each comma-separated token as a

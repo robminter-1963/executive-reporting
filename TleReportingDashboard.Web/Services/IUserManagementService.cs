@@ -72,6 +72,27 @@ public interface IUserManagementService
     // a specific connection. Null when unset — callers interpret that as
     // "no rows match" rather than "no filter."
     Task<string?> GetExternalUserIdAsync(string email, Guid connectionId, CancellationToken ct = default);
+
+    // ── Team assignments (team-scope role input) ───────────────────────────
+
+    // Teams the user could be assigned to. Restricted to teams on connections
+    // that belong to companies the user already has a grant for
+    // (RPT_user_companies) — so revoking company access also removes the
+    // team picker candidates without a separate mutation.
+    Task<List<AssignableTeam>> GetAssignableTeamsAsync(string email, CancellationToken ct = default);
+
+    // Current team assignments for this user. Returned regardless of current
+    // role scope — rows stay dormant when scope isn't 'team' so toggling
+    // back doesn't lose prior picks.
+    Task<List<UserTeamAssignment>> GetUserTeamsAsync(string email, CancellationToken ct = default);
+
+    // Full replace of team assignments for this user. Admin UI calls this
+    // from the User editor when the selected role's scope is 'team'. No-op
+    // gating (skipping this when scope isn't 'team') lives on the caller;
+    // the service doesn't inspect role scope so callers can also use this
+    // for direct management flows.
+    Task SetUserTeamsAsync(string email, IReadOnlyList<UserTeamAssignment> teams,
+                           CancellationToken ct = default);
 }
 
 // Canonical user record surfaced to the admin UI. user_id is nullable while
@@ -117,6 +138,25 @@ public sealed record UserConnectionLogin(
     string ConnectionName,
     bool IsActive,
     string? ExternalUserId);
+
+// A team option in the User editor's team selector. Denormalized labels
+// (company / connection names, team type) so the UI can group and filter
+// without follow-up joins.
+public sealed record AssignableTeam(
+    Guid ConnectionId,
+    int TeamId,
+    string? TeamName,
+    string? TeamType,
+    Guid CompanyId,
+    string CompanyName,
+    string ConnectionName);
+
+// Composite key of a single team assignment. Matches the PK on
+// RPT_user_teams (user_id, connection_id, team_id) minus the user_id —
+// callers supply the user via email, the service resolves the stable key.
+public sealed record UserTeamAssignment(
+    Guid ConnectionId,
+    int TeamId);
 
 // Valid role strings for RPT_user_companies.role. Match the CHECK constraint
 // in the migration (Editor / Viewer / Scheduler). Kept as constants rather

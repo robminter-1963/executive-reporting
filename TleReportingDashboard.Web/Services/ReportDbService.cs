@@ -61,10 +61,16 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         report.UpdatedAt = DateTime.UtcNow;
 
         await using var conn = await OpenConnectionAsync();
+        // company_id is derived server-side from the chosen connection so
+        // callers don't have to plumb it in explicitly. The Master Dashboard's
+        // "Add Report" picker filters on this column — without it set, a
+        // ShowOnMaster-flagged report would be invisible there.
         await using var cmd = new SqlCommand(
             @"INSERT INTO EMPOWER.RPT_saved_reports
-              (id, name, owner_id, owner_email, field_ids, filters, aggregations, column_state, grid_template_id, connection_id, primary_table, last_run_at, created_at, updated_at)
-              VALUES (@Id, @Name, @OwnerId, @OwnerEmail, @FieldIds, @Filters, @Aggregations, @ColumnState, @GridTemplateId, @ConnectionId, @PrimaryTable, @LastRunAt, @CreatedAt, @UpdatedAt)", conn);
+              (id, name, internal_name, owner_id, owner_email, field_ids, filters, aggregations, column_state, grid_template_id, connection_id, company_id, primary_table, last_run_at, created_at, updated_at)
+              VALUES (@Id, @Name, @InternalName, @OwnerId, @OwnerEmail, @FieldIds, @Filters, @Aggregations, @ColumnState, @GridTemplateId, @ConnectionId,
+                      (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
+                      @PrimaryTable, @LastRunAt, @CreatedAt, @UpdatedAt)", conn);
         AddReportParams(cmd, report);
         await cmd.ExecuteNonQueryAsync();
         _logger.LogInformation("Report saved: {Id} {Name}", report.Id, report.Name);
@@ -76,10 +82,15 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         report.UpdatedAt = DateTime.UtcNow;
 
         await using var conn = await OpenConnectionAsync();
+        // Refresh company_id on every update so a connection swap (rare but
+        // possible via Schema Builder admin ops) flows through to the report
+        // without a separate maintenance step.
         await using var cmd = new SqlCommand(
             @"UPDATE EMPOWER.RPT_saved_reports SET
-              name = @Name, field_ids = @FieldIds, filters = @Filters, aggregations = @Aggregations,
-              column_state = @ColumnState, grid_template_id = @GridTemplateId, connection_id = @ConnectionId, primary_table = @PrimaryTable,
+              name = @Name, internal_name = @InternalName, field_ids = @FieldIds, filters = @Filters, aggregations = @Aggregations,
+              column_state = @ColumnState, grid_template_id = @GridTemplateId, connection_id = @ConnectionId,
+              company_id = (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
+              primary_table = @PrimaryTable,
               last_run_at = @LastRunAt, updated_at = @UpdatedAt
               WHERE id = @Id AND owner_id = @OwnerId", conn);
         AddReportParams(cmd, report);
@@ -273,6 +284,9 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
             {
                 Id = reader.GetGuid(reader.GetOrdinal("id")),
                 Name = reader.GetString(reader.GetOrdinal("name")),
+                // TryGet so envs that haven't run the internal_name migration
+                // yet keep working — null falls back to Name in every consumer.
+                InternalName = TryGetOptionalString(reader, "internal_name"),
                 OwnerId = reader.GetString(reader.GetOrdinal("owner_id")),
                 OwnerEmail = reader.GetString(reader.GetOrdinal("owner_email")),
                 CompanyId = reader.GetGuid(reader.GetOrdinal("company_id")),
@@ -371,6 +385,8 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
     {
         cmd.Parameters.Add(new SqlParameter("@Id", r.Id));
         cmd.Parameters.Add(new SqlParameter("@Name", r.Name));
+        cmd.Parameters.Add(new SqlParameter("@InternalName",
+            string.IsNullOrWhiteSpace(r.InternalName) ? DBNull.Value : (object)r.InternalName));
         cmd.Parameters.Add(new SqlParameter("@OwnerId", r.OwnerId));
         cmd.Parameters.Add(new SqlParameter("@OwnerEmail", r.OwnerEmail));
         cmd.Parameters.Add(new SqlParameter("@FieldIds", r.FieldIds));

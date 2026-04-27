@@ -18,6 +18,7 @@
 @inject NavigationManager Navigation
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject IJSRuntime JS
 @using TleReportingDashboard.Web.Services
 
 <PageTitle>Report Library - Executive Reporting Suite</PageTitle>
@@ -37,6 +38,9 @@
 <MudAppBar Elevation="1" Style="background: #FFFFFF; border-bottom: 1px solid #DADCE0;" Dense Fixed="false">
     <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width: 100%;">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="GoBack"
+                           title="Back" />
             <MudIcon Icon="@Icons.Material.Filled.Assessment" Color="Color.Primary" />
             <MudText Typo="Typo.h6" Style="font-weight: 600; color: #202124;">Report Library</MudText>
         </MudStack>
@@ -153,7 +157,21 @@
                     </HeaderContent>
                     <RowTemplate>
                         <MudTd DataLabel="Name">
-                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                            @* Library is admin-facing — primary is the
+                               admin disambiguator (InternalName) when set;
+                               otherwise just the public Name. When the two
+                               differ, surface the public Name as a small
+                               caption so admins know which label users see. *@
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
+                            </MudText>
+                            @if (!string.IsNullOrWhiteSpace(context.InternalName)
+                                 && !string.Equals(context.InternalName, context.Name, StringComparison.Ordinal))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.7rem;">
+                                    tile: @context.Name
+                                </MudText>
+                            }
                         </MudTd>
                         @if (_isAdminView)
                         {
@@ -293,7 +311,21 @@
                     </HeaderContent>
                     <RowTemplate>
                         <MudTd DataLabel="Name">
-                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                            @* Library is admin-facing — primary is the
+                               admin disambiguator (InternalName) when set;
+                               otherwise just the public Name. When the two
+                               differ, surface the public Name as a small
+                               caption so admins know which label users see. *@
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
+                            </MudText>
+                            @if (!string.IsNullOrWhiteSpace(context.InternalName)
+                                 && !string.Equals(context.InternalName, context.Name, StringComparison.Ordinal))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.7rem;">
+                                    tile: @context.Name
+                                </MudText>
+                            }
                         </MudTd>
                         <MudTd DataLabel="Connection">
                             <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
@@ -383,7 +415,21 @@
                     </HeaderContent>
                     <RowTemplate>
                         <MudTd DataLabel="Name">
-                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                            @* Library is admin-facing — primary is the
+                               admin disambiguator (InternalName) when set;
+                               otherwise just the public Name. When the two
+                               differ, surface the public Name as a small
+                               caption so admins know which label users see. *@
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
+                            </MudText>
+                            @if (!string.IsNullOrWhiteSpace(context.InternalName)
+                                 && !string.Equals(context.InternalName, context.Name, StringComparison.Ordinal))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.7rem;">
+                                    tile: @context.Name
+                                </MudText>
+                            }
                         </MudTd>
                         <MudTd DataLabel="Connection">
                             <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
@@ -759,6 +805,18 @@
 
     private void ViewReport(Guid id) => Navigation.NavigateTo($"/viewer/{id}?tab={_activeTabIndex}");
     private void EditReport(Guid id) => Navigation.NavigateTo($"/builder/{id}?tab={_activeTabIndex}");
+
+    // Back button — prefer the browser's history stack so we land where the
+    // user came from. Falls back to the company picker when there's no prior
+    // entry (fresh tab opened straight to /reports).
+    private async Task GoBack()
+    {
+        var hasHistory = await JS.InvokeAsync<bool>("eval", "window.history.length > 1");
+        if (hasHistory)
+            await JS.InvokeVoidAsync("history.back");
+        else
+            Navigation.NavigateTo("/?all=1");
+    }
 
     private void OnTabChanged(int index)
     {

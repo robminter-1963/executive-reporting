@@ -96,6 +96,15 @@ public class MockDataService : ISchemaService, IQueryService, IReportService, IS
 
     #region IQueryService
 
+    public Task<(string Sql, Dictionary<string, object?> Parameters)> BuildSqlAsync(QueryRequest request)
+    {
+        // Mock mode: no real SQL pipeline. Return a placeholder so the debug
+        // dialog has something to render when called.
+        return Task.FromResult(
+            ("/* mock mode — no SQL is executed against a real database */",
+             new Dictionary<string, object?>()));
+    }
+
     public Task<QueryResponse> ExecuteQueryAsync(QueryRequest request)
     {
         var fieldLookup = _fieldConfigs.ToDictionary(f => f.Id, f => f);

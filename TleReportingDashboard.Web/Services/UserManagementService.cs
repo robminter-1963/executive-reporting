@@ -7,17 +7,20 @@ public sealed class UserManagementService : IUserManagementService
     private readonly string _connStr;
     private readonly IAdminService _admins;
     private readonly IRoleService _roles;
+    private readonly ITeamSourceService _teamSources;
     private readonly ILogger<UserManagementService> _logger;
 
     public UserManagementService(IConfiguration configuration,
                                  IAdminService admins,
                                  IRoleService roles,
+                                 ITeamSourceService teamSources,
                                  ILogger<UserManagementService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required for UserManagementService.");
         _admins = admins;
         _roles = roles;
+        _teamSources = teamSources;
         _logger = logger;
     }
 
@@ -475,6 +478,140 @@ public sealed class UserManagementService : IUserManagementService
         else if (!isAdmin && existingGlobal is not null)
         {
             await _admins.RevokeAsync(existingGlobal.Id);
+        }
+    }
+
+    // ── Team assignments ───────────────────────────────────────────────────
+
+    public async Task<List<AssignableTeam>> GetAssignableTeamsAsync(string email, CancellationToken ct = default)
+    {
+        // Step 1: list the (company, connection) pairs the user has access to.
+        // Same filter as GetConnectionLoginsAsync — granted companies only,
+        // active connections only.
+        var targets = new List<(Guid ConnectionId, string ConnectionName, Guid CompanyId, string CompanyName)>();
+        await using (var conn = new SqlConnection(_connStr))
+        {
+            await conn.OpenAsync(ct);
+            await using var cmd = new SqlCommand(@"
+                SELECT cc.id, cc.name, cc.company_id, co.name
+                  FROM EMPOWER.RPT_company_connections cc
+                  JOIN EMPOWER.RPT_companies co ON co.id = cc.company_id
+                  JOIN EMPOWER.RPT_users u ON u.email = @email
+                  JOIN EMPOWER.RPT_user_companies uc
+                    ON uc.company_id = cc.company_id
+                   AND (uc.user_id = u.user_id OR uc.user_id = u.email)
+                 WHERE cc.is_active = 1
+                 ORDER BY co.name, cc.name;", conn);
+            cmd.Parameters.Add(new SqlParameter("@email", email));
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                targets.Add((
+                    reader.GetGuid(0),
+                    reader.GetString(1),
+                    reader.GetGuid(2),
+                    reader.GetString(3)));
+            }
+        }
+
+        // Step 2: for each target, run the connection's configured teams_sql
+        // live against the source DB. A bad SQL, missing config, or
+        // unreachable source on one connection shouldn't block the editor
+        // from loading teams on the others — log and skip.
+        var rows = new List<AssignableTeam>();
+        foreach (var (connId, connName, companyId, companyName) in targets)
+        {
+            try
+            {
+                var teams = await _teamSources.QueryTeamsAsync(connId, ct);
+                foreach (var t in teams)
+                {
+                    rows.Add(new AssignableTeam(
+                        connId, t.TeamId, t.TeamName, t.TeamType,
+                        companyId, companyName, connName));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Skipping team source for connection {ConnectionId} ({ConnectionName}) while building assignable teams for {Email}: {Message}",
+                    connId, connName, email, ex.Message);
+            }
+        }
+        return rows;
+    }
+
+    public async Task<List<UserTeamAssignment>> GetUserTeamsAsync(string email, CancellationToken ct = default)
+    {
+        var rows = new List<UserTeamAssignment>();
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        // Resolve on either user_id form (Entra OID or email stub) so
+        // assignments survive the stub→OID rewrite on first sign-in.
+        await using var cmd = new SqlCommand(@"
+            SELECT ut.connection_id, ut.team_id
+              FROM EMPOWER.RPT_user_teams ut
+              JOIN EMPOWER.RPT_users u ON u.email = @email
+             WHERE ut.user_id = u.user_id OR ut.user_id = u.email
+             ORDER BY ut.connection_id, ut.team_id;", conn);
+        cmd.Parameters.Add(new SqlParameter("@email", email));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new UserTeamAssignment(reader.GetGuid(0), reader.GetInt32(1)));
+        }
+        return rows;
+    }
+
+    public async Task SetUserTeamsAsync(string email, IReadOnlyList<UserTeamAssignment> teams,
+                                         CancellationToken ct = default)
+    {
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        var key = await ResolveUserKeyAsync(conn, email, ct)
+                  ?? throw new InvalidOperationException($"User '{email}' is not registered.");
+
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync(ct);
+        try
+        {
+            // Full replace: simpler than diffing and correct for the UI
+            // semantics (the editor shows the full desired state). Also
+            // wipes any rows left under an older user_id form if this call
+            // comes post-sign-in — the key resolver picks the OID now.
+            await using (var del = new SqlCommand(@"
+                DELETE FROM EMPOWER.RPT_user_teams
+                 WHERE user_id IN (
+                    SELECT user_id FROM EMPOWER.RPT_users WHERE email = @email
+                    UNION SELECT email FROM EMPOWER.RPT_users WHERE email = @email
+                 );", conn, tx))
+            {
+                del.Parameters.Add(new SqlParameter("@email", email));
+                await del.ExecuteNonQueryAsync(ct);
+            }
+
+            // Dedup in case the UI passed duplicates.
+            var seen = new HashSet<(Guid, int)>();
+            foreach (var t in teams)
+            {
+                if (!seen.Add((t.ConnectionId, t.TeamId))) continue;
+                await using var ins = new SqlCommand(@"
+                    INSERT INTO EMPOWER.RPT_user_teams (user_id, connection_id, team_id)
+                    VALUES (@userId, @connectionId, @teamId);", conn, tx);
+                ins.Parameters.Add(new SqlParameter("@userId", key));
+                ins.Parameters.Add(new SqlParameter("@connectionId", t.ConnectionId));
+                ins.Parameters.Add(new SqlParameter("@teamId", t.TeamId));
+                await ins.ExecuteNonQueryAsync(ct);
+            }
+
+            await tx.CommitAsync(ct);
+            _logger.LogInformation("Team assignments set for {Email}: {Count} team(s).", email, seen.Count);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
         }
     }
 }

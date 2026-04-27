@@ -69,6 +69,29 @@ public partial class SchemaService : ISchemaService
             .ThenBy(f => f.SortOrder)
             .ToList();
 
+        // Defensive dedupe: every downstream consumer (QueryBuilder,
+        // ReportBuilder, GridTemplateEditor, etc.) keys a dictionary on
+        // f.Id and crashes on a duplicate. The Schema Builder enforces
+        // uniqueness on save, but pre-existing schemas may still hold
+        // duplicates from before that validation existed (or from a
+        // clone-from-another-connection that overlapped ids). First-wins
+        // by Id (case-insensitive) — the warning logs the dropped ids
+        // so the issue surfaces in server logs even if no admin opens
+        // Schema Builder. Schema Builder's load-time warning is the
+        // primary place for an admin to see + fix the data.
+        var beforeDedupe = fieldConfigs.Count;
+        fieldConfigs = fieldConfigs
+            .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+        if (fieldConfigs.Count < beforeDedupe)
+        {
+            var dropped = beforeDedupe - fieldConfigs.Count;
+            _logger.LogWarning(
+                "SchemaService.GetFieldConfigsAsync: dropped {Count} duplicate field id(s) for connection {ConnectionId}. Open Schema Builder for that connection — the load-time warning lists the duplicate ids; rename one of each pair to unblock cleanly.",
+                dropped, connectionId);
+        }
+
         // Auto-generate ValueSortOrder from referenced lookups for fields that have
         // a CodeSetId + LookupIds but no explicit ValueSortOrder in the JSON.
         var lookupMap = config.Lookups.ToDictionary(l => l.Id, StringComparer.OrdinalIgnoreCase);

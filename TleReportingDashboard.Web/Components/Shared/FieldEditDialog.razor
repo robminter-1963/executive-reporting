@@ -1,4 +1,5 @@
 @using TleReportingDashboard.Web.Components.Pages
+@using TleReportingDashboard.Web.Services
 
 <MudDialog>
     <TitleContent>
@@ -48,6 +49,7 @@
                 <MudSelect T="string" @bind-Value="_edited.DataType" Label="Data Type"
                            Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
                     <MudSelectItem Value="@("text")">text</MudSelectItem>
+                    <MudSelectItem Value="@("boolean")">boolean</MudSelectItem>
                     <MudSelectItem Value="@("currency")">currency</MudSelectItem>
                     <MudSelectItem Value="@("percent")">percent</MudSelectItem>
                     <MudSelectItem Value="@("integer")">integer</MudSelectItem>
@@ -130,14 +132,15 @@
                        callback (cached per-table on the page). MudSelect
                        highlights the current value on open so re-picking
                        is a single click — no search-as-you-type friction. *@
-                    <MudSelect T="string" @bind-Value="_edited.SourceColumn"
+                    <MudSelect T="string" Value="_edited.SourceColumn"
+                               ValueChanged="OnSourceColumnChanged"
                                Label="Source Column"
                                Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                                Disabled="@(_columns.Count == 0)"
                                HelperText="@ColumnHelperText">
                         @foreach (var col in _columns)
                         {
-                            <MudSelectItem T="string" Value="@col">@col</MudSelectItem>
+                            <MudSelectItem T="string" Value="@col.ColumnName">@col.ColumnName</MudSelectItem>
                         }
                     </MudSelect>
                 </MudItem>
@@ -226,10 +229,11 @@
         = Array.Empty<SchemaBuilder.SourceOption>();
 
     // Column loader provided by the parent — given a "schema.table" returns
-    // the DB column names. The dialog calls this when the Source Table
-    // changes so the Source Column dropdown reflects the picked table's
-    // schema. Cache lives on the parent so subsequent edits reuse it.
-    [Parameter] public Func<string, Task<List<string>>>? LoadColumnsAsync { get; set; }
+    // the DB columns (name + type metadata). The dialog uses the type info
+    // to auto-default the field's DataType when an admin picks a column,
+    // so most rows land on the right format without a manual change. Cache
+    // lives on the parent so subsequent edits reuse it.
+    [Parameter] public Func<string, Task<List<DbColumnInfo>>>? LoadColumnsAsync { get; set; }
     [Parameter] public IEnumerable<SchemaBuilder.LookupEntry> AvailableLookups { get; set; } = Array.Empty<SchemaBuilder.LookupEntry>();
     [Parameter] public List<SchemaBuilder.JoinEntry>? AvailableJoins { get; set; }
     [Parameter] public IEnumerable<string>? AvailableDomains { get; set; }
@@ -258,8 +262,9 @@
     // Columns for the currently-picked source table. Loaded on demand via
     // LoadColumnsAsync; synthetic entry injected if the field's current
     // SourceColumn isn't in the DB-returned list so stale legacy values
-    // stay editable.
-    private List<string> _columns = new();
+    // stay editable. Carries type info so the DataType dropdown can
+    // auto-default to the picked column's type.
+    private List<DbColumnInfo> _columns = new();
     private bool _columnsLoading;
     private ColumnLoadStatus _columnLoadStatus = ColumnLoadStatus.NotAttempted;
     private string? _columnLoadError;
@@ -418,14 +423,30 @@
         }
 
         // Legacy value preservation — if the stored SourceColumn isn't in
-        // the fresh list, add it and re-sort so it lands in alphabetical
-        // position rather than at the top. MudSelect auto-scrolls to the
-        // selected value on open, so the admin still sees it immediately.
+        // the fresh list, synthesize a stub entry (name only, no type info)
+        // and re-sort so it lands in alphabetical position rather than at
+        // the top. MudSelect auto-scrolls to the selected value on open.
         if (!string.IsNullOrWhiteSpace(_edited.SourceColumn)
-            && !_columns.Contains(_edited.SourceColumn, StringComparer.OrdinalIgnoreCase))
+            && !_columns.Any(c => string.Equals(c.ColumnName, _edited.SourceColumn, StringComparison.OrdinalIgnoreCase)))
         {
-            _columns.Add(_edited.SourceColumn);
-            _columns.Sort(StringComparer.OrdinalIgnoreCase);
+            _columns.Add(new DbColumnInfo(_edited.SourceColumn, string.Empty, null, null, null, true));
+            _columns = _columns.OrderBy(c => c.ColumnName, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+    }
+
+    // When the admin picks a column, default DataType to the column's DB
+    // type (mapped to our internal vocabulary). Stub legacy entries (no
+    // DataType) are skipped so we don't overwrite the saved DataType with
+    // "text" when the column came from the legacy-injection path.
+    private void OnSourceColumnChanged(string? newColumn)
+    {
+        _edited.SourceColumn = newColumn ?? string.Empty;
+        if (string.IsNullOrEmpty(newColumn)) return;
+        var col = _columns.FirstOrDefault(c =>
+            string.Equals(c.ColumnName, newColumn, StringComparison.OrdinalIgnoreCase));
+        if (col is not null && !string.IsNullOrWhiteSpace(col.DataType))
+        {
+            _edited.DataType = SchemaBuilderService.MapDbTypeToFieldDataType(col.DataType);
         }
     }
 

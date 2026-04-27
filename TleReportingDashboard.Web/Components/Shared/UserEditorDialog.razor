@@ -30,6 +30,7 @@
                UI. Null / "— None —" leaves role_id NULL and is_admin false. *@
             <MudSelect T="Guid?" @bind-Value="_roleId" Label="Role"
                        Variant="Variant.Outlined" Margin="Margin.Dense"
+                       ToStringFunc="@RoleToLabel"
                        Clearable AdornmentIcon="@Icons.Material.Filled.Badge">
                 <MudSelectItem T="Guid?" Value="@((Guid?)null)">— None —</MudSelectItem>
                 @foreach (var r in _roles)
@@ -37,6 +38,34 @@
                     <MudSelectItem T="Guid?" Value="@((Guid?)r.Id)">@r.Name</MudSelectItem>
                 }
             </MudSelect>
+
+            @* Team selector — shown only in edit mode when the selected
+               role's scope is 'team' (and not Administrator, which is
+               server-pinned to 'all'). Available teams are restricted to
+               connections on companies the user already has access to. *@
+            @if (!IsNew && IsTeamScope())
+            {
+                <MudSelect T="string" Label="Teams"
+                           MultiSelection="true"
+                           SelectedValues="_selectedTeamKeys"
+                           SelectedValuesChanged="@(vals => _selectedTeamKeys = vals?.ToHashSet() ?? new HashSet<string>())"
+                           MultiSelectionTextFunc="@(vals => vals.Count == 0 ? "None" : vals.Count == 1 ? TeamKeyToLabel(vals.First()) : $"{vals.Count} teams selected")"
+                           ToStringFunc="@TeamKeyToLabel"
+                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Clearable AdornmentIcon="@Icons.Material.Filled.Groups"
+                           HelperText="Teams scope this user's reports to rows owned by the selected team(s).">
+                    @foreach (var t in _assignableTeams)
+                    {
+                        <MudSelectItem T="string" Value="@TeamKey(t)">@TeamOptionLabel(t)</MudSelectItem>
+                    }
+                </MudSelect>
+                @if (_assignableTeams.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Dense>
+                        No teams available yet. Sync teams for this user's companies from <strong>Admin → Team Builder</strong>, or grant this user access to a company that has teams.
+                    </MudAlert>
+                }
+            }
 
             @if (!IsNew)
             {
@@ -68,6 +97,8 @@
     private Guid? _roleId;
     private bool _isActive = true;
     private List<RoleRecord> _roles = new();
+    private List<AssignableTeam> _assignableTeams = new();
+    private HashSet<string> _selectedTeamKeys = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -83,8 +114,56 @@
             _displayName = Existing.DisplayName ?? string.Empty;
             _roleId      = Existing.RoleId;
             _isActive    = Existing.IsActive;
+
+            // Team picker lookup data. Loaded eagerly so switching the role
+            // scope to 'team' doesn't delay the dropdown; both round-trips
+            // run in parallel because neither depends on the other.
+            var availableTask = UserManagement.GetAssignableTeamsAsync(_email);
+            var currentTask   = UserManagement.GetUserTeamsAsync(_email);
+            _assignableTeams = await availableTask;
+            _selectedTeamKeys = (await currentTask)
+                .Select(t => $"{t.ConnectionId:N}:{t.TeamId}")
+                .ToHashSet();
         }
     }
+
+    private string RoleToLabel(Guid? id)
+    {
+        if (id is null) return "— None —";
+        var r = _roles.FirstOrDefault(x => x.Id == id);
+        return r is null ? string.Empty : r.Name;
+    }
+
+    // Team scope visibility: only for a concrete, non-Administrator role
+    // whose scope_rule is 'team'. Administrator is server-pinned to 'all'
+    // even if the role row says otherwise, so hide the selector for it too.
+    private bool IsTeamScope()
+    {
+        if (_roleId is null) return false;
+        var r = _roles.FirstOrDefault(x => x.Id == _roleId);
+        if (r is null) return false;
+        if (string.Equals(r.Name, RoleRecord.AdministratorName, StringComparison.OrdinalIgnoreCase)) return false;
+        return r.ScopeRule == ScopeRules.Team;
+    }
+
+    private static string TeamKey(AssignableTeam t) => $"{t.ConnectionId:N}:{t.TeamId}";
+
+    private string TeamKeyToLabel(string? key)
+    {
+        if (string.IsNullOrEmpty(key)) return string.Empty;
+        var t = _assignableTeams.FirstOrDefault(x => TeamKey(x) == key);
+        return t is null ? string.Empty : TeamOptionLabel(t);
+    }
+
+    // Prefix with team type (and a bullet) so sorted-by-type rows cluster
+    // visually in the dropdown even without MudSelectItemGroup.
+    private static string TeamOptionLabel(AssignableTeam t)
+    {
+        var name = string.IsNullOrEmpty(t.TeamName) ? $"Team {t.TeamId}" : t.TeamName;
+        var type = string.IsNullOrEmpty(t.TeamType) ? "" : $"[{t.TeamType}] ";
+        return $"{type}{name} · {t.CompanyName} / {t.ConnectionName}";
+    }
+
 
     private bool CanSave()
     {
@@ -112,6 +191,23 @@
                     string.IsNullOrWhiteSpace(_displayName) ? null : _displayName.Trim(),
                     _roleId,
                     _isActive);
+
+                // Persist team assignments only when the selector was visible
+                // — i.e. current scope is 'team'. Rows stay dormant across
+                // scope toggles by design (per product requirement).
+                if (IsTeamScope())
+                {
+                    var picks = _selectedTeamKeys
+                        .Select(k => k.Split(':'))
+                        .Where(p => p.Length == 2
+                                    && Guid.TryParseExact(p[0], "N", out _)
+                                    && int.TryParse(p[1], out _))
+                        .Select(p => new UserTeamAssignment(
+                            Guid.ParseExact(p[0], "N"),
+                            int.Parse(p[1])))
+                        .ToList();
+                    await UserManagement.SetUserTeamsAsync(_email, picks);
+                }
             }
             MudDialog.Close(DialogResult.Ok(true));
         }

@@ -355,7 +355,9 @@
 
     private void RebuildOrderedFields()
     {
-        var allFields = _domains.SelectMany(d => d.Fields).ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+        var allFields = _domains.SelectMany(d => d.Fields)
+            .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         _orderedFields = _selectedFieldIds
             .Where(id => allFields.ContainsKey(id))
             .Select(id => allFields[id])
@@ -364,7 +366,9 @@
 
     private void ReorderFields(List<string> order)
     {
-        var allFields = _domains.SelectMany(d => d.Fields).ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+        var allFields = _domains.SelectMany(d => d.Fields)
+            .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var ordered = new List<FieldDefinition>();
         foreach (var id in order)
             if (allFields.TryGetValue(id, out var f) && _selectedFieldIds.Contains(id, StringComparer.OrdinalIgnoreCase))

@@ -6,7 +6,7 @@
         </MudStack>
     </TitleContent>
     <DialogContent>
-        <MudStack Spacing="2" Style="min-width: 400px;">
+        <MudStack Spacing="2" Style="min-width: 480px;">
             <MudText Typo="Typo.body2" Color="Color.Secondary">
                 Select a report with "Show on Master Dashboard" enabled:
             </MudText>
@@ -14,13 +14,49 @@
                 @foreach (var report in Reports)
                 {
                     var r = report;
+                    var summary = FilterSummary(r);
+                    var primaryLabel = string.IsNullOrWhiteSpace(r.InternalName) ? r.Name : r.InternalName!;
+                    var hasDistinctInternal = !string.IsNullOrWhiteSpace(r.InternalName)
+                                              && !string.Equals(r.InternalName, r.Name, StringComparison.Ordinal);
                     <MudListItem T="SavedReport" OnClick="() => Select(r)"
                                   Style="@(_selected?.Id == r.Id ? "background: #E8F0FE;" : "cursor: pointer;")">
-                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                            <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small"
-                                     Color="@(_selected?.Id == r.Id ? Color.Primary : Color.Default)" />
-                            <MudText Typo="Typo.body2" Style="@(_selected?.Id == r.Id ? "font-weight: 600;" : "")">
-                                @r.Name
+                        <MudStack Spacing="0" Style="line-height: 1.2;">
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                                <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small"
+                                         Color="@(_selected?.Id == r.Id ? Color.Primary : Color.Default)" />
+                                @* Picker primary = InternalName when set,
+                                   else falls back to Name. Tile rendering
+                                   still uses Name only — this label exists
+                                   purely to disambiguate variants here. *@
+                                <MudText Typo="Typo.body2" Style="@(_selected?.Id == r.Id ? "font-weight: 600;" : "")">
+                                    @primaryLabel
+                                </MudText>
+                                @if (hasDistinctInternal)
+                                {
+                                    @* Show the public Name in parens when it
+                                       differs from the picker label, so admins
+                                       can confirm which tile name they're
+                                       pinning. *@
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                             Style="font-size: 0.7rem;">
+                                        — tile: @r.Name
+                                    </MudText>
+                                }
+                            </MudStack>
+                            @* Subtitle: filter values when present, then the
+                               last-updated stamp. Reports that share a name
+                               (e.g. one Pipeline per loan type) get
+                               distinguished by their saved filter dict. *@
+                            @if (!string.IsNullOrEmpty(summary))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                         Style="margin-left: 32px; font-size: 0.7rem;">
+                                    @summary
+                                </MudText>
+                            }
+                            <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                     Style="margin-left: 32px; font-size: 0.65rem;">
+                                Updated @r.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
                             </MudText>
                         </MudStack>
                     </MudListItem>
@@ -46,4 +82,47 @@
     private void Select(SavedReport report) => _selected = report;
     private void Cancel() => MudDialog?.Cancel();
     private void Ok() => MudDialog?.Close(DialogResult.Ok(_selected!.Id));
+
+    // Compact one-line summary of a saved report's filter dict so users can
+    // distinguish two reports that share a name. JsonDocument streaming
+    // (vs. Deserialize<Dictionary<string, object?>>) keeps each value's
+    // ValueKind so arrays / numbers / strings format cleanly without
+    // wrapping JsonElement boxing in the output. Soft-truncated to ~100
+    // chars so a heavy filter set doesn't blow up the row height.
+    private static string FilterSummary(SavedReport r)
+    {
+        if (string.IsNullOrWhiteSpace(r.Filters)) return string.Empty;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(r.Filters);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return string.Empty;
+
+            var parts = new List<string>();
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.Null) continue;
+                var val = prop.Value.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
+                    System.Text.Json.JsonValueKind.Array  => string.Join(",",
+                        prop.Value.EnumerateArray().Select(e =>
+                            e.ValueKind == System.Text.Json.JsonValueKind.String
+                                ? e.GetString()
+                                : e.ToString())),
+                    _ => prop.Value.ToString()
+                };
+                if (string.IsNullOrEmpty(val)) continue;
+                parts.Add($"{prop.Name}: {val}");
+            }
+            if (parts.Count == 0) return string.Empty;
+
+            var summary = string.Join(" • ", parts);
+            return summary.Length > 100 ? summary[..97] + "…" : summary;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
 }

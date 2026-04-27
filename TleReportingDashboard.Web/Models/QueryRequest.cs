@@ -81,8 +81,16 @@ public class QueryRequest
 //                   today. Admins always pass null.
 public sealed class QueryScopingInfo
 {
+    // Self-scope (scope_rule = 'self'): match rows by owner column = user.
     public string? OwnerFieldId { get; set; }
     public string? ExternalUserId { get; set; }
+
+    // Team-scope (scope_rule = 'team'): match rows by ANY of the user's
+    // teams. Mutually exclusive with the self-scope pair above — a role
+    // has one scope_rule at a time, so only one of the two branches is
+    // populated on any given request.
+    public TeamScopingInfo? TeamScope { get; set; }
+
     public bool ForceNoMatch { get; set; }
     // Human-readable explanation of why scoping resolved this way —
     // surfaced in the "Show query" debug dialog so admins can see why a
@@ -91,3 +99,25 @@ public sealed class QueryScopingInfo
     // ForceNoMatch = true).
     public string? Reason { get; set; }
 }
+
+// Team-scope predicate inputs. The emitter produces one OR'd EXISTS per
+// entry in Teams, wrapping MembersSql as a subquery and filtering by
+// team_id + the entry's owner column on the primary table alias.
+public sealed class TeamScopingInfo
+{
+    // Free-form admin-written SELECT returning (team_id, member_ext_id).
+    // No literals leak from here into the emitter — the SQL body is
+    // whatever the connection's RPT_team_sources.members_sql holds.
+    public string MembersSql { get; set; } = string.Empty;
+
+    // Primary-table alias (or bare table name when no alias is set) used
+    // to qualify the owner column in the predicate, e.g. "C" in "C.PROC_USERID".
+    public string PrimaryAlias { get; set; } = string.Empty;
+
+    public IReadOnlyList<TeamScopeEntry> Teams { get; set; } = Array.Empty<TeamScopeEntry>();
+}
+
+// One (user-team, owner-column) pair the emitter expands into a single
+// EXISTS clause. OwnerColumn is a raw identifier on the primary table
+// (e.g. "PROCESSOR_USERID"), qualified at emission with PrimaryAlias.
+public sealed record TeamScopeEntry(int TeamId, string OwnerColumn);

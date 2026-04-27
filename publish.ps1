@@ -76,7 +76,7 @@ foreach ($folder in 'bin','obj') {
 
 # 3. Build the whole solution. Fail fast before touching IIS.
 Write-Step ("Building solution (" + $Solution + ", " + $Configuration + ")")
-dotnet build $Solution -c $Configuration --nologo
+dotnet build $Solution -c $Configuration --nologo -v minimal
 if ($LASTEXITCODE -ne 0) {
     throw ("dotnet build failed with exit code " + $LASTEXITCODE)
 }
@@ -116,7 +116,7 @@ else {
 Write-Step ("Publishing " + $WebProject + " to " + $PublishPath)
 $publishFailed = $false
 try {
-    dotnet publish $WebProject -c $Configuration -o $PublishPath --nologo
+    dotnet publish $WebProject -c $Configuration -o $PublishPath --nologo -v minimal
     if ($LASTEXITCODE -ne 0) {
         throw ("dotnet publish failed with exit code " + $LASTEXITCODE)
     }

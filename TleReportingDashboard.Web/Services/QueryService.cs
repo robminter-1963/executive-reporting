@@ -63,8 +63,12 @@ public class QueryService : IQueryService
         var (sql, parameters) = QueryBuilder.BuildQuery(
             request, fieldConfigs, joinConfigs, customFilters, lookups, dialect, request.PrimaryTable);
 
-        // Resolve columns metadata
-        var fieldLookup = fieldConfigs.ToDictionary(f => f.Id, f => f);
+        // Resolve columns metadata. First-wins dedupe matches the source
+        // (SchemaService.GetFieldConfigsAsync) — guards against any path
+        // that bypasses it.
+        var fieldLookup = fieldConfigs
+            .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var dedupedFieldIds = request.FieldIds.Distinct().ToList();
         var columns = dedupedFieldIds
             .Where(id => fieldLookup.ContainsKey(id))
@@ -151,6 +155,34 @@ public class QueryService : IQueryService
             ScopingNote = request.Scoping?.Reason,
             ScopingForceNoMatch = request.Scoping?.ForceNoMatch == true
         };
+    }
+
+    public async Task<(string Sql, Dictionary<string, object?> Parameters)> BuildSqlAsync(QueryRequest request)
+    {
+        // Mirrors the pre-execute portion of ExecuteQueryAsync. Stops short
+        // of opening a DB connection — used by the debug dialog to recover
+        // the SQL when ExecuteQueryAsync threw (typically a runtime error
+        // from the source DB) and we still want to show the admin what got
+        // sent. Build-phase exceptions (no primary table, bad sort field,
+        // etc.) propagate to the caller.
+        var dialect = await ResolveDialectAsync(request.ConnectionId);
+        var fieldConfigs = await _schemaService.GetFieldConfigsAsync(request.ConnectionId);
+        var joinConfigs = await _schemaService.GetJoinConfigsAsync(request.ConnectionId);
+        var customFilters = await _schemaService.GetCustomFiltersAsync(request.ConnectionId);
+        var lookups = await _schemaService.GetLookupsAsync(request.ConnectionId);
+
+        if (string.IsNullOrWhiteSpace(request.PrimaryTable))
+        {
+            throw new InvalidOperationException(
+                "Primary Table is required. Set it on the report before running.");
+        }
+
+        var (sql, parameters) = QueryBuilder.BuildQuery(
+            request, fieldConfigs, joinConfigs, customFilters, lookups, dialect, request.PrimaryTable);
+
+        return (sql, parameters.ToDictionary(
+            p => p.ParameterName,
+            p => p.Value is DBNull ? null : p.Value));
     }
 
     // Resolve the dialect for the request's connection. Defaults to SQL

@@ -247,7 +247,7 @@ public class SchemaBuilderService
         "decimal" or "numeric" or "float" or "real" or "double precision" => "percent",
         "int" or "smallint" or "tinyint" or "bigint" or "integer" => "integer",
         "datetime" or "datetime2" or "date" or "smalldatetime" or "timestamp" or "timestamp without time zone" or "timestamp with time zone" => "date",
-        "bit" or "boolean" => "text",
+        "bit" or "boolean" => "boolean",
         _ => "text"
     };
 

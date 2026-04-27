@@ -39,15 +39,13 @@
         @* ── Header ── *@
         <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                @* Viewers have no business in the Report Library — they can
-                   only consume the dashboard. Editors, Schedulers, and
-                   admins still get the shortcut. *@
-                @if (_userRoleForCompany != UserRoles.Viewer)
-                {
-                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
-                                   OnClick="@(() => Navigation.NavigateTo("/reports"))"
-                                   title="Report Library" />
-                }
+                @* Back arrow goes to the company picker — everyone can return
+                   to the picker since they got here by choosing a company.
+                   ?all=1 bypasses the picker's auto-redirect to the user's
+                   last-visited company so they actually see the list. *@
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                               OnClick="@(() => Navigation.NavigateTo("/?all=1"))"
+                               title="All companies" />
                 @if (_logoDataUri is not null)
                 {
                     @* Gray letterbox background so light-on-transparent
@@ -106,6 +104,19 @@
                    browser tab / <PageTitle> stays informative. *@
             </MudStack>
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                @* Report Library shortcut. Same audience as the back arrow's
+                   prior destination — Editors, Schedulers, and admins all
+                   need a way to author / schedule ad-hoc reports without
+                   leaving the dashboard manually. Viewers don't get the
+                   shortcut because they don't have Report Library access. *@
+                @if (_userRoleForCompany != UserRoles.Viewer)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.LibraryBooks"
+                               OnClick="@(() => Navigation.NavigateTo("/reports"))">
+                        Report Library
+                    </MudButton>
+                }
                 @* Edit is admin-only — the shared dashboard is the company's
                    canonical layout, and Editors/Viewers don't get to mutate
                    it. Phase 4 adds an approval queue so Editors can propose
@@ -514,6 +525,11 @@
     private Dictionary<int, List<MasterDashboardTile>> _pendingRemovalsByTab = new();
     private Dictionary<Guid, TileLoadResult> _tileData = new();
     private Dictionary<Guid, string> _tileErrors = new();
+    // Captured query state when a tile errors out at execution. Lets the
+    // right-click "Show query" dialog still render the SQL that was sent
+    // (or attempted) so admins can debug invalid SQL / DB-side failures
+    // without tailing logs.
+    private Dictionary<Guid, FailedTileQuery> _tileFailedQuery = new();
     private HashSet<Guid> _tileLoading = new();
     private HashSet<int> _chartVisibleTiles = new();
     private DotNetObjectReference<MasterDashboard>? _dotNetRef;
@@ -738,6 +754,7 @@
     {
         _tileData.Clear();
         _tileErrors.Clear();
+        _tileFailedQuery.Clear();
         _tileLoading.Clear();
 
         // Mark all tiles as loading up-front (single-threaded) then fire the fetches.
@@ -751,27 +768,40 @@
         {
             try
             {
-                var result = await LoadReportDashboard(tile.ReportId);
-                return (tile.ReportId, (TileLoadResult?)result, (string?)null);
+                var (result, failure) = await LoadReportDashboard(tile.ReportId);
+                return (tile.ReportId, result, failure, (string?)null);
             }
             catch (Exception ex)
             {
-                return (tile.ReportId, (TileLoadResult?)null, (string?)ex.Message);
+                // Pre-execute failure (report not found, template fetch
+                // failed, etc.). No request was even built — only an error
+                // string to show. Right-click on these tiles falls through
+                // to the "couldn't generate SQL" branch in ShowTileQuery.
+                return (tile.ReportId, (TileLoadResult?)null, (FailedTileQuery?)null, (string?)ex.Message);
             }
         }));
 
-        foreach (var (reportId, result, error) in results)
+        foreach (var (reportId, result, failure, error) in results)
         {
             if (result is not null)
+            {
                 _tileData[reportId] = result;
+            }
+            if (failure is not null)
+            {
+                _tileErrors[reportId] = failure.Error;
+                _tileFailedQuery[reportId] = failure;
+            }
             else if (error is not null)
+            {
                 _tileErrors[reportId] = error;
+            }
             _tileLoading.Remove(reportId);
         }
         StateHasChanged();
     }
 
-    private async Task<TileLoadResult?> LoadReportDashboard(Guid reportId)
+    private async Task<(TileLoadResult? Result, FailedTileQuery? Failure)> LoadReportDashboard(Guid reportId)
     {
         // Shared-per-company dashboard (Phase 3): the tile's presence on this
         // company's dashboard *is* the authorization signal. The page-level
@@ -781,7 +811,7 @@
         // the report and don't have a share record get "Failed to load" on
         // every tile.
         var report = await ReportService.GetReportByIdAsync(reportId);
-        if (report is null) return null;
+        if (report is null) return (null, null);
 
         var fieldIds = new List<string>();
         List<string>? templateHiddenColumns = null;
@@ -798,7 +828,7 @@
         {
             fieldIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(report.FieldIds) ?? new();
         }
-        if (!fieldIds.Any()) return null;
+        if (!fieldIds.Any()) return (null, null);
 
         var filters = new Dictionary<string, object?>();
         if (!string.IsNullOrWhiteSpace(report.Filters))
@@ -883,7 +913,6 @@
             PrimaryTable = report.PrimaryTable
         };
         request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, report.ConnectionId, report.PrimaryTable);
-        var data = await QueryService.ExecuteQueryAsync(request);
 
         // Union template-level and report-level hidden column lists so a
         // field marked hidden on the template is honored everywhere,
@@ -893,7 +922,39 @@
             .Union(reportHiddenColumns ?? new List<string>(), StringComparer.OrdinalIgnoreCase))
             .ToList();
 
-        return new TileLoadResult(data, config, mergedHidden.Count > 0 ? mergedHidden : null);
+        try
+        {
+            var data = await QueryService.ExecuteQueryAsync(request);
+            return (new TileLoadResult(data, config, mergedHidden.Count > 0 ? mergedHidden : null), null);
+        }
+        catch (Exception ex)
+        {
+            // Execute failed (most often the source DB rejected the SQL).
+            // Recover the SQL via the build-only path so the right-click
+            // "Show query" dialog can still display what was attempted —
+            // otherwise admins debugging a broken tile have no way to see
+            // the generated SQL without tailing logs.
+            try
+            {
+                var (sql, parameters) = await QueryService.BuildSqlAsync(request);
+                return (null, new FailedTileQuery(
+                    sql, parameters,
+                    request.Scoping?.Reason,
+                    request.Scoping?.ForceNoMatch == true,
+                    ex.Message));
+            }
+            catch (Exception buildEx)
+            {
+                // Build phase also failed. No SQL to show — surface the
+                // build error alongside the original execute error so the
+                // dialog explains why both paths gave up.
+                return (null, new FailedTileQuery(
+                    string.Empty, new(),
+                    request.Scoping?.Reason,
+                    request.Scoping?.ForceNoMatch == true,
+                    $"{ex.Message}\n\n(SQL couldn't be regenerated: {buildEx.Message})"));
+            }
+        }
     }
 
     // ── Tab management ──
@@ -909,7 +970,7 @@
                 _tilesByTab[outgoing.Id] = _tiles;
                 _pendingRemovalsByTab[outgoing.Id] = _pendingRemovals;
             }
-            var tab = await MasterService.AddTabAsync(_companyId, $"Tab {_tabs.Count + 1}");
+            var tab = await MasterService.AddTabAsync(_companyId, $"Tab {_tabs.Count + 1}", _userEmail);
             _tabs.Add(tab);
             _activeTabIndex = _tabs.Count - 1;
             _editMode = true;
@@ -939,7 +1000,7 @@
         if (_tabs.Count <= 1) return;
         try
         {
-            await MasterService.RemoveTabAsync(tab.Id);
+            await MasterService.RemoveTabAsync(tab.Id, _userEmail);
             _tabs.Remove(tab);
             _activeTabIndex = Math.Min(_activeTabIndex, _tabs.Count - 1);
             await LoadTilesForActiveTab();
@@ -997,7 +1058,7 @@
 
         try
         {
-            await MasterService.AddTileAsync(_companyId, tab.Id, reportId);
+            await MasterService.AddTileAsync(_companyId, tab.Id, reportId, _userEmail);
 
             var allTiles = await MasterService.GetTilesAsync(_companyId, tab.Id);
             var newTile = allTiles.FirstOrDefault(t => t.ReportId == reportId);
@@ -1006,8 +1067,13 @@
                 _tiles.Add(newTile);
                 try
                 {
-                    var td = await LoadReportDashboard(newTile.ReportId);
+                    var (td, failure) = await LoadReportDashboard(newTile.ReportId);
                     if (td is not null) _tileData[newTile.ReportId] = td;
+                    if (failure is not null)
+                    {
+                        _tileErrors[newTile.ReportId] = failure.Error;
+                        _tileFailedQuery[newTile.ReportId] = failure;
+                    }
                 }
                 catch { }
             }
@@ -1069,7 +1135,7 @@
             // Delete removed tiles across all edited tabs
             foreach (var removalList in _pendingRemovalsByTab.Values)
                 foreach (var tile in removalList)
-                    await MasterService.RemoveTileAsync(tile.Id);
+                    await MasterService.RemoveTileAsync(tile.Id, _userEmail);
             _pendingRemovalsByTab.Clear();
             _pendingRemovals.Clear();
 
@@ -1079,14 +1145,14 @@
                 // Keep sort order in sync with current list position
                 for (var i = 0; i < tabTiles.Count; i++)
                     tabTiles[i].SortOrder = i;
-                await MasterService.UpdateLayoutAsync(tabTiles);
+                await MasterService.UpdateLayoutAsync(tabTiles, _userEmail);
             }
             _tilesByTab.Clear();
 
             // Update tab labels and order
             for (var i = 0; i < _tabs.Count; i++)
                 _tabs[i].SortOrder = i;
-            await MasterService.UpdateTabOrderAsync(_tabs);
+            await MasterService.UpdateTabOrderAsync(_tabs, _userEmail);
 
             // Persist the logo upload (still user-scoped fallback for now —
             // Phase 3 will route logo uploads to RPT_companies instead so
@@ -1176,7 +1242,7 @@
         var tile = _tiles[sourceIdx];
         try
         {
-            await MasterService.MoveTileToTabAsync(tile.Id, targetTabId);
+            await MasterService.MoveTileToTabAsync(tile.Id, targetTabId, _userEmail);
             _tiles.RemoveAt(sourceIdx);
             _tileData.Remove(tile.ReportId);
             var targetLabel = _tabs.FirstOrDefault(x => x.Id == targetTabId)?.Label ?? "another tab";
@@ -1190,25 +1256,59 @@
 
     private record TileLoadResult(QueryResponse Data, DashboardView.DashboardConfig? Config, List<string>? HiddenColumns);
 
+    private record FailedTileQuery(
+        string Sql,
+        Dictionary<string, object?> Parameters,
+        string? ScopingNote,
+        bool ScopingForceNoMatch,
+        string Error);
+
     // Right-click on any tile opens the SQL debug dialog. Unfiltered by
     // role — any user can see what query produced their tile, which is
     // what makes the "why am I seeing zero rows?" investigation tractable
     // (reveals whether row-level scoping injected `1 = 0` or an `=` pred).
+    // Also opens for tiles whose execution failed: the SQL is recovered
+    // via QueryService.BuildSqlAsync so admins can still see what was
+    // sent (or what was attempted, when even the build phase failed).
     private async Task ShowTileQuery(MasterDashboardTile tile)
     {
-        if (!_tileData.TryGetValue(tile.ReportId, out var result)
-            || string.IsNullOrEmpty(result.Data.Sql))
+        string sql;
+        Dictionary<string, object?>? parameters;
+        string? scopingNote;
+        bool scopingForceNoMatch;
+        string? errorMessage = null;
+
+        if (_tileData.TryGetValue(tile.ReportId, out var result)
+            && !string.IsNullOrEmpty(result.Data.Sql))
+        {
+            sql = result.Data.Sql!;
+            parameters = result.Data.Parameters;
+            scopingNote = result.Data.ScopingNote;
+            scopingForceNoMatch = result.Data.ScopingForceNoMatch;
+        }
+        else if (_tileFailedQuery.TryGetValue(tile.ReportId, out var failure))
+        {
+            sql = string.IsNullOrEmpty(failure.Sql)
+                ? "/* SQL couldn't be generated — see error message above */"
+                : failure.Sql;
+            parameters = failure.Parameters;
+            scopingNote = failure.ScopingNote;
+            scopingForceNoMatch = failure.ScopingForceNoMatch;
+            errorMessage = failure.Error;
+        }
+        else
         {
             Snackbar.Add("This tile hasn't loaded yet — wait for the data to finish.", Severity.Info);
             return;
         }
 
-        var parameters = new DialogParameters
+        var dialogParams = new DialogParameters
         {
-            { "Sql", result.Data.Sql! },
-            { "Parameters", result.Data.Parameters },
-            { "ScopingNote", result.Data.ScopingNote },
-            { "ScopingForceNoMatch", result.Data.ScopingForceNoMatch }
+            { "Sql", sql },
+            { "Parameters", parameters },
+            { "ScopingNote", scopingNote },
+            { "ScopingForceNoMatch", scopingForceNoMatch },
+            { "ErrorMessage", errorMessage }
         };
         var options = new DialogOptions
         {
@@ -1216,6 +1316,6 @@
             MaxWidth = MaxWidth.Large,
             FullWidth = true
         };
-        await DialogService.ShowAsync<ShowQueryDialog>($"SQL — {tile.ReportName}", parameters, options);
+        await DialogService.ShowAsync<ShowQueryDialog>($"SQL — {tile.ReportName}", dialogParams, options);
     }
 }

@@ -73,7 +73,12 @@ public sealed partial class SqlEmitter : IQueryPipeline
         var advancedFilterFields = new List<FieldDefinition>();
         if (request.AdvancedFilters is not null)
         {
-            var schemaLookup = schema.Fields.ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+            // First-wins on duplicate field ids (matches the dedupe in
+            // SchemaService.GetFieldConfigsAsync) so a stale duplicate in
+            // the persisted schema doesn't crash the emitter mid-build.
+            var schemaLookup = schema.Fields
+                .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
             var seenAf = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             AdvancedFilterSqlEmitter.Walk(request.AdvancedFilters, clause =>
             {
@@ -595,7 +600,10 @@ public sealed partial class SqlEmitter : IQueryPipeline
         if (filters.Count == 0)
             return [];
 
-        var lookup = schemaFields.ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+        // First-wins dedupe — see SchemaService.GetFieldConfigsAsync for why.
+        var lookup = schemaFields
+            .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var result = new List<FieldDefinition>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 

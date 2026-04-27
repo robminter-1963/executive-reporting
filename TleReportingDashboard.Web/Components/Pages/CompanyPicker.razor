@@ -120,7 +120,11 @@
         width: 240px;
         aspect-ratio: 3 / 2;
         cursor: pointer;
-        transition: transform 0.12s ease, box-shadow 0.12s ease;
+        /* Overshoot cubic-bezier gives the hover lift a little "hop" feel
+           without a full keyframe animation — transform springs past the
+           target position and settles. */
+        transition: transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.475),
+                    box-shadow 0.25s ease;
         background: #A9A9A9;
         /* Centers the logo (or initials circle) vertically and horizontally
            inside the tile. Padding keeps the logo off the tile's edges. */
@@ -130,8 +134,8 @@
         padding: 24px;
     }
     .company-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+        transform: translateY(-12px);
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.20);
     }
     .company-logo {
         max-width: 100%;

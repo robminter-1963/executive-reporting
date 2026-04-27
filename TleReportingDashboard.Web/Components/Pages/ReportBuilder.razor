@@ -90,6 +90,19 @@
                                        OnClick="() => _editingName = true" />
                     </MudTooltip>
                 }
+                @* Internal Name — admin-facing label shown only in the Master
+                   Dashboard's Add Report picker. The Name (left) is what
+                   tile users see; this field is what dashboard admins read
+                   when picking which variant of a same-named report to pin.
+                   Blank = falls back to Name in every consumer. *@
+                <MudTooltip Text="Shown in the master dashboard's Add Report picker. Use this to tell apart reports that share the same Name (e.g. one Pipeline per loan type). Leave blank to default to the Name.">
+                    <MudTextField @bind-Value="_loadedInternalName"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Style="max-width: 220px; font-size: 0.85rem;"
+                                  Placeholder="Internal name (admin-only)"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Tag" />
+                </MudTooltip>
             </MudStack>
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
                 @* ── Connection picker ── Editable for new reports only.
@@ -237,20 +250,24 @@
                                      Icon="@Icons.Material.Filled.Share">
                             @(_loadedReportId is null ? "Share (save report first)" : "Share…")
                         </MudMenuItem>
+                        <MudDivider />
                         @if (_isAdmin)
                         {
-                            <MudDivider />
                             <MudMenuItem OnClick="HandleSaveAsTemplate"
                                          Disabled="@(!_selectedFieldIds.Any())"
                                          Icon="@Icons.Material.Filled.ContentCopy">
                                 Save as template
                             </MudMenuItem>
-                            <MudMenuItem OnClick="ShowQuery"
-                                         Disabled="@(!_selectedFieldIds.Any())"
-                                         Icon="@Icons.Material.Filled.Code">
-                                Show generated SQL
-                            </MudMenuItem>
                         }
+                        @* Show generated SQL is intentionally available to
+                           every user — it's the same right-click affordance
+                           the dashboard tile menu offers, used to debug
+                           "why am I seeing zero rows?" without admin help. *@
+                        <MudMenuItem OnClick="ShowQuery"
+                                     Disabled="@(!_selectedFieldIds.Any())"
+                                     Icon="@Icons.Material.Filled.Code">
+                            Show generated SQL
+                        </MudMenuItem>
                     </MudMenu>
                 </MudTooltip>
                 @if (_isAdmin)
@@ -754,6 +771,10 @@
     // ── Loaded report state ──
     private Guid? _loadedReportId;
     private string? _loadedReportName;
+    // Admin-facing label shown in the master dashboard's Add Report picker.
+    // Falls back to _loadedReportName when blank — only useful for variants
+    // that share a public Name (e.g. one Pipeline per loan type).
+    private string? _loadedInternalName;
 
     // Active companies — used to group the Connection dropdown and resolve
     // each connection's owning company for the label.
@@ -773,9 +794,15 @@
     {
         get
         {
+            // Dedupe by id — a field is allowed to surface under multiple
+            // domains (e.g. credit_score under both Borrower and Credit) and
+            // ToDictionary would throw on the duplicate key. First-wins
+            // matches the order _domains expose them; we only need one
+            // FieldDefinition per id for the render path below.
             var fieldById = _domains
                 .SelectMany(d => d.Fields)
-                .ToDictionary(f => f.Id, f => f, StringComparer.OrdinalIgnoreCase);
+                .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
             var order = _currentConfig.ColumnOrder is { Count: > 0 }
                 ? _currentConfig.ColumnOrder
@@ -932,6 +959,7 @@
 
             _loadedReportId = report.Id;
             _loadedReportName = report.Name;
+            _loadedInternalName = report.InternalName;
             _currentConfig.ConnectionId = report.ConnectionId;
             _currentConfig.PrimaryTable = report.PrimaryTable;
             // Reload the field catalog to match this report's connection.
@@ -1958,6 +1986,9 @@
                 if (existing is not null)
                 {
                     existing.Name = _loadedReportName ?? existing.Name;
+                    existing.InternalName = string.IsNullOrWhiteSpace(_loadedInternalName)
+                        ? null
+                        : _loadedInternalName.Trim();
                     existing.FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds);
                     existing.Filters = _currentConfig.Filters.Any()
                         ? System.Text.Json.JsonSerializer.Serialize(_currentConfig.Filters)
@@ -1989,6 +2020,9 @@
             {
                 Id = Guid.NewGuid(),
                 Name = _loadedReportName.Trim(),
+                InternalName = string.IsNullOrWhiteSpace(_loadedInternalName)
+                    ? null
+                    : _loadedInternalName.Trim(),
                 OwnerId = _userId,
                 OwnerEmail = _userEmail,
                 FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds),

@@ -1,10 +1,16 @@
 @if (_editing && !ReadOnly)
 {
-    <MudStack Row AlignItems="AlignItems.Center" Spacing="0" Style="@($"justify-content: {GetJustify()};")"
+    @* Stacks the align buttons above the text field instead of inline next
+       to it. For narrow pinned columns (count = 90px, pct = 110px, integer
+       = 90px, etc.) the three icon buttons used to crowd the text field
+       down to a sliver, almost hiding the column name being edited. The
+       text field now gets the column's full width on every column. *@
+    <MudStack AlignItems="AlignItems.Stretch" Spacing="0" Style="width: 100%;"
               @onmousedown:stopPropagation="true">
         @if (ShowAlign)
         {
-            <span @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true">
+            <span @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"
+                  style="@($"display: flex; justify-content: {GetJustify()};")">
                 <MudIconButton Icon="@Icons.Material.Filled.FormatAlignLeft" Size="Size.Small"
                                Color="@(GetEffectiveAlign() == "left" ? Color.Primary : Color.Default)"
                                OnClick="@(() => ChangeAlign("left"))" Style="padding: 2px;"
@@ -20,7 +26,7 @@
             </span>
         }
         <MudTextField @bind-Value="_editValue" Variant="Variant.Text" Margin="Margin.Dense"
-                      Style="@($"font-size: 0.8rem; font-weight: 600; {Style}")"
+                      Style="@($"font-size: 0.8rem; font-weight: 600; width: 100%; {Style}")"
                       Immediate AutoFocus
                       OnBlur="CommitEdit"
                       OnKeyDown="OnKeyDown" />
@@ -30,7 +36,7 @@ else
 {
     <div style="@($"font-size: 0.8rem; font-weight: 600; width: 100%; text-align: {GetEffectiveAlign()}; {(ReadOnly ? "" : "cursor: pointer;")} {Style}")"
          @ondblclick="@(ReadOnly ? (Action)(() => { }) : StartEdit)"
-         title="@(ReadOnly ? null : "Double-click to rename or align")">
+         title="@(ReadOnly ? Label : "Double-click to rename or align")">
         @if (ReadOnly)
         {
             <span>@Label</span>

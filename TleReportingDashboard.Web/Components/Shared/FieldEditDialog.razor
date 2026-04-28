@@ -38,7 +38,7 @@
                     }
                     @if (AvailableDomains is not null)
                     {
-                        @foreach (var d in AvailableDomains)
+                        @foreach (var d in AvailableDomains.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                         {
                             <MudSelectItem T="string" Value="@d">@d</MudSelectItem>
                         }
@@ -56,6 +56,7 @@
                     <MudSelectItem Value="@("date")">date</MudSelectItem>
                     <MudSelectItem Value="@("datetime")">datetime</MudSelectItem>
                     <MudSelectItem Value="@("decimal")">decimal</MudSelectItem>
+                    <MudSelectItem Value="@("phone")">phone</MudSelectItem>
                 </MudSelect>
             </MudItem>
             <MudItem xs="6" sm="3">
@@ -138,7 +139,7 @@
                                Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                                Disabled="@(_columns.Count == 0)"
                                HelperText="@ColumnHelperText">
-                        @foreach (var col in _columns)
+                        @foreach (var col in _columns.OrderBy(c => c.ColumnName, StringComparer.OrdinalIgnoreCase))
                         {
                             <MudSelectItem T="string" Value="@col.ColumnName">@col.ColumnName</MudSelectItem>
                         }

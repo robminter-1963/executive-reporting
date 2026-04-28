@@ -9,10 +9,14 @@
     {
         <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined"
                   Icon="@Icons.Material.Filled.Lock">
-            Columns are locked by the grid template. Reordering, adding, and removing fields is not allowed.
+            Columns are locked by the grid template. Reordering, adding, and removing template fields is not allowed.
+            @if (OrphanFieldIds.Any())
+            {
+                <text> Hidden / orphan fields can still be removed.</text>
+            }
         </MudAlert>
     }
-    else if (SelectedFields.Any())
+    else if (SelectedFields.Any() || OrphanFieldIds.Any())
     {
         <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
             Columns (drag to reorder)
@@ -67,9 +71,36 @@
                     }
                 </div>
             }
+
+            @* Orphan chips — IDs in _selectedFieldIds whose FieldDefinition
+               isn't in any active domain (deleted, renamed, role-restricted,
+               or pointing at a domain not loaded for this report's primary
+               table). They were silently dropped from the chip bar before,
+               but were still emitted into the SQL — which produced phantom
+               columns in the result. Surfacing them here gives the admin
+               a visible Remove button to clean up the saved report.
+
+               Always rendered, even under TemplateLocked: the template
+               only owns the *legitimate* field set; orphans are junk that
+               leaked in from earlier configurations and an admin needs a
+               way to remove them without unlocking the template. *@
+            @if (OrphanFieldIds.Any())
+            {
+                @foreach (var oid in OrphanFieldIds)
+                {
+                    var oidLocal = oid;
+                    <MudTooltip Text="@($"\"{oid}\" is being included in the query but isn't part of the template / regular Columns. It may be a deleted/renamed field or a leftover from the Dashboard tab's extra group-by. Click ✕ to remove it from this report (allowed even when template-locked).")">
+                        <MudChip T="string" Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
+                                 Icon="@Icons.Material.Filled.Warning"
+                                 OnClose="@(() => OnFieldRemoved.InvokeAsync(oidLocal))">
+                            Hidden: @oid
+                        </MudChip>
+                    </MudTooltip>
+                }
+            }
         </div>
 
-        @if (!TemplateLocked && SelectedFields.Any())
+        @if (!TemplateLocked && (SelectedFields.Any() || OrphanFieldIds.Any()))
         {
             <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary"
                        OnClick="OnClearAll">
@@ -130,6 +161,10 @@
     [Parameter] public EventCallback OnClearAll { get; set; }
     [Parameter] public EventCallback<List<string>> OnFieldOrderChanged { get; set; }
     [Parameter] public bool TemplateLocked { get; set; }
+    // Selected field ids that don't resolve to a FieldDefinition in any
+    // active domain. Rendered as warning chips so the admin can see and
+    // remove them — without this, they were silent yet still emitted in SQL.
+    [Parameter] public List<string> OrphanFieldIds { get; set; } = new();
 
     private int _dragSource = -1;
     private int _dropTarget = -1;

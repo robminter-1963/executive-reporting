@@ -33,7 +33,7 @@
                                SelectedValuesChanged="@(vals => OnMultiSelectChanged(filter, vals))"
                                Label="@filter.Label" Variant="Variant.Outlined"
                                Margin="Margin.Dense" Style="min-width: 200px; max-width: 280px;" Dense>
-                        @foreach (var csv in filter.CodeSetValues)
+                        @foreach (var csv in filter.CodeSetValues.OrderBy(x => x.Description, StringComparer.OrdinalIgnoreCase))
                         {
                             <MudSelectItem T="string" Value="@csv.Description">@csv.Description</MudSelectItem>
                         }

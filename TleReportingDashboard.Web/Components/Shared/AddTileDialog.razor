@@ -11,7 +11,12 @@
                 Select a report with "Show on Master Dashboard" enabled:
             </MudText>
             <MudList T="SavedReport" Dense>
-                @foreach (var report in Reports)
+                @* Sort by the same primary label rendered on each row
+                   (InternalName when set, else Name) so the picker order
+                   matches what the admin reads off the row. *@
+                @foreach (var report in Reports.OrderBy(rp =>
+                    string.IsNullOrWhiteSpace(rp.InternalName) ? rp.Name : rp.InternalName!,
+                    StringComparer.OrdinalIgnoreCase))
                 {
                     var r = report;
                     var summary = FilterSummary(r);

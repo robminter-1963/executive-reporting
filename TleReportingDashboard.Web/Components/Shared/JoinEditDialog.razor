@@ -39,7 +39,7 @@
                                Required RequiredError="Pick a table from the catalog"
                                Error="@string.IsNullOrWhiteSpace(_edited.TargetTable)"
                                HelperText="@TargetTableHelperText">
-                        @foreach (var entry in _effectiveAliases)
+                        @foreach (var entry in _effectiveAliases.OrderBy(BuildAliasLabel, StringComparer.OrdinalIgnoreCase))
                         {
                             var key = BuildAliasKey(entry);
                             <MudSelectItem T="string" Value="@key">@BuildAliasLabel(entry)</MudSelectItem>

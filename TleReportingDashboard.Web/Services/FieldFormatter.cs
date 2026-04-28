@@ -40,6 +40,11 @@ public static class FieldFormatter
     // default ToString. Admins can still override by setting a Format.
     private const string DefaultDateFormat = "MM/dd/yyyy";
 
+    // Default mask for DataType="phone" when the admin hasn't set a Format.
+    // 10-digit US format covers the common case; admins can override with
+    // any custom mask (e.g. "999.999.9999") via the field's Format field.
+    private const string DefaultPhoneMask = "(999) 999-9999";
+
     // Back-compat overload for callers that don't know the DataType.
     public static string Format(object? value, string? format) =>
         Format(value, format, dataType: null);
@@ -47,6 +52,18 @@ public static class FieldFormatter
     public static string Format(object? value, string? format, string? dataType)
     {
         if (value is null || value is DBNull) return string.Empty;
+
+        // Phone numbers normalize the raw value before any masking. Source
+        // data may include a leading "+1" (US country code) or just "+"
+        // (international). Strip those so a 10-digit mask like "(999) 999-9999"
+        // lines up with the body of the number — without this normalization
+        // "+15551234567" formats as "(155) 512-3456" instead of "(555) 123-4567".
+        if (string.Equals(dataType, "phone", StringComparison.OrdinalIgnoreCase))
+        {
+            var raw = NormalizePhoneRaw(value.ToString() ?? string.Empty);
+            var mask = string.IsNullOrWhiteSpace(format) ? DefaultPhoneMask : format;
+            return IsMask(mask) ? ApplyMask(raw, mask) : raw;
+        }
 
         if (string.IsNullOrWhiteSpace(format))
         {
@@ -64,6 +81,20 @@ public static class FieldFormatter
         return IsMask(format)
             ? ApplyMask(value.ToString() ?? string.Empty, format)
             : ApplyDotNetFormat(value, format);
+    }
+
+    // Strips a leading "+1" (US country code) or a bare "+" (other country
+    // code marker) from a phone string. Whitespace is also trimmed since
+    // raw exports from external systems sometimes pad with spaces. The
+    // remainder still contains separators like "(", ")", "-", "." — those
+    // are skipped naturally by the mask walker (which only consumes digits
+    // for the '9' positions).
+    private static string NormalizePhoneRaw(string raw)
+    {
+        var s = raw.Trim();
+        if (s.StartsWith("+1")) return s[2..];
+        if (s.StartsWith("+")) return s[1..];
+        return s;
     }
 
     // Accepts DateTime, DateTimeOffset, DateOnly, and parseable strings —

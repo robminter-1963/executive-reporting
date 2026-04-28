@@ -499,7 +499,7 @@
     private List<string> ColumnsForAlias(string? alias)
     {
         if (!string.IsNullOrEmpty(alias) && _columnsByAlias.TryGetValue(alias, out var cols))
-            return cols;
+            return cols.OrderBy(c => c, StringComparer.OrdinalIgnoreCase).ToList();
         return new List<string>();
     }
 

@@ -33,7 +33,7 @@
                        ToStringFunc="@RoleToLabel"
                        Clearable AdornmentIcon="@Icons.Material.Filled.Badge">
                 <MudSelectItem T="Guid?" Value="@((Guid?)null)">— None —</MudSelectItem>
-                @foreach (var r in _roles)
+                @foreach (var r in _roles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
                 {
                     <MudSelectItem T="Guid?" Value="@((Guid?)r.Id)">@r.Name</MudSelectItem>
                 }

@@ -32,7 +32,7 @@
                     <MudSelectItem T="string" Value="@string.Empty">— Misc —</MudSelectItem>
                     @if (AvailableDomains is not null)
                     {
-                        @foreach (var d in AvailableDomains)
+                        @foreach (var d in AvailableDomains.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                         {
                             <MudSelectItem T="string" Value="@d">@d</MudSelectItem>
                         }

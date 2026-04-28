@@ -249,15 +249,22 @@
                                             + (_editMode ? " master-tile-edit" : string.Empty)
                                             + (isDragging ? " master-tile-dragging" : string.Empty)
                                             + (isDropTarget ? " master-tile-droptarget" : string.Empty);
+                                        @* The inline width is the *preferred* width (ColSpan * 60).
+                                           min-width: 0 + flex-shrink: 1 lets the tile shrink with its
+                                           flex-row parent when there isn't enough horizontal room —
+                                           which then unlocks the table-shrink chain inside. The old
+                                           flex-shrink: 0 + min-width: auto combination was pinning
+                                           the tile at ColSpan * 60 regardless of viewport / parent
+                                           width, which then propagated down to the table. *@
                                         <div @key="tl.Id" id="@($"master-tile-{tl.Id}")"
                                              class="@tileClass"
-                                             style="width: @(tl.ColSpan * 60)px; height: @(tl.Height)px; position: relative; flex-shrink: 0;"
+                                             style="width: @(tl.ColSpan * 60)px; height: @(tl.Height)px; position: relative; min-width: 0; flex-shrink: 1;"
                                              @ondragover:preventDefault
                                              @ondragover="@(() => { if (_editMode && _dragSource >= 0 && idx != _dragSource) { _dropTarget = idx; } })"
                                              @ondrop="@(() => OnTileDrop(idx))"
                                              @oncontextmenu="@(() => ShowTileQuery(tl))"
                                              @oncontextmenu:preventDefault="true">
-                                            <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; height: 100%; display: flex; flex-direction: column; overflow: hidden; box-shadow: 7px 7px 9px rgba(0,0,0,0.20), 5px 5px 7px rgba(0,0,0,0.14);">
+                                            <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 12px; height: 100%; display: flex; flex-direction: column; overflow: hidden; box-shadow: 7px 7px 9px rgba(0,0,0,0.20), 5px 5px 7px rgba(0,0,0,0.14);">
                                                 @* Tile header — drag handle in edit mode; title is bold and per-tile alignable *@
                                                 @{
                                                     var tileAlign = string.IsNullOrEmpty(tl.TitleAlign) ? "left" : tl.TitleAlign;
@@ -314,8 +321,11 @@
                                                     </div>
                                                 </div>
 
-                                                @* Tile content *@
-                                                <div style="overflow: hidden; flex: 1; display: flex; flex-direction: column;">
+                                                @* Tile content. min-width: 0 lets the flex chain inside
+                                                   shrink horizontally with the tile (each flex container
+                                                   defaults to min-width: auto = content intrinsic min,
+                                                   which pegs the table's column widths). *@
+                                                <div style="overflow: hidden; flex: 1; display: flex; flex-direction: column; min-width: 0;">
                                                     @if (_tileData.TryGetValue(tl.ReportId, out var td))
                                                     {
                                                         <DashboardView Data="td.Data" InitialConfig="td.Config"
@@ -405,20 +415,30 @@
     .mud-tabs .mud-tab {
         text-transform: none !important;
     }
-    /* Responsive: tiles can't exceed viewport width, and won't shrink below
-       a readable minimum. The inline width (ColSpan * 60) is treated as the
-       preferred width; max-width: 100% caps it to the available space. */
+    /* Responsive: tiles can't exceed viewport width and shrink freely down
+       to whatever their content's natural min-width is. The inline width
+       (ColSpan * 60) is treated as the preferred width; max-width: 100%
+       caps it to the available space. The 300px hard floor that used to
+       live here was the chain-breaker preventing the inner table from
+       shrinking past a certain point — removed so text columns can
+       actually flex with the tile. The tile's title bar already
+       ellipsises (flex: 1; min-width: 0; text-overflow: ellipsis). */
     .master-tile {
         max-width: 100%;
-        min-width: 300px;
+        /* Round the outer wrapper too so the edit-mode outline / resize-mode
+           outline track the rounded inner MudPaper instead of cutting square
+           corners across the rounded shadow underneath. */
+        border-radius: 12px;
     }
     .master-tile-edit {
         outline: 2px dashed #DADCE0;
         outline-offset: -2px;
+        border-radius: 12px;
     }
     .master-tile.tile-resizing {
         outline: 2px solid #1A73E8 !important;
         opacity: 0.9;
+        border-radius: 12px;
     }
     .master-tile.master-tile-dragging {
         opacity: 0.4;
@@ -478,7 +498,11 @@
     .master-tile .mud-table-container {
         overflow-x: hidden !important;
     }
-    .master-tile table {
+    /* Excludes .dash-summary-table — that table needs table-layout: fixed
+       to clip overflowing text columns; under auto layout it sizes to its
+       widest content and overflows the wrap (no scrollbar, content clipped
+       off the right edge). */
+    .master-tile table:not(.dash-summary-table) {
         table-layout: auto;
         width: 100%;
     }

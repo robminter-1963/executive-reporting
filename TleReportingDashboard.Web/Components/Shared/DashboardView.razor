@@ -4,7 +4,11 @@
 
 @if (Data is not null && Data.Columns.Any())
 {
-    <MudStack Spacing="@(Compact ? 0 : 3)" Style="@(Compact ? "gap: 0 !important; height: 100%;" : "")">
+    @* min-width: 0 cascades down the flex chain so the table inside can
+       shrink horizontally with the tile. Each flex container in the chain
+       defaults to min-width: auto (= content intrinsic min); without an
+       explicit 0 here, the deepest content's natural width pegs the chain. *@
+    <MudStack Spacing="@(Compact ? 0 : 3)" Style="@(Compact ? "gap: 0 !important; height: 100%; min-width: 0;" : "")">
         @* ── Config bar (edit mode only) ── *@
         @if (!ReadOnly)
         {
@@ -68,7 +72,16 @@
                            Label="Summary Cards" Color="Color.Primary" Size="Size.Small"
                            Style="margin: 0 4px;" />
 
+                @* ToStringFunc here is load-bearing — without it, the closed
+                   display matches the picked value against the rendered
+                   MudSelectItem children, which Blazor reuses across renders
+                   when _dashColumnOrder mutates (e.g. after adding a new
+                   dimension). The cached item DOM showed a stale label until
+                   save+reload. ToStringFunc computes the label fresh from
+                   the current value every render, so the closed display
+                   tracks _defaultSortColumn through dimension adds/removes. *@
                 <MudSelect T="string" @bind-Value="_defaultSortColumn" @bind-Value:after="BuildSummary"
+                           ToStringFunc="@(k => string.IsNullOrEmpty(k) ? "-- None --" : GetDashColumnLabel(k))"
                            Label="Default Sort" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                            Style="max-width: 180px;">
                     <MudSelectItem T="string" Value="@("")">-- None --</MudSelectItem>
@@ -181,7 +194,7 @@
         @* ── Chart + Summary Table side by side ── *@
         @if (!string.IsNullOrEmpty(_groupByField))
         {
-                <MudGrid Spacing="@(Compact ? 0 : 3)" Style="@(Compact ? "flex: 1; min-height: 0; display: flex; flex-direction: column;" : "")">
+                <MudGrid Spacing="@(Compact ? 0 : 3)" Style="@(Compact ? "flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column;" : "")">
                     @if (ShowChart && Compact)
                     {
                         @* Compact mode: chart takes full space, table is hidden *@
@@ -204,8 +217,8 @@
                     }
                     @if (!(ShowChart && Compact))
                     {
-                    <MudItem xs="12" md="@(ShowChart ? 6 : 12)" Style="@(Compact ? "padding: 0 !important; flex: 1; min-height: 0; display: flex; flex-direction: column;" : "")">
-                        <MudPaper Elevation="0" Style="@(Compact ? "border-radius: 0; flex: 1; min-height: 0; display: flex; flex-direction: column;" : "border: 1px solid #E8EAED; border-radius: 4px;")">
+                    <MudItem xs="12" md="@(ShowChart ? 6 : 12)" Style="@(Compact ? "padding: 0 !important; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column;" : "")">
+                        <MudPaper Elevation="0" Style="@(Compact ? "border-radius: 0; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column;" : "border: 1px solid #E8EAED; border-radius: 4px;")">
                             @if (!ReadOnly)
                             {
                                 @* Reorder bar *@
@@ -282,7 +295,15 @@
                                                 else if (ck == "measure")
                                                 {
                                                     var a = GetAlign("measure", "right");
-                                                    <th class="@SortHeaderClass(ck)" style="width: 130px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                    // COUNT outputs integers (use the integer width). For other
+                                                    // aggregations the underlying field's data type drives width
+                                                    // — currency stays currency-wide, decimal stays decimal-wide.
+                                                    // Falls back to 110px when the field's type isn't pinned.
+                                                    var measureWidth = string.Equals(_aggregation, "COUNT", StringComparison.OrdinalIgnoreCase)
+                                                        ? FixedColumnWidthPx("integer")
+                                                        : FixedColumnWidthPx(Data?.Columns.FirstOrDefault(c => c.FieldId == _measureField)?.DataType ?? string.Empty);
+                                                    if (measureWidth == 0) measureWidth = 110;
+                                                    <th class="@SortHeaderClass(ck)" style="width: @(measureWidth)px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
                                                         <span class="dash-th-inner">
                                                             <EditableHeader Label="@GetLabel("measure", $"{_aggregation} of {GetMeasureLabel()}")"
                                                                             OnLabelChanged="@(v => SetLabel("measure", v))"
@@ -296,7 +317,7 @@
                                                 else if (ck == "count")
                                                 {
                                                     var a = GetAlign("count", "right");
-                                                    <th class="@SortHeaderClass(ck)" style="width: 90px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                    <th class="@SortHeaderClass(ck)" style="width: 70px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
                                                         <span class="dash-th-inner">
                                                             <EditableHeader Label="@GetLabel("count", "Count")"
                                                                             OnLabelChanged="@(v => SetLabel("count", v))"
@@ -329,9 +350,15 @@
                                                     {
                                                         var a = GetAlign($"extra_{ec.Key}", "right");
                                                         var ecRef = ec;
-                                                        // Extras are aggregations (always numeric output) — pin
-                                                        // their width so they don't squish out at narrow tile sizes.
-                                                        <th class="@SortHeaderClass(ck)" style="width: 130px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
+                                                        // Extras are aggregations — width tracks the per-extra
+                                                        // aggregation: COUNT uses the integer width, every other
+                                                        // aggregation falls back to the underlying field's data
+                                                        // type (currency / decimal / etc.), 110px when unknown.
+                                                        var ecWidth = string.Equals(ecRef.Aggregation, "COUNT", StringComparison.OrdinalIgnoreCase)
+                                                            ? FixedColumnWidthPx("integer")
+                                                            : FixedColumnWidthPx(Data?.Columns.FirstOrDefault(c => c.FieldId == ecRef.FieldId)?.DataType ?? string.Empty);
+                                                        if (ecWidth == 0) ecWidth = 110;
+                                                        <th class="@SortHeaderClass(ck)" style="width: @(ecWidth)px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
                                                             <span class="dash-th-inner">
                                                                 <EditableHeader Label="@GetLabel($"extra_{ecRef.Key}", $"{ecRef.Aggregation} of {GetFieldLabel(ecRef.FieldId)}")"
                                                                                 OnLabelChanged="@(v => SetLabel($"extra_{ecRef.Key}", v))"
@@ -472,10 +499,11 @@
                                                     }
                                                     else if (ck == "measure")
                                                     {
-                                                        var text = RenderTotal("measure", "SUM", r => r.Value, v => FormatNumber(v));
+                                                        var measureDefault = DefaultTotalMethodFor(_aggregation);
+                                                        var text = RenderTotal("measure", measureDefault, r => r.Value, v => FormatNumber(v));
                                                         <td class="dash-footer-cell" style="@AlignToCss(GetAlign("measure", "right"))">
                                                             @text
-                                                            @if (!ReadOnly) { <span class="totals-menu-anchor"><TotalsMenu CurrentMethod="@GetTotalMethod("measure", "SUM")" OnMethodChanged="@(m => SetTotalMethod("measure", m))" OnLiteralChanged="@(l => SetTotalLiteral("measure", l))" /></span> }
+                                                            @if (!ReadOnly) { <span class="totals-menu-anchor"><TotalsMenu CurrentMethod="@GetTotalMethod("measure", measureDefault)" OnMethodChanged="@(m => SetTotalMethod("measure", m))" OnLiteralChanged="@(l => SetTotalLiteral("measure", l))" /></span> }
                                                         </td>
                                                     }
                                                     else if (ck == "count")
@@ -503,11 +531,12 @@
                                                             @if (ec is not null)
                                                             {
                                                                 var ecLocal = ec;
-                                                                var text = RenderTotal(ecKeyLocal, "SUM",
+                                                                var ecDefault = DefaultTotalMethodFor(ecLocal.Aggregation);
+                                                                var text = RenderTotal(ecKeyLocal, ecDefault,
                                                                     r => r.ExtraValues.TryGetValue(ecLocal.Key, out var v) ? v : 0,
                                                                     v => FormatExtraNumberForTotal(ecLocal, v));
                                                                 @text
-                                                                @if (!ReadOnly) { <span class="totals-menu-anchor"><TotalsMenu CurrentMethod="@GetTotalMethod(ecKeyLocal, "SUM")" OnMethodChanged="@(m => SetTotalMethod(ecKeyLocal, m))" OnLiteralChanged="@(l => SetTotalLiteral(ecKeyLocal, l))" /></span> }
+                                                                @if (!ReadOnly) { <span class="totals-menu-anchor"><TotalsMenu CurrentMethod="@GetTotalMethod(ecKeyLocal, ecDefault)" OnMethodChanged="@(m => SetTotalMethod(ecKeyLocal, m))" OnLiteralChanged="@(l => SetTotalLiteral(ecKeyLocal, l))" /></span> }
                                                             }
                                                         </td>
                                                     }
@@ -593,13 +622,17 @@
     .dash-table-wrap {
         border-top: 1px solid #E8EAED;
         /* Vertical scroll on demand; horizontal scroll is intentionally
-           suppressed. Text columns shrink with ellipsis down to a 10px
-           floor (see TextColumnFloorPx); numeric/date columns stay at
-           their pinned widths. If the tile gets so narrow that even the
-           floor + numerics don't fit, the rightmost edge clips — by design,
-           since no scrollbar is preferable to scrolling per UX choice. */
+           suppressed. Text columns shrink with ellipsis all the way down
+           (TextColumnFloorPx = 0); numeric/date columns stay at their
+           pinned widths. If the tile gets so narrow that even the
+           numerics don't fit, the rightmost edge clips. */
         overflow-y: auto;
         overflow-x: hidden;
+        /* Override the flex `min-width: auto` default that resolves to
+           the table's intrinsic content width. Without this, the wrap
+           can't shrink below the table's natural min size — which means
+           the tile narrows but the table inside refuses to follow. */
+        min-width: 0;
         /* Reserve the vertical-scrollbar gutter at all times so the table
            layout doesn't reflow when the scrollbar appears (which used to
            push content sideways and clip a column off the right edge). */
@@ -621,10 +654,16 @@
         z-index: 2;
         background: #FAFAFA;
         border-bottom: 1px solid #DADCE0;
-        padding: 8px 16px;
+        padding: 4px 8px;
         font-weight: 600;
         white-space: nowrap;
         user-select: none;
+        /* Header cells clip overflow same as body cells so the column
+           label ellipsises when its column shrinks. The flex chain below
+           (dash-th-inner + its direct children) needs min-width: 0 to
+           actually do the shrinking — otherwise the flex container
+           stays at its content's intrinsic minimum. */
+        overflow: hidden;
     }
     .dash-summary-table thead th.sortable {
         cursor: pointer;
@@ -637,9 +676,26 @@
         align-items: center;
         gap: 4px;
         width: 100%;
+        /* Override the flex `min-width: auto` default so this container
+           and its children can shrink below their content size when the
+           column narrows. Mirrors the .dash-table-wrap fix. */
+        min-width: 0;
+    }
+    .dash-th-inner > * {
+        /* Each flex child (the EditableHeader div + the optional sort
+           indicator span) needs min-width: 0 too — otherwise individually
+           they refuse to shrink past their content size. */
+        min-width: 0;
+    }
+    /* EditableHeader renders an inner div in read-only tile mode containing
+       the column label. Apply the ellipsis triple to that div so the
+       label visibly truncates with `…` when its column is narrow. */
+    .dash-th-inner > div {
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .dash-summary-table tbody td {
-        padding: 8px 16px;
+        padding: 4px 8px;
         border-bottom: 1px solid #F1F3F4;
         /* table-layout: fixed clips long content; ellipsis gives the user a
            visual cue instead of a silent cutoff. The cell's title attribute
@@ -673,7 +729,7 @@
         background: #E8EAED;
     }
     .dash-footer-cell {
-        padding: 8px 16px;
+        padding: 4px 8px;
         font-weight: 600;
         white-space: nowrap;
         position: sticky;
@@ -1250,12 +1306,28 @@
     //
     // GetTotalMethod returns the configured method for a column key, falling
     // back to the provided default. Methods: SUM, AVG, MIN, MAX, MEDIAN, NONE,
-    // or "LITERAL:<text>". Default for measure/extras/count is SUM; pct is a
-    // 100.0% literal historically (represented as "LITERAL:100.0%").
+    // or "LITERAL:<text>". Default for count is SUM and pct is a 100.0% literal;
+    // measure/extras default to whatever matches their column aggregation
+    // (AVG of X totals as AVG of the per-group averages, MIN as MIN, etc.) —
+    // summing per-group averages was producing meaningless numbers.
     private string GetTotalMethod(string columnKey, string defaultMethod) =>
         _totalMethods.TryGetValue(columnKey, out var m) && !string.IsNullOrWhiteSpace(m)
             ? m
             : defaultMethod;
+
+    // Maps an aggregation type (the per-group operation) to the totals-row
+    // default that's mathematically consistent with it. SUM/COUNT roll up
+    // additively; AVG/MIN/MAX/MEDIAN repeat the same operation across the
+    // per-group results. Users can still override per column via TotalsMenu.
+    private static string DefaultTotalMethodFor(string? aggregation) =>
+        aggregation?.ToUpperInvariant() switch
+        {
+            "AVG" => "AVG",
+            "MIN" => "MIN",
+            "MAX" => "MAX",
+            "MEDIAN" => "MEDIAN",
+            _ => "SUM"
+        };
 
     // Computes the totals-row value for a measure-like column given a
     // projector that extracts a numeric value from each summary row.
@@ -1765,11 +1837,13 @@
     };
 
     // Floor width applied to text-bearing (auto) columns when computing the
-    // table's min-width. 10px = "shrink essentially to nothing" — content
-    // ellipsises down to a couple of pixels of the leading character before
-    // the column hits this floor. Numeric / date columns are pinned at their
-    // per-type widths regardless, so they stay readable while text disappears.
-    private const int TextColumnFloorPx = 10;
+    // table's min-width. 0 = "let the column collapse fully" — text columns
+    // shrink with the tile all the way down. Numeric / date columns stay
+    // pinned at their per-type widths regardless. If the tile gets narrower
+    // than the sum of the pinned widths, the rightmost column edge clips
+    // (overflow-x: hidden on the wrap) rather than scrolling — by design
+    // since no scrollbar is preferable.
+    private const int TextColumnFloorPx = 0;
 
     // Columns whose content has a predictable max width (formatted dates,
     // currency, etc.) get pinned widths so they don't squish out at narrow
@@ -1778,14 +1852,15 @@
     // Returns 0 to signal "auto width" (caller should not emit a width).
     private static int FixedColumnWidthPx(string dataType) => dataType.ToLowerInvariant() switch
     {
-        "currency" or "money" or "smallmoney"                            => 130,
+        "currency" or "money" or "smallmoney"                            => 110,
         "percent" or "percentage"                                        => 110,
-        "integer" or "int" or "bigint" or "smallint" or "tinyint"        => 90,
-        "decimal" or "float" or "double" or "numeric" or "real" or "number" => 130,
+        "integer" or "int" or "bigint" or "smallint" or "tinyint"        => 70,
+        "decimal" or "float" or "double" or "numeric" or "real" or "number" => 110,
         "date"                                                           => 110,
         "datetime" or "datetime2" or "smalldatetime" or "timestamp"
             or "timestamp without time zone" or "timestamp with time zone" => 150,
         "time"                                                           => 90,
+        "phone"                                                          => 130,
         _                                                                => 0
     };
 
@@ -1805,14 +1880,31 @@
                 var w = FixedColumnWidthPx(GetGroupByDataType());
                 total += w > 0 ? w : TextColumnFloorPx;
             }
-            else if (ck == "measure" || ck.StartsWith("extra:"))
+            else if (ck == "measure")
             {
-                // Aggregations always emit numeric output.
-                total += 130;
+                // COUNT aggregations emit integers; everything else inherits
+                // the underlying measure field's type (currency, decimal, etc.).
+                // Mirrors the per-th width logic in the header markup.
+                var w = string.Equals(_aggregation, "COUNT", StringComparison.OrdinalIgnoreCase)
+                    ? FixedColumnWidthPx("integer")
+                    : FixedColumnWidthPx(Data?.Columns.FirstOrDefault(c => c.FieldId == _measureField)?.DataType ?? string.Empty);
+                total += w > 0 ? w : 110;
+            }
+            else if (ck.StartsWith("extra:"))
+            {
+                var ecKey = ck[6..];
+                var ec = _extraColumns.FirstOrDefault(e => e.Key == ecKey);
+                if (ec is not null)
+                {
+                    var w = string.Equals(ec.Aggregation, "COUNT", StringComparison.OrdinalIgnoreCase)
+                        ? FixedColumnWidthPx("integer")
+                        : FixedColumnWidthPx(Data?.Columns.FirstOrDefault(c => c.FieldId == ec.FieldId)?.DataType ?? string.Empty);
+                    total += w > 0 ? w : 110;
+                }
             }
             else if (ck == "count")
             {
-                total += 90;
+                total += 70;
             }
             else if (ck == "pct")
             {

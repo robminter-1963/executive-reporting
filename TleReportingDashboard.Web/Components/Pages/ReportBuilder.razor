@@ -397,6 +397,7 @@
         @if (_selectedFieldIds.Any())
         {
             <FieldChipBar SelectedFields="_selectedFieldDefinitions"
+                          OrphanFieldIds="_orphanFieldIds"
                           OnFieldRemoved="HandleFieldRemoved"
                           OnClearAll="HandleClearAllFields"
                           OnFieldOrderChanged="HandleFieldOrderChanged"
@@ -828,6 +829,36 @@
         }
     }
 
+    // Field ids that drive the SQL request but don't have a regular chip
+    // in the bar. Two cases produce phantom columns the admin had no way
+    // to remove:
+    //   (a) IDs in _selectedFieldIds that don't resolve in _domains
+    //       (deleted/renamed/role-restricted). Always orphan.
+    //   (b) IDs in _extraGroupByFieldIds (dashboard-tab extra dimensions)
+    //       that aren't already a regular chip — they get injected into
+    //       queryFieldIds in HandleRunQuery without any visible UI.
+    // Both are surfaced as warning chips so the admin can click ✕ to
+    // remove them from the report.
+    private List<string> _orphanFieldIds
+    {
+        get
+        {
+            if (_domains.Count == 0) return new();
+            var fieldById = _domains
+                .SelectMany(d => d.Fields)
+                .Select(f => f.Id)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var visibleSelected = _selectedFieldIds
+                .Where(fieldById.Contains)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return _selectedFieldIds
+                .Concat(_extraGroupByFieldIds)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(id => !visibleSelected.Contains(id))
+                .ToList();
+        }
+    }
+
     private void NavigateBackToLibrary()
     {
         var url = ReturnTab.HasValue ? $"/reports?tab={ReturnTab.Value}" : "/reports";
@@ -1214,6 +1245,29 @@
         _selectedFieldIds.Remove(fieldId);
         _currentConfig.SelectedFieldIds = new List<string>(_selectedFieldIds);
         _currentConfig.ColumnOrder?.Remove(fieldId);
+
+        // Also strip from the dashboard's extra group-by / dimension lists.
+        // Without this, an id that lives ONLY in _extraGroupByFieldIds (a
+        // dashboard-configured extra) keeps getting injected into the SQL
+        // even after the admin clicks ✕ on its orphan chip — the chip
+        // disappears for one frame and reappears on the next render.
+        _extraGroupByFieldIds.RemoveWhere(id => string.Equals(id, fieldId, StringComparison.OrdinalIgnoreCase));
+        if (_dashboardConfig is not null)
+        {
+            var newExtraGroupBy = _dashboardConfig.ExtraGroupByFieldIds?
+                .Where(id => !string.Equals(id, fieldId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var newExtraDim = _dashboardConfig.ExtraDimensionFieldIds?
+                .Where(id => !string.Equals(id, fieldId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            _dashboardConfig = _dashboardConfig with
+            {
+                ExtraGroupByFieldIds = newExtraGroupBy,
+                ExtraDimensionFieldIds = newExtraDim
+            };
+            _currentConfig.DashboardConfigJson = System.Text.Json.JsonSerializer.Serialize(_dashboardConfig);
+        }
+
         if (_hasRunOnce && _selectedFieldIds.Any()) await HandleRunQuery();
         else if (!_selectedFieldIds.Any()) _queryData = null;
     }

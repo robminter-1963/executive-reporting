@@ -15,7 +15,7 @@
 @inject IDialogService DialogService
 @inject IJSRuntime JS
 @inject IConfiguration Config
-@inject NavigationManager Navigation
+@inject ICompanyRegistry CompanyRegistry
 
 <PageTitle>@_title - Executive Reporting Suite</PageTitle>
 
@@ -92,9 +92,10 @@
         <MudPaper Elevation="0" Class="pa-4" Style="border-bottom: 1px solid #E8EAED;">
             <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
                 <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
-                                   OnClick="GoBack"
-                                   title="Back" />
+                    @* No back arrow — the detail screen is a modal-style
+                       overlay; users exit via Close. A Back here invited
+                       browser history navigation away from the parent
+                       report, which dropped any unsaved drill-down state. *@
                     <MudStack Spacing="0">
                         <MudText Typo="Typo.h5" Style="font-weight: 600;">@_title</MudText>
                         @if (!string.IsNullOrEmpty(_groupLabel) && !string.IsNullOrEmpty(GroupKey))
@@ -284,6 +285,7 @@
     public string? GroupKey { get; set; }
 
     private string _title = "Detail";
+    private string _companyName = string.Empty;
     private Guid? _connectionId;
     private string? _primaryTable;
     private string? _groupLabel;
@@ -377,6 +379,16 @@
             _title = report.Name;
             _connectionId = report.ConnectionId;
             _primaryTable = report.PrimaryTable;
+
+            // Resolve the company name once so Excel / CSV exports can
+            // prepend it to the filename. Empty string when lookup fails
+            // — exports still work, just without the company prefix.
+            try
+            {
+                var company = await CompanyRegistry.GetByIdAsync(report.CompanyId);
+                _companyName = company?.Name ?? string.Empty;
+            }
+            catch { _companyName = string.Empty; }
 
             // Parse column state
             if (!string.IsNullOrWhiteSpace(report.ColumnState))
@@ -904,7 +916,7 @@
         if (_detailData is null) return;
         var name = _title ?? "Detail";
         var bytes = ExportService.ExportToExcel(BuildExportData(_detailData), name);
-        await JS.InvokeVoidAsync("downloadFile", $"{name}-Detail.xlsx",
+        await JS.InvokeVoidAsync("downloadFile", BuildDetailExportFileName("xlsx"),
             Convert.ToBase64String(bytes),
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     }
@@ -912,10 +924,19 @@
     private async Task ExportCsv()
     {
         if (_detailData is null) return;
-        var name = _title ?? "Detail";
         var bytes = ExportService.ExportToCsv(BuildExportData(_detailData));
-        await JS.InvokeVoidAsync("downloadFile", $"{name}-Detail.csv",
+        await JS.InvokeVoidAsync("downloadFile", BuildDetailExportFileName("csv"),
             Convert.ToBase64String(bytes), "text/csv");
+    }
+
+    // Filename = "{Company} - {Title}-Detail.{ext}". Company prefix is
+    // dropped when the lookup didn't resolve, so a bad CompanyId never
+    // produces a leading " - " on the filename.
+    private string BuildDetailExportFileName(string ext)
+    {
+        var name = _title ?? "Detail";
+        var prefix = string.IsNullOrWhiteSpace(_companyName) ? string.Empty : $"{_companyName} - ";
+        return $"{prefix}{name}-Detail.{ext}";
     }
 
     // Mirrors what the grid shows: drops columns hidden in the saved report so
@@ -935,14 +956,4 @@
         };
     }
 
-    // Back button — prefer the browser's history stack so we land where the
-    // user came from. Falls back to /reports when there's no prior entry.
-    private async Task GoBack()
-    {
-        var hasHistory = await JS.InvokeAsync<bool>("eval", "window.history.length > 1");
-        if (hasHistory)
-            await JS.InvokeVoidAsync("history.back");
-        else
-            Navigation.NavigateTo("/reports");
-    }
 }

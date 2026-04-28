@@ -565,11 +565,18 @@
 
     // ── Filtered collections ──
 
+    // The library renders InternalName as the primary label when set, falling
+    // back to Name. Sort by the same label so the visible row order matches
+    // alphabetical of what users see — sorting by raw Name produced ordering
+    // that looked random when InternalName disagreed with Name.
+    private static string DisplayLabel(SavedReport r) =>
+        string.IsNullOrWhiteSpace(r.InternalName) ? r.Name : r.InternalName!;
+
     private IEnumerable<SavedReport> FilteredMyReports =>
-        ApplySearch(ApplyCompany(_myReports).OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase));
+        ApplySearch(ApplyCompany(_myReports).OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase));
 
     private IEnumerable<SavedReport> FilteredSharedReports =>
-        ApplySearch(ApplyCompany(_sharedWithMe).OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase));
+        ApplySearch(ApplyCompany(_sharedWithMe).OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase));
 
     private IEnumerable<SavedReport> FilteredRecent =>
         ApplySearch(ApplyCompany(_myReports

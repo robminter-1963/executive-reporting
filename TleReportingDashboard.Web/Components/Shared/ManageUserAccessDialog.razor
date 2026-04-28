@@ -48,7 +48,7 @@
                                            Variant="Variant.Outlined" Margin="Margin.Dense"
                                            Style="min-width: 140px;"
                                            ValueChanged="@(r => ChangeRole(grant, r))">
-                                    @foreach (var r in UserRoles.All)
+                                    @foreach (var r in UserRoles.All.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                                     {
                                         <MudSelectItem T="string" Value="@r">@r</MudSelectItem>
                                     }
@@ -115,7 +115,7 @@
                     <MudSelect T="string" @bind-Value="_grantRole" Label="Role"
                                Variant="Variant.Outlined" Margin="Margin.Dense"
                                Style="min-width: 160px;">
-                        @foreach (var r in UserRoles.All)
+                        @foreach (var r in UserRoles.All.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                         {
                             <MudSelectItem T="string" Value="@r">@r</MudSelectItem>
                         }
@@ -182,7 +182,9 @@
     private IEnumerable<CompanySummary> AvailableCompanies()
     {
         var taken = _access.Select(a => a.CompanyId).ToHashSet();
-        return _companies.Where(c => !taken.Contains(c.Id));
+        return _companies
+            .Where(c => !taken.Contains(c.Id))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task GrantAccess()

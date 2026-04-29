@@ -28,6 +28,30 @@
                         <MudSelectItem Value="@("LEFT JOIN")">LEFT JOIN</MudSelectItem>
                     </MudSelect>
                 </MudItem>
+                @* Source picker — optional but strongly recommended. Drives
+                   primary-table precedence in JoinResolver: when the report's
+                   primary table matches this source, this join wins over any
+                   alternative with the same target. Leaving blank falls back
+                   to legacy "first match" behavior with a soft server warning
+                   at query time. *@
+                <MudItem xs="12" sm="8">
+                    <MudSelect T="string" Value="_selectedSourceKey" ValueChanged="OnSourcePicked"
+                               Label="Source Table"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Clearable
+                               HelperText="Optional. Picks this join when the report's primary table matches.">
+                        @foreach (var entry in _effectiveSourceAliases.OrderBy(BuildAliasLabel, StringComparer.OrdinalIgnoreCase))
+                        {
+                            var key = BuildAliasKey(entry);
+                            <MudSelectItem T="string" Value="@key">@BuildAliasLabel(entry)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField Value="_edited.SourceAlias" Label="Source Alias"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  ReadOnly
+                                  HelperText="Set by the picked Source entry." />
+                </MudItem>
                 <MudItem xs="12" sm="8">
                     @* Target Table is now driven by the connection's Table
                        Aliases catalog — joins can only point at curated
@@ -47,11 +71,27 @@
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="4">
-                    <MudTextField Value="_edited.Alias" Label="Alias"
+                    <MudTextField Value="_edited.Alias" Label="Target Alias"
                                   Variant="Variant.Outlined" Margin="Margin.Dense"
                                   ReadOnly
                                   HelperText="Set by the picked Table Alias entry." />
                 </MudItem>
+                @* Soft validation. SourceAlias == TargetAlias is almost
+                   always a typo — a join targeting the same alias as its
+                   source produces a self-referential ON clause that won't
+                   match anything. Surfaced as info-level so the admin can
+                   override if they really meant it. *@
+                @if (!string.IsNullOrWhiteSpace(_edited.SourceAlias)
+                     && !string.IsNullOrWhiteSpace(_edited.Alias)
+                     && string.Equals(_edited.SourceAlias, _edited.Alias, StringComparison.OrdinalIgnoreCase))
+                {
+                    <MudItem xs="12">
+                        <MudAlert Severity="Severity.Warning" Dense Variant="Variant.Outlined">
+                            Source and Target alias are the same (<strong>@_edited.Alias</strong>) — likely a typo.
+                            A join targeting the same alias as its source can't form a valid ON clause.
+                        </MudAlert>
+                    </MudItem>
+                }
                 <MudItem xs="12">
                     <MudTextField @bind-Value="_edited.OnClause" Label="ON clause"
                                   Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -99,8 +139,14 @@
 
     // Admin-curated table/alias pairs from the Admin → Table Aliases tab,
     // scoped to this connection. Drives the Target Table dropdown so joins
-    // can only point at entries that are already registered.
+    // can only point at entries that are already registered. Includes
+    // primaries — IsPrimary just means "valid report root", not "can't
+    // be joined".
     [Parameter] public IEnumerable<CustomPrimaryTableRecord>? AvailableAliases { get; set; }
+    // Distinct parameter for the Source picker so the two can diverge in
+    // the future (e.g. if Target ever needs filtering again). Today both
+    // receive the same full catalog from SchemaBuilder.OpenJoinDialog.
+    [Parameter] public IEnumerable<CustomPrimaryTableRecord>? AvailableSourceAliases { get; set; }
 
     private SchemaBuilder.JoinEntry _edited = new();
     private string _originalRef = string.Empty;
@@ -110,6 +156,12 @@
     // row), we insert a synthetic entry so the value stays visible/editable.
     private List<CustomPrimaryTableRecord> _effectiveAliases = new();
     private string _selectedAliasKey = string.Empty;
+    // Source picker — usually drawn from the FULL alias catalog (NOT
+    // _effectiveAliases, which excludes primaries — sources are typically
+    // primary tables). Falls back to whatever AvailableAliases provides
+    // when no full source list is supplied.
+    private List<CustomPrimaryTableRecord> _effectiveSourceAliases = new();
+    private string _selectedSourceKey = string.Empty;
 
     private string TargetTableHelperText =>
         _effectiveAliases.Count == 0
@@ -136,6 +188,23 @@
         {
             _edited.TargetTable = match.TableName;
             _edited.Alias = match.Alias ?? string.Empty;
+        }
+    }
+
+    private void OnSourcePicked(string? key)
+    {
+        _selectedSourceKey = key ?? string.Empty;
+        if (string.IsNullOrEmpty(key))
+        {
+            _edited.SourceTable = string.Empty;
+            _edited.SourceAlias = string.Empty;
+            return;
+        }
+        var match = _effectiveSourceAliases.FirstOrDefault(e => BuildAliasKey(e) == key);
+        if (match is not null)
+        {
+            _edited.SourceTable = match.TableName;
+            _edited.SourceAlias = match.Alias ?? string.Empty;
         }
     }
 
@@ -170,7 +239,9 @@
                 OnClause = Join.OnClause,
                 ExtraCondition = Join.ExtraCondition,
                 UseRawSql = Join.UseRawSql,
-                RawSql = Join.RawSql
+                RawSql = Join.RawSql,
+                SourceTable = Join.SourceTable,
+                SourceAlias = Join.SourceAlias
             };
             _originalRef = !string.IsNullOrWhiteSpace(Join.Alias) ? Join.Alias : Join.TargetTable;
         }
@@ -181,6 +252,13 @@
         _effectiveAliases = AvailableAliases is null
             ? new List<CustomPrimaryTableRecord>()
             : AvailableAliases.ToList();
+        // Source picker pulls from the FULL Table Aliases catalog
+        // (AvailableSourceAliases) — primaries included, since a join's
+        // source is typically a primary. Falls back to the target list if
+        // the caller didn't pass a separate source catalog.
+        _effectiveSourceAliases = AvailableSourceAliases is not null
+            ? AvailableSourceAliases.ToList()
+            : new List<CustomPrimaryTableRecord>(_effectiveAliases);
 
         if (!IsNew && !string.IsNullOrWhiteSpace(_edited.TargetTable))
         {
@@ -199,6 +277,28 @@
                 });
             }
             _selectedAliasKey = $"{tableKey}|{aliasKey}";
+        }
+
+        // Mirror the legacy-row injection for the Source picker: if the
+        // join's SourceTable / SourceAlias don't appear in the source list,
+        // synthesize an entry so the saved value survives editing.
+        if (!IsNew && !string.IsNullOrWhiteSpace(_edited.SourceTable))
+        {
+            var srcTableKey = _edited.SourceTable;
+            var srcAliasKey = _edited.SourceAlias ?? string.Empty;
+            var srcExists = _effectiveSourceAliases.Any(a =>
+                string.Equals(a.TableName, srcTableKey, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(a.Alias ?? string.Empty, srcAliasKey, StringComparison.OrdinalIgnoreCase));
+            if (!srcExists)
+            {
+                _effectiveSourceAliases.Insert(0, new CustomPrimaryTableRecord
+                {
+                    Id = Guid.Empty,
+                    TableName = srcTableKey,
+                    Alias = srcAliasKey
+                });
+            }
+            _selectedSourceKey = $"{srcTableKey}|{srcAliasKey}";
         }
     }
 

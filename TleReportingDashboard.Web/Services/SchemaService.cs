@@ -277,7 +277,9 @@ public partial class SchemaService : ISchemaService
                         CodeSetId = f.CodeSetId,
                         RolesRequired = f.RolesRequired,
                         DefaultRedactionValue = f.DefaultRedactionValue,
-                        SqlExpression = f.SqlExpression
+                        SqlExpression = f.SqlExpression,
+                        SourceTable = f.SourceTable,
+                        SourceColumn = f.SourceColumn
                     })
                     .ToList()
             })

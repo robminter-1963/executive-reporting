@@ -47,6 +47,33 @@
                 New reports on this connection start with this primary. Only one row per connection can be the default — saving here will clear any prior default.
             </MudText>
 
+            @* Entity classification + key columns. Optional metadata that
+               describes how this table is keyed — feature consumers (drill-
+               down lookups, distinct-on emitters, etc.) read it later. The
+               type is open-ended at the DB layer so future LOS adapters can
+               register their own values without a schema change. *@
+            <MudDivider />
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                Entity classification (optional)
+            </MudText>
+            <MudSelect T="string?" @bind-Value="_tableType" Label="Table Type"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense Clearable
+                       HelperText="@TableTypeHelperText">
+                <MudSelectItem T="string?" Value="@((string?)null)">(unknown)</MudSelectItem>
+                @foreach (var t in TableTypes.All)
+                {
+                    <MudSelectItem T="string?" Value="@((string?)t)">@TableTypes.Display(t)</MudSelectItem>
+                }
+            </MudSelect>
+            <MudTextField @bind-Value="_primaryColumn" Label="Primary Column"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Placeholder="@PrimaryColumnPlaceholder"
+                          HelperText="The column that identifies the entity (first part of the compound key). Letters, digits, and underscores only." />
+            <MudTextField @bind-Value="_additionalKeyColumns" Label="Additional Key Columns"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Placeholder="@AdditionalKeysPlaceholder"
+                          HelperText="@AdditionalKeysHelperText" />
+
             @* Role-scoped owner fields — the column that identifies "who
                owns a row" varies by role (Loan Officer → loan_officer_id,
                Processor → processor_id, etc). Each row below maps one
@@ -153,6 +180,13 @@
     [Parameter] public bool InitialIsDefaultPrimary { get; set; }
     [Parameter] public bool IsNew { get; set; } = true;
 
+    // Entity-classification metadata. All optional. Null on InitialTableType
+    // means "unclassified"; the dropdown shows "(unknown)" and the column
+    // fields render empty. Caller passes through from CustomPrimaryTableRecord.
+    [Parameter] public string? InitialTableType { get; set; }
+    [Parameter] public string? InitialPrimaryColumn { get; set; }
+    [Parameter] public string? InitialAdditionalKeyColumns { get; set; }
+
     // DB-enumerated tables ("schema.table" strings). Caller (AdminTableAliasesTab)
     // fetches via SchemaBuilderService.GetTablesAsync and passes in.
     [Parameter] public List<string> AvailableTables { get; set; } = new();
@@ -179,7 +213,14 @@
     [Parameter] public EventCallback<(Guid RoleId, string OwnerFieldId)> OnRoleOwnerSet { get; set; }
     [Parameter] public EventCallback<Guid> OnRoleOwnerCleared { get; set; }
 
-    public record EditResult(string TableName, string? Alias, bool IsPrimary, bool IsDefaultPrimary);
+    public record EditResult(
+        string TableName,
+        string? Alias,
+        bool IsPrimary,
+        bool IsDefaultPrimary,
+        string? TableType = null,
+        string? PrimaryColumn = null,
+        string? AdditionalKeyColumns = null);
     public record FieldOption(string Id, string Label);
     public record RoleOption(Guid Id, string Name);
     public record RoleOwnerRow(Guid RoleId, string OwnerFieldId)
@@ -199,6 +240,48 @@
     private Guid? _newRoleId;
     private string? _newFieldId;
 
+    // Entity-classification state. _tableType is bound to the Table Type
+    // dropdown; the two text fields are free-form column names that get
+    // validated server-side on save (alias regex). Helper-text placeholders
+    // adapt to the chosen type so admins see the right convention example.
+    private string? _tableType;
+    private string? _primaryColumn;
+    private string? _additionalKeyColumns;
+
+    private string TableTypeHelperText => _tableType switch
+    {
+        TableTypes.LoanSingle       => "One row per loan (e.g. one main key column).",
+        TableTypes.LoanMultiple     => "Many rows per loan, indexed by an additional key.",
+        TableTypes.BorrowerSingle   => "One row per borrower per loan (loan key + borrower key).",
+        TableTypes.BorrowerMultiple => "Many rows per borrower per loan (loan + borrower + index).",
+        _                           => "Optional. Classify how this table is keyed."
+    };
+
+    private string PrimaryColumnPlaceholder => _tableType switch
+    {
+        TableTypes.LoanSingle       or TableTypes.LoanMultiple
+            or TableTypes.BorrowerSingle or TableTypes.BorrowerMultiple => "LNKEY",
+        _                                                               => "id"
+    };
+
+    private string AdditionalKeysPlaceholder => _tableType switch
+    {
+        TableTypes.LoanSingle       => "(none)",
+        TableTypes.LoanMultiple     => "IDX",
+        TableTypes.BorrowerSingle   => "WHICHBORR",
+        TableTypes.BorrowerMultiple => "WHICHBORR, IDX",
+        _                           => ""
+    };
+
+    private string AdditionalKeysHelperText => _tableType switch
+    {
+        TableTypes.LoanSingle       => "Leave blank — Primary Column alone is unique.",
+        TableTypes.LoanMultiple     => "Comma-separated. Typically just \"IDX\".",
+        TableTypes.BorrowerSingle   => "Comma-separated. Typically just \"WHICHBORR\".",
+        TableTypes.BorrowerMultiple => "Comma-separated, e.g. \"WHICHBORR, IDX\".",
+        _                           => "Comma-separated extra key columns (optional)."
+    };
+
     private string TableHelperText =>
         _effectiveTables.Count == 0
             ? "No tables could be listed from the database. Check the connection."
@@ -212,6 +295,9 @@
         // a contradictory state (default-on + eligible-off).
         _isPrimary = InitialIsPrimary || InitialIsDefaultPrimary;
         _isDefaultPrimary = InitialIsDefaultPrimary;
+        _tableType = InitialTableType;
+        _primaryColumn = InitialPrimaryColumn;
+        _additionalKeyColumns = InitialAdditionalKeyColumns;
         _roleOwners = InitialRoleOwners.Select(r => new RoleOwnerRow(r.RoleId, r.OwnerFieldId)).ToList();
 
         // Copy the caller's list and ensure the current value is present so a
@@ -269,7 +355,10 @@
             _tableName!.Trim(),
             string.IsNullOrWhiteSpace(_alias) ? null : _alias!.Trim(),
             isPrimary,
-            _isDefaultPrimary)));
+            _isDefaultPrimary,
+            string.IsNullOrWhiteSpace(_tableType) ? null : _tableType!.Trim(),
+            string.IsNullOrWhiteSpace(_primaryColumn) ? null : _primaryColumn!.Trim(),
+            string.IsNullOrWhiteSpace(_additionalKeyColumns) ? null : _additionalKeyColumns!.Trim())));
     }
 
     private void Cancel() => MudDialog.Cancel();

@@ -133,6 +133,12 @@
                                    StartIcon="@Icons.Material.Filled.Tab" OnClick="AddTab">
                             Add Tab
                         </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.ViewModule" OnClick="AddSection"
+                                   Disabled="@(ActiveTab is null || _sections.Count >= IMasterDashboardService.MaxSectionsPerTab)"
+                                   title="@(_sections.Count >= IMasterDashboardService.MaxSectionsPerTab ? $"Maximum {IMasterDashboardService.MaxSectionsPerTab} sections per tab" : "Add a new section to this tab")">
+                            Add Section
+                        </MudButton>
                         <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
                                    StartIcon="@Icons.Material.Filled.Save" OnClick="SaveLayout">
                             Save Layout
@@ -175,9 +181,9 @@
                                             ? "outline: 2px dashed #1A73E8; outline-offset: 2px; border-radius: 4px;"
                                             : "")"
                                  @ondragover:preventDefault
-                                 @ondragover="@(() => { if (_editMode && _dragSource >= 0 && t.Id != ActiveTab?.Id) _dropTargetTabId = t.Id; })"
+                                 @ondragover="@(() => { if (_editMode && (_dragSource >= 0 || _sectionDragSource >= 0) && t.Id != ActiveTab?.Id) _dropTargetTabId = t.Id; })"
                                  @ondragleave="@(() => { if (_dropTargetTabId == t.Id) _dropTargetTabId = 0; })"
-                                 @ondrop="@(() => OnTileDropOnTab(t.Id))"
+                                 @ondrop="@(async () => await OnTabStripDrop(t.Id))"
                                  @ondrop:stopPropagation="true">
                                 <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
                                     <span>@t.Label</span>
@@ -220,7 +226,7 @@
                                                  @ondragend="() => { _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0; }"
                                                  @ondragover:preventDefault
                                                  @ondragover="() => { if (_dragSource >= 0 && idx != _dragSource) _dropTarget = idx; }"
-                                                 @ondrop="() => OnTileDrop(idx)">
+                                                 @ondrop="@(async () => await OnTileDrop(idx))">
                                                 @if (_dropTarget == idx && _dragSource != idx)
                                                 {
                                                     <div style="position: absolute; left: -2px; top: 2px; bottom: 2px; width: 3px; background: #1A73E8; border-radius: 2px; z-index: 10;"></div>
@@ -238,8 +244,136 @@
                             @* ── Tile grid ── *@
                             @if (_tiles.Any())
                             {
+                                @* ── Section tab strip ──
+                                   Renders only when this tab has at least one section. Each tab is
+                                   clickable (switches active), drag-and-drop wired (reorder + cross-
+                                   tab move + tile-drop assignment). The "(no section)" pseudo-tab
+                                   surfaces only when at least one tile has SectionId = null —
+                                   matches the v1 header semantics, just relocated into the strip. *@
+                                @if (_sections.Count > 0)
+                                {
+                                    var sectionTabs = new List<(MasterDashboardSection? Section, string Label, int Key)>();
+                                    foreach (var s in _sections) sectionTabs.Add((s, s.Label, s.Id));
+                                    if (_tiles.Any(t => t.SectionId is null))
+                                        sectionTabs.Add((null, "(no section)", 0));
+                                    // Defense-in-depth: if the previously-active section was removed
+                                    // out from under us (e.g. a stale cache), repoint to the first
+                                    // available tab so rendering doesn't show an empty container.
+                                    if (sectionTabs.Count > 0 && sectionTabs.All(st => st.Key != _activeSectionId))
+                                    {
+                                        _activeSectionId = sectionTabs[0].Key;
+                                    }
+
+                                    <div style="display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid #DADCE0; flex-wrap: wrap;">
+                                        @foreach (var st in sectionTabs)
+                                        {
+                                            var stLocal = st;
+                                            var isActiveSec = _activeSectionId == stLocal.Key;
+                                            var sIdx = stLocal.Section is null ? -2 : _sections.IndexOf(stLocal.Section);
+                                            var isSecDropTarget = _editMode && _headerDropTargetIdx == sIdx
+                                                && (_dragSource >= 0 || (_sectionDragSource >= 0 && _sectionDragSource != sIdx));
+                                            var dropBg = _dragSource >= 0 ? "#FFF4E5" : "#E8F0FE";
+                                            var dropOutline = _dragSource >= 0 ? "#F9AB00" : "#1A73E8";
+                                            var tabBaseStyle = isActiveSec
+                                                ? "background: #FFFFFF; border: 1px solid #DADCE0; border-bottom-color: #FFFFFF; position: relative; top: 1px;"
+                                                : "background: #F1F3F4; border: 1px solid transparent;";
+                                            var tabStyle = $"display: flex; align-items: center; gap: 4px; padding: 6px 12px; cursor: pointer; border-radius: 4px 4px 0 0; {tabBaseStyle} "
+                                                         + (isSecDropTarget ? $"outline: 2px dashed {dropOutline}; background: {dropBg};" : string.Empty);
+
+                                            <div style="@tabStyle"
+                                                 @ondragover:preventDefault
+                                                 @ondragover="@(() => { if (_editMode && (_sectionDragSource >= 0 || _dragSource >= 0)) _headerDropTargetIdx = sIdx; })"
+                                                 @ondrop="@(async () => { if (_editMode) await OnHeaderDrop(stLocal.Section); })"
+                                                 @onclick="@(() => SetActiveSection(stLocal.Key))">
+                                                @if (_editMode && stLocal.Section is not null)
+                                                {
+                                                    <span draggable="true"
+                                                          @ondragstart="@(() => _sectionDragSource = sIdx)"
+                                                          @ondragend="@(() => { _sectionDragSource = -1; _headerDropTargetIdx = -1; })"
+                                                          style="cursor: grab; display: inline-flex;"
+                                                          @onclick:stopPropagation="true"
+                                                          title="Drag to reorder sections (or drop on another tab to move)">
+                                                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small" Style="color: #5F6368;" />
+                                                    </span>
+                                                }
+                                                @{
+                                                    var stAlign = stLocal.Section is null
+                                                        ? "left"
+                                                        : (string.IsNullOrEmpty(stLocal.Section!.TitleAlign) ? "left" : stLocal.Section.TitleAlign);
+                                                }
+                                                <span style="@($"font-size: 0.875rem; font-weight: {(isActiveSec ? "600" : "500")}; color: #5F6368; text-align: {stAlign}; min-width: 60px;")">
+                                                    @stLocal.Label
+                                                </span>
+                                            </div>
+                                        }
+                                    </div>
+
+                                    @* Active section's edit-mode controls (rename / delete / align)
+                                       — surfaces under the strip rather than crowding the active tab
+                                       itself. Only renders for real sections; the "(no section)"
+                                       virtual tab has nothing to rename / delete / align. *@
+                                    @if (_editMode)
+                                    {
+                                        var activeSec = _sections.FirstOrDefault(s => s.Id == _activeSectionId);
+                                        if (activeSec is not null)
+                                        {
+                                            var aSecAlign = string.IsNullOrEmpty(activeSec.TitleAlign) ? "left" : activeSec.TitleAlign;
+                                            <div style="display: flex; align-items: center; gap: 6px; padding: 4px 6px; margin-top: 4px;">
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">Section options:</MudText>
+                                                <MudTooltip Text="Align section title left">
+                                                    <MudIconButton Icon="@Icons.Material.Filled.FormatAlignLeft" Size="Size.Small"
+                                                                   Color="@(aSecAlign == "left" ? Color.Primary : Color.Default)"
+                                                                   OnClick="@(() => SetSectionAlign(activeSec, "left"))" />
+                                                </MudTooltip>
+                                                <MudTooltip Text="Align section title center">
+                                                    <MudIconButton Icon="@Icons.Material.Filled.FormatAlignCenter" Size="Size.Small"
+                                                                   Color="@(aSecAlign == "center" ? Color.Primary : Color.Default)"
+                                                                   OnClick="@(() => SetSectionAlign(activeSec, "center"))" />
+                                                </MudTooltip>
+                                                <MudTooltip Text="Align section title right">
+                                                    <MudIconButton Icon="@Icons.Material.Filled.FormatAlignRight" Size="Size.Small"
+                                                                   Color="@(aSecAlign == "right" ? Color.Primary : Color.Default)"
+                                                                   OnClick="@(() => SetSectionAlign(activeSec, "right"))" />
+                                                </MudTooltip>
+                                                <MudTooltip Text="Rename section">
+                                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                                   OnClick="@(() => RenameSection(activeSec))" />
+                                                </MudTooltip>
+                                                <MudTooltip Text="Delete section (tiles move to '(no section)')">
+                                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                                   Color="Color.Error"
+                                                                   OnClick="@(() => RemoveSection(activeSec))" />
+                                                </MudTooltip>
+                                            </div>
+                                        }
+                                    }
+                                }
+
+                                @* Active section's tile indices. When _sections is empty, the active
+                                   selection is irrelevant and every tile renders (matches the pre-
+                                   sections layout exactly). When sections exist, only the active
+                                   one's tiles render — that's the tab-like behavior the admin asked
+                                   for. *@
+                                List<int> activeIndices;
+                                if (_sections.Count == 0)
+                                {
+                                    activeIndices = Enumerable.Range(0, _tiles.Count).ToList();
+                                }
+                                else if (_activeSectionId == 0)
+                                {
+                                    activeIndices = new List<int>();
+                                    for (var i = 0; i < _tiles.Count; i++)
+                                        if (_tiles[i].SectionId is null) activeIndices.Add(i);
+                                }
+                                else
+                                {
+                                    activeIndices = new List<int>();
+                                    for (var i = 0; i < _tiles.Count; i++)
+                                        if (_tiles[i].SectionId == _activeSectionId) activeIndices.Add(i);
+                                }
+
                                 <div class="mt-2" style="display: flex; flex-wrap: wrap; gap: 16px; padding-bottom: 12px;">
-                                    @for (var ti = 0; ti < _tiles.Count; ti++)
+                                    @foreach (var ti in activeIndices)
                                     {
                                         var idx = ti;
                                         var tl = _tiles[ti];
@@ -261,7 +395,7 @@
                                              style="width: @(tl.ColSpan * 60)px; height: @(tl.Height)px; position: relative; min-width: 0; flex-shrink: 1;"
                                              @ondragover:preventDefault
                                              @ondragover="@(() => { if (_editMode && _dragSource >= 0 && idx != _dragSource) { _dropTarget = idx; } })"
-                                             @ondrop="@(() => OnTileDrop(idx))"
+                                             @ondrop="@(async () => await OnTileDrop(idx))"
                                              @oncontextmenu="@(() => ShowTileQuery(tl))"
                                              @oncontextmenu:preventDefault="true">
                                             <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 12px; height: 100%; display: flex; flex-direction: column; overflow: hidden; box-shadow: 7px 7px 9px rgba(0,0,0,0.20), 5px 5px 7px rgba(0,0,0,0.14);">
@@ -299,6 +433,36 @@
                                                                                Color="@(tileAlign == "right" ? Color.Primary : Color.Default)"
                                                                                OnClick="@(() => SetTileAlign(tl, "right"))" />
                                                             </MudTooltip>
+                                                            @* Move-to-section picker — only meaningful when the
+                                                               tab actually has sections. The check icon marks
+                                                               the tile's current bucket so admins can confirm
+                                                               where it lives without opening another tab. *@
+                                                            @if (_sections.Count > 0)
+                                                            {
+                                                                <MudTooltip Text="Move tile to a section" Placement="Placement.Bottom">
+                                                                    <MudMenu Icon="@Icons.Material.Filled.ViewModule" Size="Size.Small"
+                                                                             Dense AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                                                                        <MudMenuItem OnClick="@(() => MoveTileToSection(tl, null))">
+                                                                            @if (tl.SectionId is null)
+                                                                            {
+                                                                                <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Style="margin-right: 4px;" />
+                                                                            }
+                                                                            (no section)
+                                                                        </MudMenuItem>
+                                                                        @foreach (var s in _sections)
+                                                                        {
+                                                                            var sLocal = s;
+                                                                            <MudMenuItem OnClick="@(() => MoveTileToSection(tl, sLocal.Id))">
+                                                                                @if (tl.SectionId == sLocal.Id)
+                                                                                {
+                                                                                    <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Style="margin-right: 4px;" />
+                                                                                }
+                                                                                @sLocal.Label
+                                                                            </MudMenuItem>
+                                                                        }
+                                                                    </MudMenu>
+                                                                </MudTooltip>
+                                                            }
                                                         }
                                                         @if (_tileData.TryGetValue(tl.ReportId, out var tdHeader) && tdHeader.Config is not null
                                                              && !string.IsNullOrEmpty(tdHeader.Config.ChartType))
@@ -354,8 +518,8 @@
                                                 <div class="tile-resize-handle"></div>
                                             }
                                         </div>
-                                    }
-                                </div>
+                                        }
+                                    </div>
                             }
                             else if (!_loading)
                             {
@@ -547,6 +711,17 @@
     // doesn't discard unsaved alignment / resize / removal changes on the prior tab.
     private Dictionary<int, List<MasterDashboardTile>> _tilesByTab = new();
     private Dictionary<int, List<MasterDashboardTile>> _pendingRemovalsByTab = new();
+    // Sections for the active tab. Empty list = legacy "no sections" layout
+    // → tiles render in a single un-headered group (byte-for-byte identical
+    // to the pre-sections rendering). _sectionsByTab parallels _tilesByTab
+    // so tab toggles in edit mode don't refetch sections from the DB.
+    private List<MasterDashboardSection> _sections = new();
+    private Dictionary<int, List<MasterDashboardSection>> _sectionsByTab = new();
+    // Active section within the current tab. 0 = "(no section)" virtual tab
+    // (also the default when no real sections exist). Positive int = a real
+    // section's id. Mirrors the way _activeTabIndex governs which MudTabPanel
+    // shows tile content, but scoped one level deeper.
+    private int _activeSectionId;
     private Dictionary<Guid, TileLoadResult> _tileData = new();
     private Dictionary<Guid, string> _tileErrors = new();
     // Captured query state when a tile errors out at execution. Lets the
@@ -748,6 +923,21 @@
             {
                 _tiles = await MasterService.GetTilesAsync(_companyId, tab.Id);
             }
+            // Sections track the same cached/fresh path as tiles so a tab
+            // toggle in edit mode doesn't discard pending section edits or
+            // burn an extra round-trip when the user already loaded them.
+            if (_sectionsByTab.TryGetValue(tab.Id, out var cachedSections))
+            {
+                _sections = cachedSections;
+            }
+            else
+            {
+                _sections = await MasterService.GetSectionsAsync(tab.Id);
+            }
+            // Default the section-tab strip to the first real section (or 0
+            // for the "(no section)" tab when none exist). Wrapped so any
+            // future cross-call mutation can re-use the same fallback rules.
+            _activeSectionId = ResolveDefaultActiveSectionId();
             _pendingRemovals = _pendingRemovalsByTab.TryGetValue(tab.Id, out var cachedRemovals)
                 ? cachedRemovals
                 : new List<MasterDashboardTile>();
@@ -768,6 +958,7 @@
         if (outgoing is not null)
         {
             _tilesByTab[outgoing.Id] = _tiles;
+            _sectionsByTab[outgoing.Id] = _sections;
             _pendingRemovalsByTab[outgoing.Id] = _pendingRemovals;
         }
         _activeTabIndex = index;
@@ -1035,6 +1226,186 @@
         }
     }
 
+    // ── Section management ──
+    // Mirror of the tab CRUD pattern but scoped to the active tab. Section
+    // drag state is independent from tile drag state (_dragSource/_dropTarget)
+    // so the two interaction surfaces don't interfere.
+
+    private int _sectionDragSource = -1;
+
+    // First real section's id, falling back to 0 (= "(no section)") when
+    // none exist. Used on tab load and after section deletes / moves.
+    private int ResolveDefaultActiveSectionId() =>
+        _sections.Count > 0 ? _sections[0].Id : 0;
+
+    // Setter used by the section-tab click handlers — keeps the underlying
+    // field private so future hooks (per-section preference persistence,
+    // animation, etc.) have a single point to plug into.
+    private void SetActiveSection(int sectionKey)
+    {
+        if (_activeSectionId == sectionKey) return;
+        _activeSectionId = sectionKey;
+        StateHasChanged();
+    }
+
+    // Unified drop-target index for section headers. -1 = none.
+    // -2 = the "(no section)" pseudo-header. Otherwise = index into
+    // _sections. Used for both flavors of drag: section reorder
+    // (existing) and tile-onto-header assignment (V2-3 / V2-6).
+    private int _headerDropTargetIdx = -1;
+
+    private async Task AddSection()
+    {
+        var tab = ActiveTab;
+        if (tab is null) return;
+        // Defense-in-depth: server enforces the same cap and will throw,
+        // but stopping here keeps the snackbar UX consistent with other
+        // client-side guard rails on this page.
+        if (_sections.Count >= IMasterDashboardService.MaxSectionsPerTab)
+        {
+            Snackbar.Add(
+                $"Maximum of {IMasterDashboardService.MaxSectionsPerTab} sections per tab reached.",
+                Severity.Warning);
+            return;
+        }
+        var label = await JS.InvokeAsync<string>("prompt", "Enter a name for the section:", $"Section {_sections.Count + 1}");
+        if (string.IsNullOrWhiteSpace(label)) return;
+        try
+        {
+            var section = await MasterService.AddSectionAsync(tab.Id, label.Trim(), _userEmail);
+            _sections.Add(section);
+            // Auto-switch the section-tab strip onto the new section so the
+            // admin can immediately drop tiles into it / rename / etc.
+            _activeSectionId = section.Id;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to add section: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SetSectionAlign(MasterDashboardSection section, string align)
+    {
+        if (string.Equals(section.TitleAlign, align, StringComparison.OrdinalIgnoreCase)) return;
+        var previous = section.TitleAlign;
+        section.TitleAlign = align;
+        StateHasChanged();
+        try
+        {
+            await MasterService.SetSectionAlignAsync(section.Id, align, _userEmail);
+        }
+        catch (Exception ex)
+        {
+            // Server rejected — revert the optimistic UI change so the
+            // toolbar's checked button matches what's actually persisted.
+            section.TitleAlign = previous;
+            Snackbar.Add($"Failed to set section alignment: {ex.Message}", Severity.Error);
+            StateHasChanged();
+        }
+    }
+
+    private async Task RenameSection(MasterDashboardSection section)
+    {
+        var newName = await JS.InvokeAsync<string>("prompt", "Enter a new name for this section:", section.Label);
+        if (string.IsNullOrWhiteSpace(newName) || newName.Trim() == section.Label) return;
+        try
+        {
+            await MasterService.RenameSectionAsync(section.Id, newName.Trim(), _userEmail);
+            section.Label = newName.Trim();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to rename section: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RemoveSection(MasterDashboardSection section)
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm",
+            $"Remove section \"{section.Label}\"? Tiles in this section will move to the \"(no section)\" group.");
+        if (!ok) return;
+        try
+        {
+            await MasterService.RemoveSectionAsync(section.Id, _userEmail);
+            _sections.Remove(section);
+            // Server cleared section_id on every tile that referenced this
+            // section. Mirror that locally so the next render groups them
+            // under "(no section)" without a refetch.
+            foreach (var t in _tiles)
+                if (t.SectionId == section.Id) t.SectionId = null;
+            // If the deleted section was the active one, fall back to the
+            // first remaining real section, or to "(no section)" (key = 0)
+            // — which is what the orphaned tiles surface under, so the
+            // admin sees them right where they landed.
+            if (_activeSectionId == section.Id)
+            {
+                _activeSectionId = _sections.Count > 0 ? _sections[0].Id : 0;
+            }
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to remove section: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // Unified drop handler for section headers. Branches based on which
+    // drag flavor is currently active:
+    //   • Section drag → delegate to OnSectionDrop (existing reorder).
+    //   • Tile drag    → reassign the dragged tile's SectionId (or NULL
+    //                    when dropped on the "(no section)" header).
+    // Mutually exclusive in practice — tile and section drags can't run
+    // concurrently because each starts only when its own drag handle is
+    // grabbed. Resets _headerDropTargetIdx in all paths so a stale glow
+    // doesn't linger on the next render.
+    private async Task OnHeaderDrop(MasterDashboardSection? targetSection)
+    {
+        _headerDropTargetIdx = -1;
+        if (_sectionDragSource >= 0 && targetSection is not null)
+        {
+            await OnSectionDrop(_sections.IndexOf(targetSection));
+            return;
+        }
+        if (_dragSource >= 0 && _dragSource < _tiles.Count)
+        {
+            var tile = _tiles[_dragSource];
+            var newSectionId = targetSection?.Id;
+            _dragSource = -1;
+            _dropTarget = -1;
+            _dropTargetTabId = 0;
+            await MoveTileToSection(tile, newSectionId);
+        }
+    }
+
+    private async Task OnSectionDrop(int targetIndex)
+    {
+        if (_sectionDragSource < 0 || _sectionDragSource == targetIndex)
+        {
+            _sectionDragSource = -1;
+            _headerDropTargetIdx = -1;
+            return;
+        }
+        var item = _sections[_sectionDragSource];
+        _sections.RemoveAt(_sectionDragSource);
+        var insertAt = targetIndex > _sectionDragSource ? targetIndex - 1 : targetIndex;
+        insertAt = Math.Clamp(insertAt, 0, _sections.Count);
+        _sections.Insert(insertAt, item);
+        for (var i = 0; i < _sections.Count; i++) _sections[i].SortOrder = i;
+        _sectionDragSource = -1;
+        _headerDropTargetIdx = -1;
+        try
+        {
+            await MasterService.UpdateSectionOrderAsync(_sections, _userEmail);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save section order: {ex.Message}", Severity.Error);
+        }
+    }
+
     // ── Tile management ──
 
     private async Task OpenAddDialog()
@@ -1073,16 +1444,21 @@
             return;
         }
 
-        var parameters = new DialogParameters { { "Reports", available } };
+        var parameters = new DialogParameters
+        {
+            { "Reports", available },
+            { "Sections", _sections }
+        };
         var dialog = await DialogService.ShowAsync<AddTileDialog>("Add Report to Dashboard", parameters,
             new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
 
         var result = await dialog.Result;
-        if (result is null || result.Canceled || result.Data is not Guid reportId) return;
+        if (result is null || result.Canceled || result.Data is not AddTileDialog.AddTileResult tileResult) return;
+        var reportId = tileResult.ReportId;
 
         try
         {
-            await MasterService.AddTileAsync(_companyId, tab.Id, reportId, _userEmail);
+            await MasterService.AddTileAsync(_companyId, tab.Id, reportId, _userEmail, sectionId: tileResult.SectionId);
 
             var allTiles = await MasterService.GetTilesAsync(_companyId, tab.Id);
             var newTile = allTiles.FirstOrDefault(t => t.ReportId == reportId);
@@ -1231,7 +1607,33 @@
         tile.TitleAlign = align;
     }
 
-    private void OnTileDrop(int targetIndex)
+    // Move a tile into a different section (or to "(no section)" when
+    // sectionId is null). Persists immediately — unlike align/resize which
+    // wait for Save Layout — because the tile visually jumps to a new
+    // group, and a half-applied state would be confusing if the admin
+    // toggles edit mode without saving.
+    private async Task MoveTileToSection(MasterDashboardTile tile, int? sectionId)
+    {
+        if (tile.SectionId == sectionId) return;
+        try
+        {
+            await MasterService.MoveTileToSectionAsync(tile.Id, sectionId, _userEmail);
+            tile.SectionId = sectionId;
+            // Follow the tile to its new home so the admin sees the move
+            // confirmed visually. Without this auto-switch the tile would
+            // just disappear from the active section's view (since only
+            // one section's tiles render at a time), which feels like a
+            // bug even when it's working correctly.
+            _activeSectionId = sectionId ?? 0;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to move tile: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OnTileDrop(int targetIndex)
     {
         if (_dragSource < 0 || _dragSource == targetIndex)
         {
@@ -1239,12 +1641,102 @@
             return;
         }
 
-        var item = _tiles[_dragSource];
+        // Cross-section drag: when the source and target tiles live in
+        // different sections, the source's SectionId follows the target's
+        // BEFORE the local reorder. Persist immediately via the service
+        // (sort_order is still pending until Save Layout — matches the
+        // existing edit-mode pattern where structural changes are saved
+        // as they happen but visual ordering waits for the button).
+        var sourceTile = _tiles[_dragSource];
+        var targetTile = targetIndex < _tiles.Count ? _tiles[targetIndex] : null;
+        if (targetTile is not null && sourceTile.SectionId != targetTile.SectionId)
+        {
+            try
+            {
+                await MasterService.MoveTileToSectionAsync(sourceTile.Id, targetTile.SectionId, _userEmail);
+                sourceTile.SectionId = targetTile.SectionId;
+                // Match MoveTileToSection's behavior — follow the tile so
+                // the admin sees the result of their drag.
+                _activeSectionId = targetTile.SectionId ?? 0;
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Failed to move tile across sections: {ex.Message}", Severity.Error);
+                _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0;
+                return;
+            }
+        }
+
         _tiles.RemoveAt(_dragSource);
         var insertAt = targetIndex > _dragSource ? targetIndex - 1 : targetIndex;
         insertAt = Math.Clamp(insertAt, 0, _tiles.Count);
-        _tiles.Insert(insertAt, item);
+        _tiles.Insert(insertAt, sourceTile);
         _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0;
+    }
+
+    // Unified tab-strip drop handler. The tab header accepts both flavors
+    // of drag: a tile (existing behavior — moves the single tile) or a
+    // section (V2-5 — moves the section AND every tile under it). Branch
+    // based on which drag source is active.
+    private async Task OnTabStripDrop(int targetTabId)
+    {
+        if (_sectionDragSource >= 0)
+        {
+            await OnSectionDropOnTab(targetTabId);
+            return;
+        }
+        if (_dragSource >= 0)
+        {
+            await OnTileDropOnTab(targetTabId);
+            return;
+        }
+        // Neither drag flavor active — clear drop highlight and bail.
+        _dropTargetTabId = 0;
+    }
+
+    // Cross-tab section move. Mirrors OnTileDropOnTab but for a section
+    // and all of its tiles. The service handles both the section row and
+    // every referencing tile in one transaction; locally we drop the
+    // moved section + its tiles from the current view (the user stays on
+    // the source tab; the section is just gone from here).
+    private async Task OnSectionDropOnTab(int targetTabId)
+    {
+        var activeId = ActiveTab?.Id ?? 0;
+        var sourceIdx = _sectionDragSource;
+        _sectionDragSource = -1;
+        _headerDropTargetIdx = -1;
+        _dropTargetTabId = 0;
+
+        if (sourceIdx < 0 || sourceIdx >= _sections.Count) return;
+        if (targetTabId == activeId) return;
+
+        var section = _sections[sourceIdx];
+        try
+        {
+            await MasterService.MoveSectionToTabAsync(section.Id, targetTabId, _userEmail);
+            // Snackbar message uses the live tile count BEFORE we mutate
+            // _tiles so admins see how many tiles followed the section.
+            var movedTileCount = _tiles.Count(t => t.SectionId == section.Id);
+            _sections.RemoveAt(sourceIdx);
+            _tiles.RemoveAll(t => t.SectionId == section.Id);
+            // Drop cached per-tab state for both the source and target so
+            // re-entering either tab refetches fresh — server-side counts
+            // and ordering may have shifted under both.
+            _tilesByTab.Remove(activeId);
+            _tilesByTab.Remove(targetTabId);
+            _sectionsByTab.Remove(activeId);
+            _sectionsByTab.Remove(targetTabId);
+            var targetLabel = _tabs.FirstOrDefault(x => x.Id == targetTabId)?.Label ?? "another tab";
+            Snackbar.Add(
+                movedTileCount > 0
+                    ? $"Moved section \"{section.Label}\" ({movedTileCount} tile{(movedTileCount == 1 ? string.Empty : "s")}) to {targetLabel}."
+                    : $"Moved section \"{section.Label}\" to {targetLabel}.",
+                Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to move section: {ex.Message}", Severity.Error);
+        }
     }
 
     // Cross-tab move. Fired when the user drags a tile over a tab header

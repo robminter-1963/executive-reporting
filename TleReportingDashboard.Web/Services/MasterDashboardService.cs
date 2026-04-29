@@ -55,6 +55,24 @@ public class MasterDashboardService : IMasterDashboardService
         return result is Guid g ? g : null;
     }
 
+    // Resolve the company that owns a section — via its parent tab, since
+    // sections inherit company scope through tab_id rather than carrying it
+    // directly. Used by every section write path so authorization can be
+    // verified without trusting a caller-supplied companyId.
+    private async Task<Guid?> ResolveCompanyForSectionAsync(int sectionId)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand(@"
+            SELECT t.company_id
+            FROM EMPOWER.RPT_master_dashboard_sections s
+            INNER JOIN EMPOWER.RPT_master_dashboard_tabs t ON t.id = s.tab_id
+            WHERE s.id = @Id", conn);
+        cmd.Parameters.Add(new SqlParameter("@Id", sectionId));
+        var result = await cmd.ExecuteScalarAsync();
+        return result is Guid g ? g : null;
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // Tabs
     // ════════════════════════════════════════════════════════════════════════
@@ -194,7 +212,8 @@ public class MasterDashboardService : IMasterDashboardService
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
         await using var cmd = new SqlCommand(@"
-            SELECT t.id, t.company_id, t.tab_id, t.report_id, r.name, t.sort_order, t.col_span, t.height, t.title_align
+            SELECT t.id, t.company_id, t.tab_id, t.report_id, r.name,
+                   t.sort_order, t.col_span, t.height, t.title_align, t.section_id
             FROM EMPOWER.RPT_master_dashboard_tiles t
             INNER JOIN EMPOWER.RPT_saved_reports r ON r.id = t.report_id
             WHERE t.company_id = @CompanyId AND t.tab_id = @TabId
@@ -215,10 +234,278 @@ public class MasterDashboardService : IMasterDashboardService
                 SortOrder = reader.GetInt32(5),
                 ColSpan = reader.GetInt32(6),
                 Height = reader.GetInt32(7),
-                TitleAlign = reader.IsDBNull(8) ? "left" : reader.GetString(8)
+                TitleAlign = reader.IsDBNull(8) ? "left" : reader.GetString(8),
+                SectionId = reader.IsDBNull(9) ? null : reader.GetInt32(9)
             });
         }
         return tiles;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Sections
+    // ════════════════════════════════════════════════════════════════════════
+
+    public async Task<List<MasterDashboardSection>> GetSectionsAsync(int tabId)
+    {
+        var sections = new List<MasterDashboardSection>();
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand(@"
+            SELECT id, tab_id, label, sort_order, title_align, collapsed
+            FROM EMPOWER.RPT_master_dashboard_sections
+            WHERE tab_id = @TabId
+            ORDER BY sort_order", conn);
+        cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            sections.Add(new MasterDashboardSection
+            {
+                Id = reader.GetInt32(0),
+                TabId = reader.GetInt32(1),
+                Label = reader.GetString(2),
+                SortOrder = reader.GetInt32(3),
+                TitleAlign = reader.IsDBNull(4) ? "left" : reader.GetString(4),
+                Collapsed = !reader.IsDBNull(5) && reader.GetBoolean(5)
+            });
+        }
+        return sections;
+    }
+
+    public async Task<MasterDashboardSection> AddSectionAsync(int tabId, string label, string? userEmail)
+    {
+        var companyId = await ResolveCompanyForTabAsync(tabId)
+            ?? throw new InvalidOperationException($"Tab {tabId} not found.");
+        EnsureCompanyAdmin(companyId, userEmail);
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        // 10/tab cap enforced server-side so a bypassed UI can't blow past it.
+        await using (var countCmd = new SqlCommand(
+            "SELECT COUNT(*) FROM EMPOWER.RPT_master_dashboard_sections WHERE tab_id = @TabId", conn))
+        {
+            countCmd.Parameters.Add(new SqlParameter("@TabId", tabId));
+            var count = (int)(await countCmd.ExecuteScalarAsync())!;
+            if (count >= IMasterDashboardService.MaxSectionsPerTab)
+                throw new InvalidOperationException(
+                    $"This tab already has the maximum of {IMasterDashboardService.MaxSectionsPerTab} sections.");
+        }
+
+        await using var cmd = new SqlCommand(@"
+            INSERT INTO EMPOWER.RPT_master_dashboard_sections (tab_id, label, sort_order)
+            OUTPUT INSERTED.id
+            VALUES (@TabId, @Label,
+                ISNULL((SELECT MAX(sort_order) + 1
+                          FROM EMPOWER.RPT_master_dashboard_sections
+                         WHERE tab_id = @TabId), 0))", conn);
+        cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
+        cmd.Parameters.Add(new SqlParameter("@Label", label));
+        var newId = (int)(await cmd.ExecuteScalarAsync())!;
+        return new MasterDashboardSection { Id = newId, TabId = tabId, Label = label };
+    }
+
+    public async Task RenameSectionAsync(int sectionId, string label, string? userEmail)
+    {
+        var companyId = await ResolveCompanyForSectionAsync(sectionId);
+        if (companyId is null) return;
+        EnsureCompanyAdmin(companyId.Value, userEmail);
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand(
+            "UPDATE EMPOWER.RPT_master_dashboard_sections SET label = @Label WHERE id = @Id", conn);
+        cmd.Parameters.Add(new SqlParameter("@Label", label));
+        cmd.Parameters.Add(new SqlParameter("@Id", sectionId));
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async Task UpdateSectionOrderAsync(List<MasterDashboardSection> sections, string? userEmail)
+    {
+        if (sections is null || sections.Count == 0) return;
+        var companyId = await ResolveCompanyForSectionAsync(sections[0].Id);
+        if (companyId is null) return;
+        EnsureCompanyAdmin(companyId.Value, userEmail);
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        foreach (var s in sections)
+        {
+            await using var cmd = new SqlCommand(@"
+                UPDATE EMPOWER.RPT_master_dashboard_sections
+                   SET sort_order = @Order, label = @Label, title_align = @Align
+                 WHERE id = @Id", conn);
+            cmd.Parameters.Add(new SqlParameter("@Order", s.SortOrder));
+            cmd.Parameters.Add(new SqlParameter("@Label", s.Label));
+            cmd.Parameters.Add(new SqlParameter("@Align", string.IsNullOrEmpty(s.TitleAlign) ? "left" : s.TitleAlign));
+            cmd.Parameters.Add(new SqlParameter("@Id", s.Id));
+            await cmd.ExecuteNonQueryAsync();
+        }
+    }
+
+    public async Task RemoveSectionAsync(int sectionId, string? userEmail)
+    {
+        var companyId = await ResolveCompanyForSectionAsync(sectionId);
+        if (companyId is null) return;
+        EnsureCompanyAdmin(companyId.Value, userEmail);
+
+        // Two-step under one transaction. The migration uses NO ACTION on
+        // the tiles.section_id FK (avoids the SQL Server multi-cascade-path
+        // warning), so the app has to clear references before deleting the
+        // section row. Tiles fall back to section_id = NULL → render under
+        // "(no section)".
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+
+        await using (var cmd1 = new SqlCommand(
+            "UPDATE EMPOWER.RPT_master_dashboard_tiles SET section_id = NULL WHERE section_id = @Id",
+            conn, (SqlTransaction)tx))
+        {
+            cmd1.Parameters.Add(new SqlParameter("@Id", sectionId));
+            await cmd1.ExecuteNonQueryAsync();
+        }
+
+        await using (var cmd2 = new SqlCommand(
+            "DELETE FROM EMPOWER.RPT_master_dashboard_sections WHERE id = @Id",
+            conn, (SqlTransaction)tx))
+        {
+            cmd2.Parameters.Add(new SqlParameter("@Id", sectionId));
+            await cmd2.ExecuteNonQueryAsync();
+        }
+
+        await tx.CommitAsync();
+    }
+
+    public async Task SetSectionCollapsedAsync(int sectionId, bool collapsed, string? userEmail)
+    {
+        var companyId = await ResolveCompanyForSectionAsync(sectionId);
+        if (companyId is null) return;
+        EnsureCompanyAdmin(companyId.Value, userEmail);
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand(
+            "UPDATE EMPOWER.RPT_master_dashboard_sections SET collapsed = @Collapsed WHERE id = @Id", conn);
+        cmd.Parameters.Add(new SqlParameter("@Collapsed", collapsed));
+        cmd.Parameters.Add(new SqlParameter("@Id", sectionId));
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async Task SetSectionAlignAsync(int sectionId, string align, string? userEmail)
+    {
+        var companyId = await ResolveCompanyForSectionAsync(sectionId);
+        if (companyId is null) return;
+        EnsureCompanyAdmin(companyId.Value, userEmail);
+
+        // Whitelist the value rather than passing through whatever the
+        // caller supplied — title_align is a varchar(10) column, but the
+        // semantics only support left/center/right and we don't want stray
+        // values silently breaking the CSS text-align mapping later.
+        var normalized = align?.ToLowerInvariant() switch
+        {
+            "center" => "center",
+            "right" => "right",
+            _ => "left"
+        };
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand(
+            "UPDATE EMPOWER.RPT_master_dashboard_sections SET title_align = @Align WHERE id = @Id", conn);
+        cmd.Parameters.Add(new SqlParameter("@Align", normalized));
+        cmd.Parameters.Add(new SqlParameter("@Id", sectionId));
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async Task MoveSectionToTabAsync(int sectionId, int targetTabId, string? userEmail)
+    {
+        var sourceCompanyId = await ResolveCompanyForSectionAsync(sectionId);
+        if (sourceCompanyId is null) return;
+        EnsureCompanyAdmin(sourceCompanyId.Value, userEmail);
+
+        var targetCompanyId = await ResolveCompanyForTabAsync(targetTabId);
+        if (targetCompanyId is null || targetCompanyId.Value != sourceCompanyId.Value)
+            throw new InvalidOperationException(
+                "Cannot move a section to a tab that belongs to a different company.");
+
+        // Two updates under one transaction:
+        //  (1) Reseat the section onto the target tab and append it at
+        //      the end of that tab's section list.
+        //  (2) Reseat every tile that referenced this section. Tiles get
+        //      fresh sort_order values at the end of the target tab,
+        //      preserving their relative order via ROW_NUMBER().
+        // Doing both in one transaction guarantees a half-moved section
+        // (rows referencing tab A while the section sits on tab B) can
+        // never persist if either statement fails.
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+
+        await using (var cmd1 = new SqlCommand(@"
+            UPDATE EMPOWER.RPT_master_dashboard_sections
+            SET tab_id = @TargetTabId,
+                sort_order = ISNULL((SELECT MAX(sort_order) + 1
+                                       FROM EMPOWER.RPT_master_dashboard_sections
+                                       WHERE tab_id = @TargetTabId), 0)
+            WHERE id = @SectionId", conn, (SqlTransaction)tx))
+        {
+            cmd1.Parameters.Add(new SqlParameter("@TargetTabId", targetTabId));
+            cmd1.Parameters.Add(new SqlParameter("@SectionId", sectionId));
+            await cmd1.ExecuteNonQueryAsync();
+        }
+
+        await using (var cmd2 = new SqlCommand(@"
+            WITH tiles_to_move AS (
+                SELECT id, ROW_NUMBER() OVER (ORDER BY sort_order) AS rn
+                FROM EMPOWER.RPT_master_dashboard_tiles
+                WHERE section_id = @SectionId
+            ),
+            target_max AS (
+                SELECT ISNULL(MAX(sort_order), -1) AS m
+                FROM EMPOWER.RPT_master_dashboard_tiles
+                WHERE tab_id = @TargetTabId
+            )
+            UPDATE t
+            SET t.tab_id = @TargetTabId,
+                t.sort_order = (SELECT m FROM target_max) + ttm.rn
+            FROM EMPOWER.RPT_master_dashboard_tiles t
+            INNER JOIN tiles_to_move ttm ON ttm.id = t.id", conn, (SqlTransaction)tx))
+        {
+            cmd2.Parameters.Add(new SqlParameter("@SectionId", sectionId));
+            cmd2.Parameters.Add(new SqlParameter("@TargetTabId", targetTabId));
+            await cmd2.ExecuteNonQueryAsync();
+        }
+
+        await tx.CommitAsync();
+    }
+
+    public async Task MoveTileToSectionAsync(int tileId, int? sectionId, string? userEmail)
+    {
+        var tileCompanyId = await ResolveCompanyForTileAsync(tileId);
+        if (tileCompanyId is null) return;
+        EnsureCompanyAdmin(tileCompanyId.Value, userEmail);
+
+        // Cross-company guard: when assigning to a section, verify it lives
+        // under a tab in the same company as the tile. Without this, an admin
+        // of company A could pin a tile of A onto a section of company B by
+        // guessing ids — broken auth even if the visual UI never offers it.
+        if (sectionId is int sid)
+        {
+            var sectionCompanyId = await ResolveCompanyForSectionAsync(sid);
+            if (sectionCompanyId is null || sectionCompanyId.Value != tileCompanyId.Value)
+                throw new InvalidOperationException(
+                    "Cannot move a tile into a section that belongs to a different company.");
+        }
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand(
+            "UPDATE EMPOWER.RPT_master_dashboard_tiles SET section_id = @SectionId WHERE id = @Id", conn);
+        cmd.Parameters.Add(new SqlParameter("@SectionId", (object?)sectionId ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@Id", tileId));
+        await cmd.ExecuteNonQueryAsync();
     }
 
     public async Task<List<SavedReport>> GetAvailableReportsAsync(Guid companyId)
@@ -260,19 +547,38 @@ public class MasterDashboardService : IMasterDashboardService
         return reports;
     }
 
-    public async Task AddTileAsync(Guid companyId, int tabId, Guid reportId, string? userEmail, int colSpan = 12)
+    public async Task AddTileAsync(Guid companyId, int tabId, Guid reportId, string? userEmail, int colSpan = 12, int? sectionId = null)
     {
         EnsureCompanyAdmin(companyId, userEmail);
+
+        // Defensive: when a section was specified, verify it lives on the
+        // same tab the tile is being inserted into. Without this check, an
+        // admin could pin a tile under a section belonging to a different
+        // tab (or different company entirely) by guessing ids — broken
+        // auth even when the visual UI never offers the choice.
+        if (sectionId is int sid)
+        {
+            await using var verifyConn = new SqlConnection(_connectionString);
+            await verifyConn.OpenAsync();
+            await using var verifyCmd = new SqlCommand(
+                "SELECT tab_id FROM EMPOWER.RPT_master_dashboard_sections WHERE id = @Id", verifyConn);
+            verifyCmd.Parameters.Add(new SqlParameter("@Id", sid));
+            var sectionTabIdObj = await verifyCmd.ExecuteScalarAsync();
+            var sectionTabId = sectionTabIdObj is int v ? (int?)v : null;
+            if (sectionTabId is null || sectionTabId.Value != tabId)
+                throw new InvalidOperationException(
+                    "Cannot add a tile under a section that doesn't belong to the chosen tab.");
+        }
 
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
         await using var cmd = new SqlCommand(@"
-            INSERT INTO EMPOWER.RPT_master_dashboard_tiles (company_id, source_company_id, tab_id, report_id, sort_order, col_span, height)
+            INSERT INTO EMPOWER.RPT_master_dashboard_tiles (company_id, source_company_id, tab_id, report_id, sort_order, col_span, height, section_id)
             SELECT @CompanyId, @CompanyId, @TabId, @ReportId,
                    ISNULL((SELECT MAX(sort_order) + 1
                              FROM EMPOWER.RPT_master_dashboard_tiles
                             WHERE company_id = @CompanyId AND tab_id = @TabId), 0),
-                   @ColSpan, 500
+                   @ColSpan, 500, @SectionId
             WHERE NOT EXISTS (
                 SELECT 1 FROM EMPOWER.RPT_master_dashboard_tiles
                 WHERE company_id = @CompanyId AND tab_id = @TabId AND report_id = @ReportId
@@ -281,6 +587,7 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
         cmd.Parameters.Add(new SqlParameter("@ReportId", reportId));
         cmd.Parameters.Add(new SqlParameter("@ColSpan", colSpan));
+        cmd.Parameters.Add(new SqlParameter("@SectionId", (object?)sectionId ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync();
     }
 

@@ -207,9 +207,15 @@
                         </MudButton>
                         @if (_selectedTable is not null)
                         {
+                            @* Null-conditional on FullName guards a Blazor
+                               render-timing race: OnClose nulls _selectedTable,
+                               and MudChip's render fragment can dereference
+                               this on a later pass after the @if check has
+                               already kicked the body out. Matches the
+                               defensive pattern on line ~250. *@
                             <MudChip T="string" Variant="Variant.Filled" Color="Color.Info" Size="Size.Small"
                                      OnClose="ClearSelectedTable">
-                                @_selectedTable.FullName
+                                @_selectedTable?.FullName
                             </MudChip>
                         }
                     </MudStack>
@@ -454,7 +460,28 @@
                                         }
                                     </CellTemplate>
                                 </TemplateColumn>
-                                <TemplateColumn T="JoinEntry" title="Target Table" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
+                                @* Source columns expose the parent table this join hangs off
+                                   so admins can scan precedence at a glance. Empty cells
+                                   (legacy joins with no source set) trigger the soft-warning
+                                   tooltip in JoinResolver at query time. *@
+                                <TemplateColumn T="JoinEntry" title="Source Table" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        @if (!string.IsNullOrWhiteSpace(context.Item.SourceTable))
+                                        {
+                                            <MudText Typo="Typo.body2">@context.Item.SourceTable</MudText>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-style: italic;">(unset)</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title="Source Alias" HeaderStyle="width: 8%;" CellStyle="width: 8%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.SourceAlias</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title="Target Table" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
                                     <CellTemplate>
                                         <MudText Typo="Typo.body2">@context.Item.TargetTable</MudText>
                                         @if (!string.IsNullOrWhiteSpace(context.Item.Alias))
@@ -1275,6 +1302,13 @@
         var sql = join.Sql.Trim();
         var entry = new JoinEntry { Id = join.Id };
 
+        // Hydrate the explicit source/target fields up front. Anything else
+        // below (regex parse from SQL) only fills in the legacy gaps so the
+        // grid can show TargetTable / Alias for joins that pre-date these
+        // fields. Explicit values always win when set.
+        entry.SourceTable = join.SourceTable ?? string.Empty;
+        entry.SourceAlias = join.SourceAlias ?? string.Empty;
+
         // Detect nested/complex joins (multiple JOINs in one definition) — use raw SQL mode
         var joinCount = System.Text.RegularExpressions.Regex.Matches(sql, @"\bJOIN\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
         if (joinCount > 1)
@@ -1330,6 +1364,15 @@
 
         entry.OnClause = string.Join(" ", onParts);
         entry.ExtraCondition = string.Join(" ", andParts);
+
+        // Explicit JoinDefinition.TargetTable/TargetAlias win over the
+        // regex-parsed values if both are present. This lets a saved join
+        // re-open with the same target the admin originally picked even
+        // when the SQL was edited by hand and parsed slightly differently.
+        if (!string.IsNullOrWhiteSpace(join.TargetTable))
+            entry.TargetTable = join.TargetTable;
+        if (!string.IsNullOrWhiteSpace(join.TargetAlias))
+            entry.Alias = join.TargetAlias;
 
         return entry;
     }
@@ -1802,7 +1845,14 @@
             { "Join", prefilled },
             { "IsNew", isNew },
             { "ConnectionType", CurrentConnectionType },
-            { "AvailableAliases", _tableAliases.Where(t => !t.IsPrimary) }
+            // Both pickers now use the full Table Aliases catalog. The
+            // IsPrimary flag means "valid report root" — it doesn't
+            // preclude the table being a join target on a different
+            // report. account can be primary on one report and a join
+            // target ("lead → account") on another, so filtering primaries
+            // out of Target was hiding legitimate options from admins.
+            { "AvailableAliases", _tableAliases },
+            { "AvailableSourceAliases", _tableAliases }
         };
         var dialog = await DialogService.ShowAsync<JoinEditDialog>(
             isNew ? "Add Join" : "Edit Join", parameters,
@@ -1828,6 +1878,8 @@
             join.ExtraCondition = edited.ExtraCondition;
             join.UseRawSql = edited.UseRawSql;
             join.RawSql = edited.RawSql;
+            join.SourceTable = edited.SourceTable;
+            join.SourceAlias = edited.SourceAlias;
 
             // If the alias/target reference changed, update any fields that pointed at the old reference
             if (!string.IsNullOrWhiteSpace(res.OriginalRef) &&
@@ -1893,7 +1945,19 @@
                     new { Id = "custom_range", Label = "Custom Range", SqlTemplate = (string?)null }
                 }
             },
-            Joins = _joins.Select(j => new { j.Id, Sql = j.BuildSql() }),
+            // Carry the explicit Source/Target metadata through the export
+            // JSON so JoinResolver can apply primary-table precedence on the
+            // server. Nulled out for legacy joins that haven't been touched
+            // since these fields were introduced — keeps the JSON tidy.
+            Joins = _joins.Select(j => new
+            {
+                j.Id,
+                Sql = j.BuildSql(),
+                SourceTable = string.IsNullOrWhiteSpace(j.SourceTable) ? null : j.SourceTable,
+                SourceAlias = string.IsNullOrWhiteSpace(j.SourceAlias) ? null : j.SourceAlias,
+                TargetTable = string.IsNullOrWhiteSpace(j.TargetTable) ? null : j.TargetTable,
+                TargetAlias = string.IsNullOrWhiteSpace(j.Alias) ? null : j.Alias
+            }),
             Fields = _fields.Select(f => BuildFieldOutput(f)),
             Lookups = _lookups.Select(lu =>
             {
@@ -2224,6 +2288,11 @@
         public string ExtraCondition { get; set; } = string.Empty;
         public bool UseRawSql { get; set; }
         public string RawSql { get; set; } = string.Empty;
+        // Optional. The parent table this join depends on. When set, the
+        // query builder picks this join in preference to others targeting
+        // the same table whenever the report's primary table matches.
+        public string SourceTable { get; set; } = string.Empty;
+        public string SourceAlias { get; set; } = string.Empty;
 
         public string BuildSql()
         {

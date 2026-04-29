@@ -111,7 +111,28 @@ public sealed partial class SqlEmitter : IQueryPipeline
         // into (table, alias) so JoinResolver treats fields referencing the
         // alias as "on the primary" and skips the join lookup for them.
         var (primaryName, primaryAlias) = PrimaryTableRef.Parse(request.PrimaryTable);
-        var joins = JoinResolver.ResolveJoins(allReferencedFields, schema.Joins, primaryName, primaryAlias);
+        // Warnings feed the regular log stream — soft messages like "join X
+        // has no SourceAlias so primary-table precedence couldn't apply"
+        // surface here so admins can spot them via standard log search.
+        var joins = JoinResolver.ResolveJoins(allReferencedFields, schema.Joins, primaryName, primaryAlias,
+            warnings: msg => _logger.LogWarning("JoinResolver: {Message}", msg));
+
+        // Diagnostic — always emitted at Error level so it bypasses the
+        // default Serilog filter (which is set to "Error" in appsettings).
+        // Lists the joins the resolver picked plus the primary so admins
+        // can verify multi-hop paths got assembled correctly without
+        // having to enable Warning-level logging globally. Remove or
+        // demote to Information once the resolver is trusted.
+        _logger.LogError(
+            "JoinResolver diagnostic — Primary: {Primary} (alias {Alias}) | Required: {Required} | Selected joins ({Count}): {JoinIds}",
+            primaryName,
+            primaryAlias ?? "(none)",
+            string.Join(", ", allReferencedFields
+                .Where(f => string.IsNullOrWhiteSpace(f.SqlExpression))
+                .Select(f => f.SourceTable)
+                .Distinct(StringComparer.OrdinalIgnoreCase)),
+            joins.Count,
+            string.Join(", ", joins.Select(j => j.Id)));
 
         // Stage 3: Enforce redaction
         var projectedColumns = RedactionEnforcer.EnforceRedaction(resolvedFields, userRoles);

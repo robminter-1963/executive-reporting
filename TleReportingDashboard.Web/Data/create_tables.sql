@@ -254,10 +254,31 @@ CREATE TABLE EMPOWER.RPT_master_dashboard_tabs (
 CREATE INDEX IX_master_tabs_user               ON EMPOWER.RPT_master_dashboard_tabs (user_id);
 CREATE INDEX IX_master_dashboard_tabs_company_user ON EMPOWER.RPT_master_dashboard_tabs (company_id, user_id);
 
+-- ── master_dashboard_sections ────────────────────────────────────────────
+-- Optional sub-grouping under each tab. Tiles can either belong to a section
+-- (section_id set on the tile) or render under a "(no section)" header for
+-- the un-grouped bucket. Tab cascade-deletes its sections; tile.section_id
+-- uses NO ACTION because the application clears references in
+-- RemoveSectionAsync before deleting the row (avoids the SQL Server multi-
+-- cascade-path warning when a tab delete could reach tiles via two paths).
+CREATE TABLE EMPOWER.RPT_master_dashboard_sections (
+    id          INT IDENTITY(1,1) NOT NULL
+                CONSTRAINT PK_master_dashboard_sections PRIMARY KEY,
+    tab_id      INT             NOT NULL,
+    label       NVARCHAR(100)   NOT NULL,
+    sort_order  INT             NOT NULL,
+    title_align VARCHAR(10)     NOT NULL CONSTRAINT DF_master_dashboard_sections_align     DEFAULT('left'),
+    collapsed   BIT             NOT NULL CONSTRAINT DF_master_dashboard_sections_collapsed DEFAULT(0),
+    CONSTRAINT FK_master_dashboard_sections_tab
+        FOREIGN KEY (tab_id) REFERENCES EMPOWER.RPT_master_dashboard_tabs(id) ON DELETE CASCADE
+);
+CREATE INDEX IX_master_dashboard_sections_tab_sort ON EMPOWER.RPT_master_dashboard_sections (tab_id, sort_order);
+
 -- ── master_dashboard_tiles ───────────────────────────────────────────────
 -- Per-user master dashboard layout: which reports appear and in what order/size.
 -- `source_company_id` is the company whose data the tile draws from (may differ
 -- from the dashboard's owning company_id for cross-company dashboards).
+-- `section_id` is nullable: NULL = render under the "(no section)" header.
 CREATE TABLE EMPOWER.RPT_master_dashboard_tiles (
     id                INT IDENTITY(1,1) PRIMARY KEY,
     company_id        UNIQUEIDENTIFIER NOT NULL
@@ -268,6 +289,9 @@ CREATE TABLE EMPOWER.RPT_master_dashboard_tiles (
                       DEFAULT '00000000-0000-0000-0000-000000000001',
     user_id           NVARCHAR(128)        NOT NULL,
     tab_id            INT                  NOT NULL DEFAULT 0,
+    section_id        INT                  NULL
+                      CONSTRAINT FK_master_dashboard_tiles_section
+                      REFERENCES EMPOWER.RPT_master_dashboard_sections(id),
     report_id         UNIQUEIDENTIFIER     NOT NULL,
     sort_order        INT                  NOT NULL DEFAULT 0,
     col_span          INT                  NOT NULL DEFAULT 12,
@@ -277,6 +301,7 @@ CREATE TABLE EMPOWER.RPT_master_dashboard_tiles (
 );
 CREATE INDEX IX_master_tiles_user                     ON EMPOWER.RPT_master_dashboard_tiles (user_id);
 CREATE INDEX IX_master_dashboard_tiles_company_tab    ON EMPOWER.RPT_master_dashboard_tiles (company_id, tab_id);
+CREATE INDEX IX_master_dashboard_tiles_section        ON EMPOWER.RPT_master_dashboard_tiles (section_id);
 
 -- ── schema_config ────────────────────────────────────────────────────────
 -- Per-company JSON blob holding the full SchemaConfig (fields, joins, lookups,

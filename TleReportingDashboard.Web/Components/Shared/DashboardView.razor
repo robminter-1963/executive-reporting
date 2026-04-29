@@ -1,6 +1,7 @@
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
+@inject IDialogService DialogService
 
 @if (Data is not null && Data.Columns.Any())
 {
@@ -55,6 +56,16 @@
                         <MudMenuItem OnClick="() => AddExtraDimension(fid)">@col.Label</MudMenuItem>
                     }
                 </MudMenu>
+
+                @* Calculated column — formula in terms of OTHER columns, evaluated
+                   client-side per group. Examples: "[Abandoned] / [Calls] * 100",
+                   "[Sum of LoanAmount] / [Count]". See CalculatedColumnEvaluator
+                   for the supported syntax. *@
+                <MudButton StartIcon="@Icons.Material.Filled.Calculate" Variant="Variant.Text"
+                           Color="Color.Tertiary" Dense Size="Size.Small"
+                           OnClick="@(() => OpenCalcDialog(null))">
+                    + Calc
+                </MudButton>
 
                 <MudSelect T="string" @bind-Value="_chartTypeStr" @bind-Value:after="BuildSummary"
                            Label="Chart" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
@@ -378,6 +389,43 @@
                                                         </th>
                                                     }
                                                 }
+                                                else if (ck.StartsWith("calc:"))
+                                                {
+                                                    var ccKey = ck[5..];
+                                                    var cc = _calcColumns.FirstOrDefault(c => c.Key == ccKey);
+                                                    if (cc is not null)
+                                                    {
+                                                        var ccRef = cc;
+                                                        var a = GetAlign($"calc_{cc.Key}", "right");
+                                                        // Width tracks DataType the same way every other column does.
+                                                        var ccWidth = FixedColumnWidthPx(cc.DataType ?? string.Empty);
+                                                        if (ccWidth == 0) ccWidth = 110;
+                                                        <th class="@SortHeaderClass(ck)" style="width: @(ccWidth)px; @AlignToCss(a)"
+                                                            @onclick="@(() => ToggleGridSort(ck))"
+                                                            title="@($"Formula: {ccRef.Formula}")">
+                                                            <span class="dash-th-inner">
+                                                                <EditableHeader Label="@GetLabel($"calc_{ccRef.Key}", ccRef.Label)"
+                                                                                OnLabelChanged="@(v => SetLabel($"calc_{ccRef.Key}", v))"
+                                                                                Align="@a"
+                                                                                OnAlignChanged="@(v => SetAlign($"calc_{ccRef.Key}", v))"
+                                                                                ReadOnly="ReadOnly" />
+                                                                @SortIndicator(ck)
+                                                                @if (!ReadOnly)
+                                                                {
+                                                                    <span @onclick:stopPropagation="true">
+                                                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                                                       OnClick="@(() => OpenCalcDialog(ccRef.Key))"
+                                                                                       Style="margin-left: 2px;"
+                                                                                       title="Edit formula" />
+                                                                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                                                       OnClick="() => RemoveCalcColumn(ccRef.Key)"
+                                                                                       Style="margin-left: 2px;" />
+                                                                    </span>
+                                                                }
+                                                            </span>
+                                                        </th>
+                                                    }
+                                                }
                                                 else if (ck.StartsWith("dim:"))
                                                 {
                                                     var dimFid = ck[4..];
@@ -475,6 +523,12 @@
                                                             var ec = _extraColumns.FirstOrDefault(e => e.Key == ecKey);
                                                             <td style="@AlignToCss(GetAlign($"extra_{ecKey}", "right"))">@(ec is not null ? FormatExtraValue(row, ec) : "")</td>
                                                         }
+                                                        else if (ck.StartsWith("calc:"))
+                                                        {
+                                                            var ccKey = ck[5..];
+                                                            var cc = _calcColumns.FirstOrDefault(c => c.Key == ccKey);
+                                                            <td style="@AlignToCss(GetAlign($"calc_{ccKey}", "right"))">@(cc is not null ? RenderCalcCell(cc, row) : "")</td>
+                                                        }
                                                         else if (ck.StartsWith("dim:"))
                                                         {
                                                             var dimFid = ck[4..];
@@ -538,6 +592,14 @@
                                                                 @text
                                                                 @if (!ReadOnly) { <span class="totals-menu-anchor"><TotalsMenu CurrentMethod="@GetTotalMethod(ecKeyLocal, ecDefault)" OnMethodChanged="@(m => SetTotalMethod(ecKeyLocal, m))" OnLiteralChanged="@(l => SetTotalLiteral(ecKeyLocal, l))" /></span> }
                                                             }
+                                                        </td>
+                                                    }
+                                                    else if (ck.StartsWith("calc:"))
+                                                    {
+                                                        var ccKey = ck[5..];
+                                                        var cc = _calcColumns.FirstOrDefault(c => c.Key == ccKey);
+                                                        <td class="dash-footer-cell" style="@AlignToCss(GetAlign($"calc_{ccKey}", "right"))">
+                                                            @(cc is not null ? RenderCalcTotal(cc) : "")
                                                         </td>
                                                     }
                                                     else if (ck.StartsWith("dim:"))
@@ -801,6 +863,10 @@
     private Dictionary<string, string> _customLabels = new();
     private Dictionary<string, string> _columnAlignments = new();
     private List<ExtraColumnDef> _extraColumns = new();
+    // Calculated columns. Populated from InitialConfig on load and from
+    // BuildConfig on save. Each entry produces a "calc:<Key>" column key
+    // in _dashColumnOrder, parallel to extras.
+    private List<CalculatedColumnDef> _calcColumns = new();
     private List<string> _extraDimensions = new();
     private Dictionary<string, string> _totalMethods = new();
 
@@ -984,6 +1050,14 @@
             _customLabels = InitialConfig.CustomLabels?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? new();
             _columnAlignments = InitialConfig.ColumnAlignments?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? new();
             _extraColumns = InitialConfig.ExtraColumns?.Select(ec => new ExtraColumnDef { FieldId = ec.FieldId, Aggregation = ec.Aggregation }).ToList() ?? new();
+            _calcColumns = InitialConfig.CalculatedColumns?.Select(cc => new CalculatedColumnDef
+            {
+                Key = cc.Key,
+                Label = cc.Label,
+                Formula = cc.Formula,
+                Format = cc.Format,
+                DataType = cc.DataType
+            }).ToList() ?? new();
             _extraDimensions = InitialConfig.ExtraDimensionFieldIds is { Count: > 0 }
                 ? new List<string>(InitialConfig.ExtraDimensionFieldIds)
                 : new();
@@ -1186,6 +1260,22 @@
             _summaryData.Add(new SummaryRow(g.PrimaryKey, value, GroupRowCount(g.Rows), pct, extras, dims));
         }
 
+        // Calculated columns. Evaluated AFTER all per-group aggregates and
+        // extras settle, since calc formulas reference those values. Each
+        // row gets a CalculatedValues dict; calc columns can also reference
+        // other calc columns provided they're declared earlier in
+        // _calcColumns (no forward references — caller responsibility).
+        if (_calcColumns.Count > 0)
+        {
+            for (var i = 0; i < _summaryData.Count; i++)
+            {
+                _summaryData[i] = _summaryData[i] with
+                {
+                    CalculatedValues = ComputeCalcValuesForRow(_summaryData[i])
+                };
+            }
+        }
+
         var chartData = _summaryData.Take(20).ToList();
         _chartLabels = chartData.Select(s =>
         {
@@ -1201,6 +1291,27 @@
                 Data = chartData.Select(s => s.Value).ToArray()
             }
         };
+
+        // Each calc column becomes an additional series so the chart can
+        // visualize derived values like % Abandoned alongside the primary
+        // measure. NaN / Infinity (divide-by-zero on empty groups) maps to
+        // 0 to keep the chart drawable. Mixed scales (counts vs percents)
+        // can look squashed on bar charts — line charts handle the same
+        // data more gracefully when scales differ.
+        foreach (var cc in _calcColumns)
+        {
+            var ccLocal = cc;
+            _chartSeries.Add(new ChartSeries<double>
+            {
+                Name = cc.Label,
+                Data = chartData.Select(s =>
+                {
+                    if (s.CalculatedValues is null) return 0d;
+                    if (!s.CalculatedValues.TryGetValue(ccLocal.Key, out var v)) return 0d;
+                    return double.IsNaN(v) || double.IsInfinity(v) ? 0d : v;
+                }).ToArray()
+            });
+        }
     }
 
     private double Aggregate(List<Dictionary<string, object?>> rows)
@@ -1381,7 +1492,8 @@
         !Compact
         && (columnKey == "groupBy" || columnKey == "measure" || columnKey == "count"
             || columnKey == "pct"
-            || columnKey.StartsWith("extra:") || columnKey.StartsWith("dim:"));
+            || columnKey.StartsWith("extra:") || columnKey.StartsWith("dim:")
+            || columnKey.StartsWith("calc:"));
 
     private string SortHeaderClass(string columnKey) =>
         IsColumnSortable(columnKey) ? "sortable" : string.Empty;
@@ -1443,6 +1555,18 @@
         {
             var dimFid = col[4..];
             string Pick(SummaryRow r) => r.Dimensions.TryGetValue(dimFid, out var v) ? v : string.Empty;
+            ordered = desc ? _summaryData.OrderByDescending(Pick) : _summaryData.OrderBy(Pick);
+        }
+        else if (col.StartsWith("calc:"))
+        {
+            var ccKey = col[5..];
+            // NaN-safe: rows where the formula didn't evaluate (divide-by-
+            // zero, missing reference) sort to the bottom regardless of
+            // direction, since OrderByDescending(double.NaN) is unstable.
+            double Pick(SummaryRow r) => r.CalculatedValues is not null
+                && r.CalculatedValues.TryGetValue(ccKey, out var v)
+                && !double.IsNaN(v)
+                && !double.IsInfinity(v) ? v : (desc ? double.MinValue : double.MaxValue);
             ordered = desc ? _summaryData.OrderByDescending(Pick) : _summaryData.OrderBy(Pick);
         }
         else
@@ -1534,6 +1658,7 @@
         if (_showPercentColumn) validKeys.Add("pct");
         foreach (var ec in _extraColumns) validKeys.Add($"extra:{ec.Key}");
         foreach (var fid in _extraDimensions) validKeys.Add($"dim:{fid}");
+        foreach (var cc in _calcColumns) validKeys.Add($"calc:{cc.Key}");
 
         _dashColumnOrder.RemoveAll(k => !validKeys.Contains(k));
         foreach (var key in validKeys)
@@ -1564,6 +1689,10 @@
         "measure" => GetLabel("measure", $"{_aggregation} {GetMeasureLabel()}"),
         "count" => GetLabel("count", "Count"),
         "pct" => GetLabel("pct", "% of Total"),
+        _ when key.StartsWith("calc:") =>
+            _calcColumns.FirstOrDefault(c => c.Key == key[5..]) is { } cc
+                ? GetLabel($"calc_{cc.Key}", cc.Label)
+                : key,
         _ when key.StartsWith("extra:") =>
             _extraColumns.FirstOrDefault(ec => ec.Key == key[6..]) is { } ec
                 ? GetLabel($"extra_{ec.Key}", $"{ec.Aggregation} {GetFieldLabel(ec.FieldId)}")
@@ -1621,6 +1750,224 @@
         _customLabels.Remove($"extra_{key}");
         RebuildDashColumnOrder();
         BuildSummary();
+    }
+
+    // ── Calculated columns ────────────────────────────────────────────
+    // Add / edit / remove a CalculatedColumnDef. Storage is kept in
+    // _calcColumns; the column key in _dashColumnOrder is "calc:<Key>".
+    // BuildSummary populates each SummaryRow.CalculatedValues by feeding
+    // the formula through CalculatedColumnEvaluator with a resolver that
+    // looks up other column values on the same row (and the totals row
+    // for the totals cell).
+
+    private async Task OpenCalcDialog(string? existingKey)
+    {
+        var existing = existingKey is null
+            ? null
+            : _calcColumns.FirstOrDefault(c => c.Key == existingKey);
+
+        // Build the friendly-name list the dialog shows as click-to-insert
+        // chips. Only columns currently in the table — calc columns can
+        // reference each other but only when both already exist (would-be
+        // forward references are rejected at evaluation time).
+        var picks = _dashColumnOrder
+            .Where(k => k != "groupBy") // groupBy is a string label, not numeric
+            .Select(k => new CalculatedColumnDialog.ColumnPick(k, GetDashColumnLabel(k)))
+            .ToList();
+
+        var parameters = new DialogParameters
+        {
+            { "IsNew", existing is null },
+            { "InitialKey", existing?.Key },
+            { "InitialLabel", existing?.Label ?? string.Empty },
+            { "InitialFormula", existing?.Formula ?? string.Empty },
+            { "InitialFormat", existing?.Format },
+            { "InitialDataType", existing?.DataType },
+            { "AvailableColumns", picks }
+        };
+        var dialog = await DialogService.ShowAsync<CalculatedColumnDialog>(
+            existing is null ? "Add Calculated Column" : "Edit Calculated Column",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        if (result.Data is not CalculatedColumnDialog.CalcDialogResult res) return;
+
+        if (existing is null)
+        {
+            _calcColumns.Add(new CalculatedColumnDef
+            {
+                Key = res.Key,
+                Label = res.Label,
+                Formula = res.Formula,
+                Format = res.Format,
+                DataType = res.DataType
+            });
+        }
+        else
+        {
+            existing.Label = res.Label;
+            existing.Formula = res.Formula;
+            existing.Format = res.Format;
+            existing.DataType = res.DataType;
+        }
+
+        RebuildDashColumnOrder();
+        BuildSummary();
+        StateHasChanged();
+    }
+
+    private void RemoveCalcColumn(string key)
+    {
+        _calcColumns.RemoveAll(c => c.Key == key);
+        _customLabels.Remove($"calc_{key}");
+        _columnAlignments.Remove($"calc_{key}");
+        RebuildDashColumnOrder();
+        BuildSummary();
+    }
+
+    // Evaluate every calc column's formula against ONE summary row. The
+    // resolver maps a bracketed identifier to a numeric value by trying
+    // (in order): exact column key match, label match. Calc columns can
+    // reference earlier calc columns — already-computed entries in this
+    // row's calcVals dict are visible to later evaluations.
+    private Dictionary<string, double> ComputeCalcValuesForRow(SummaryRow row)
+    {
+        var calcVals = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var labelToKey = _dashColumnOrder
+            .GroupBy(k => GetDashColumnLabel(k), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        double? Lookup(string ident)
+        {
+            string? key = null;
+            if (_dashColumnOrder.Contains(ident, StringComparer.OrdinalIgnoreCase))
+                key = _dashColumnOrder.First(k => k.Equals(ident, StringComparison.OrdinalIgnoreCase));
+            else if (labelToKey.TryGetValue(ident, out var k))
+                key = k;
+            else
+                return null;
+
+            if (string.Equals(key, "count", StringComparison.OrdinalIgnoreCase)) return row.Count;
+            if (string.Equals(key, "measure", StringComparison.OrdinalIgnoreCase)) return row.Value;
+            if (string.Equals(key, "pct", StringComparison.OrdinalIgnoreCase)) return row.Percentage;
+            if (key.StartsWith("extra:", StringComparison.OrdinalIgnoreCase))
+            {
+                var ekey = key[6..];
+                return row.ExtraValues.TryGetValue(ekey, out var v) ? v : null;
+            }
+            if (key.StartsWith("calc:", StringComparison.OrdinalIgnoreCase))
+            {
+                var ckey = key[5..];
+                return calcVals.TryGetValue(ckey, out var v) ? v : null;
+            }
+            return null;
+        }
+
+        foreach (var cc in _calcColumns)
+        {
+            try
+            {
+                calcVals[cc.Key] = CalculatedColumnEvaluator.Evaluate(cc.Formula, Lookup);
+            }
+            catch (FormatException)
+            {
+                // Bad syntax — record NaN so the cell renders blank
+                // rather than crashing the whole tile. The dialog's
+                // live-validation prevents this in practice; this path
+                // is defense-in-depth for hand-edited JSON.
+                calcVals[cc.Key] = double.NaN;
+            }
+        }
+        return calcVals;
+    }
+
+    // Render a calc column body cell. NaN / Infinity render blank so a
+    // divide-by-zero on an empty group doesn't show "NaN" in the table.
+    private string RenderCalcCell(CalculatedColumnDef cc, SummaryRow row)
+    {
+        if (row.CalculatedValues is null || !row.CalculatedValues.TryGetValue(cc.Key, out var val))
+            return string.Empty;
+        if (double.IsNaN(val) || double.IsInfinity(val)) return string.Empty;
+        return FormatCalcValue(cc, val);
+    }
+
+    // Totals row for a calc column. The formula evaluates against
+    // SYNTHESIZED totals (each input column's totals-row value), NOT the
+    // average of per-group calc results — so "% Abandoned of totals" is
+    // (sum-of-abandoned / sum-of-calls * 100), not the average of the
+    // per-group percentages.
+    private string RenderCalcTotal(CalculatedColumnDef cc)
+    {
+        var labelToKey = _dashColumnOrder
+            .GroupBy(k => GetDashColumnLabel(k), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        double? TotalsLookup(string ident)
+        {
+            string? key = null;
+            if (_dashColumnOrder.Contains(ident, StringComparer.OrdinalIgnoreCase))
+                key = _dashColumnOrder.First(k => k.Equals(ident, StringComparison.OrdinalIgnoreCase));
+            else if (labelToKey.TryGetValue(ident, out var k))
+                key = k;
+            else
+                return null;
+
+            if (string.Equals(key, "count", StringComparison.OrdinalIgnoreCase))
+                return AggregateTotal(_summaryData, r => r.Count, GetTotalMethod("count", "SUM"));
+            if (string.Equals(key, "measure", StringComparison.OrdinalIgnoreCase))
+                return AggregateTotal(_summaryData, r => r.Value, GetTotalMethod("measure", DefaultTotalMethodFor(_aggregation)));
+            if (string.Equals(key, "pct", StringComparison.OrdinalIgnoreCase))
+                return 100.0; // pct totals row is conventionally 100%
+            if (key.StartsWith("extra:", StringComparison.OrdinalIgnoreCase))
+            {
+                var ekey = key[6..];
+                var ec = _extraColumns.FirstOrDefault(e => e.Key == ekey);
+                if (ec is null) return null;
+                return AggregateTotal(_summaryData,
+                    r => r.ExtraValues.TryGetValue(ekey, out var v) ? v : 0,
+                    GetTotalMethod($"extra:{ekey}", DefaultTotalMethodFor(ec.Aggregation)));
+            }
+            if (key.StartsWith("calc:", StringComparison.OrdinalIgnoreCase))
+            {
+                // Recursive calc-of-calc in totals — cycle protection isn't
+                // critical here because the formula language can't create
+                // forward references (calc columns evaluate in declaration
+                // order). Just return null to avoid double recursion.
+                return null;
+            }
+            return null;
+        }
+
+        try
+        {
+            var val = CalculatedColumnEvaluator.Evaluate(cc.Formula, TotalsLookup);
+            if (double.IsNaN(val) || double.IsInfinity(val)) return string.Empty;
+            return FormatCalcValue(cc, val);
+        }
+        catch (FormatException)
+        {
+            return string.Empty;
+        }
+    }
+
+    // Format a calc column's numeric value. Falls back to a sensible
+    // default per data type when the user didn't pick an explicit format.
+    private static string FormatCalcValue(CalculatedColumnDef cc, double val)
+    {
+        var format = cc.Format;
+        if (string.IsNullOrWhiteSpace(format))
+        {
+            format = (cc.DataType?.ToLowerInvariant()) switch
+            {
+                "percent" => "N1",   // formula usually already multiplied by 100
+                "currency" => "C2",
+                "integer" => "N0",
+                _ => "N2"
+            };
+        }
+        return val.ToString(format, System.Globalization.CultureInfo.CurrentCulture);
     }
 
     // Swap the extra column's aggregation. The column's Key is derived from
@@ -1790,6 +2137,38 @@
                 var rows = (List<Dictionary<string, object?>>)g.Rows;
                 return ComputeExtras(rows).TryGetValue(ec.Key, out var v) ? v : 0d;
             },
+            _ when sortColumn.StartsWith("calc:") => g =>
+            {
+                var ccKey = sortColumn[5..];
+                var cc = _calcColumns.FirstOrDefault(c => c.Key == ccKey);
+                if (cc is null) return 0d;
+                var rows = (List<Dictionary<string, object?>>)g.Rows;
+                var measure = Aggregate(rows);
+                var count = (double)GroupRowCount(rows);
+                var groupExtras = ComputeExtras(rows);
+                // Mini-resolver for default-sort time. Doesn't support calc-
+                // of-calc references (we'd need topological evaluation across
+                // all calc columns first); v1 limitation. Other identifiers
+                // resolve against the freshly-aggregated raw values.
+                double? SortLookup(string ident)
+                {
+                    if (string.Equals(ident, "count", StringComparison.OrdinalIgnoreCase)) return count;
+                    if (string.Equals(ident, "measure", StringComparison.OrdinalIgnoreCase)) return measure;
+                    if (string.Equals(ident, GetDashColumnLabel("count"), StringComparison.OrdinalIgnoreCase)) return count;
+                    if (string.Equals(ident, GetDashColumnLabel("measure"), StringComparison.OrdinalIgnoreCase)) return measure;
+                    foreach (var ec2 in _extraColumns)
+                    {
+                        if (string.Equals(ident, $"extra:{ec2.Key}", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(ident, GetDashColumnLabel($"extra:{ec2.Key}"), StringComparison.OrdinalIgnoreCase))
+                        {
+                            return groupExtras.TryGetValue(ec2.Key, out var v) ? v : null;
+                        }
+                    }
+                    return null;
+                }
+                try { return CalculatedColumnEvaluator.Evaluate(cc.Formula, SortLookup); }
+                catch { return 0d; }
+            },
             _ => g => 0d
         };
 
@@ -1902,6 +2281,16 @@
                     total += w > 0 ? w : 110;
                 }
             }
+            else if (ck.StartsWith("calc:"))
+            {
+                var ccKey = ck[5..];
+                var cc = _calcColumns.FirstOrDefault(c => c.Key == ccKey);
+                if (cc is not null)
+                {
+                    var w = FixedColumnWidthPx(cc.DataType ?? string.Empty);
+                    total += w > 0 ? w : 110;
+                }
+            }
             else if (ck == "count")
             {
                 total += 70;
@@ -1956,6 +2345,14 @@
             CustomLabels = _customLabels.Any() ? new Dictionary<string, string>(_customLabels) : null,
             ColumnAlignments = _columnAlignments.Any() ? new Dictionary<string, string>(_columnAlignments) : null,
             ExtraColumns = _extraColumns.Any() ? _extraColumns.Select(ec => new ExtraColumnDef { FieldId = ec.FieldId, Aggregation = ec.Aggregation }).ToList() : null,
+            CalculatedColumns = _calcColumns.Any() ? _calcColumns.Select(cc => new CalculatedColumnDef
+            {
+                Key = cc.Key,
+                Label = cc.Label,
+                Formula = cc.Formula,
+                Format = cc.Format,
+                DataType = cc.DataType
+            }).ToList() : null,
             ExtraDimensionFieldIds = _extraDimensions.Any() ? new List<string>(_extraDimensions) : null,
             TotalMethods = _totalMethods.Any() ? new Dictionary<string, string>(_totalMethods) : null,
             ColumnOrder = _dashColumnOrder.Count > 0 ? new List<string>(_dashColumnOrder) : null,
@@ -1975,6 +2372,14 @@
         _customLabels = config.CustomLabels?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? new();
         _columnAlignments = config.ColumnAlignments?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? new();
         _extraColumns = config.ExtraColumns?.Select(ec => new ExtraColumnDef { FieldId = ec.FieldId, Aggregation = ec.Aggregation }).ToList() ?? new();
+        _calcColumns = config.CalculatedColumns?.Select(cc => new CalculatedColumnDef
+        {
+            Key = cc.Key,
+            Label = cc.Label,
+            Formula = cc.Formula,
+            Format = cc.Format,
+            DataType = cc.DataType
+        }).ToList() ?? new();
         _extraDimensions = config.ExtraDimensionFieldIds is { Count: > 0 }
             ? new List<string>(config.ExtraDimensionFieldIds)
             : new();
@@ -2019,6 +2424,13 @@
         public bool ShowOnMaster { get; init; }
         public List<string>? ExtraGroupByFieldIds { get; init; }
         public bool ShowKpiCards { get; init; } = true;
+        // Calculated columns. Each is a small expression evaluated client-side
+        // against this group's already-aggregated values (measure, count, pct,
+        // extras, other calc columns), so a "% Abandoned" column can be
+        // expressed as "[Abandoned] / [Calls] * 100" without round-tripping
+        // through SQL. Stored alongside ExtraColumns; absent for tiles
+        // authored before this feature shipped.
+        public List<CalculatedColumnDef>? CalculatedColumns { get; init; }
     }
 
     public class ExtraColumnDef
@@ -2028,7 +2440,37 @@
         public string Key => $"{FieldId}_{Aggregation}";
     }
 
+    public class CalculatedColumnDef
+    {
+        // Stable identifier within the tile. Used as the suffix on the
+        // _dashColumnOrder key ("calc:<Key>") so reorder / rename / sort
+        // state survives label changes.
+        public string Key { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        // Expression in the tiny formula language. References other columns
+        // by [bracketed identifier] — matches first by column key
+        // ("measure", "count", "extra:<key>", "calc:<key>"), then falls back
+        // to label match. Operators: + - * / and parentheses.
+        public string Formula { get; set; } = string.Empty;
+        // Optional .NET format string ("N1", "P1", "C2") or a mask
+        // ("(999) 999-9999"). Routed through FieldFormatter.Format at render.
+        public string? Format { get; set; }
+        // Drives column width and default alignment. percent | currency |
+        // decimal | integer | (blank = generic numeric).
+        public string? DataType { get; set; }
+    }
+
     // Dimensions is a per-row map of extra-dimension field id → the group's
     // value for that field. Populated when _extraDimensions is non-empty.
-    private record SummaryRow(string GroupKey, double Value, int Count, double Percentage, Dictionary<string, double> ExtraValues, Dictionary<string, string> Dimensions);
+    // CalculatedValues is parallel to ExtraValues but holds calc-column
+    // results — populated in BuildSummary after the standard aggregates and
+    // extras settle, since some calc columns reference those.
+    private record SummaryRow(
+        string GroupKey,
+        double Value,
+        int Count,
+        double Percentage,
+        Dictionary<string, double> ExtraValues,
+        Dictionary<string, string> Dimensions,
+        Dictionary<string, double>? CalculatedValues = null);
 }

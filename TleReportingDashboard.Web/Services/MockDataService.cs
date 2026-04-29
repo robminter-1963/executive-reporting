@@ -54,7 +54,9 @@ public class MockDataService : ISchemaService, IQueryService, IReportService, IS
                         Description = f.Description,
                         FieldType = f.FieldType,
                         RolesRequired = f.RolesRequired,
-                        DefaultRedactionValue = f.DefaultRedactionValue
+                        DefaultRedactionValue = f.DefaultRedactionValue,
+                        SourceTable = f.SourceTable,
+                        SourceColumn = f.SourceColumn
                     })
                     .ToList()
             })

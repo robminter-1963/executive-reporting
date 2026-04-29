@@ -104,11 +104,18 @@
                         {
                             var fid = field.Id;
                             var selected = _selectedFieldIds.Contains(fid);
-                            <MudChip T="string" Variant="@(selected ? Variant.Filled : Variant.Outlined)"
-                                     Color="@(selected ? Color.Primary : Color.Default)" Size="Size.Small"
-                                     OnClick="() => ToggleField(fid)" Style="cursor: pointer;">
-                                @field.Label
-                            </MudChip>
+                            var source = FieldSource(field);
+                            @* Tooltip surfaces table.column so admins can pick
+                               the right one when multiple fields share a label
+                               (e.g. two "Loan Officer" entries from different
+                               tables). Empty source skips the tooltip. *@
+                            <MudTooltip Text="@source" Placement="Placement.Top" Disabled="@(string.IsNullOrEmpty(source))">
+                                <MudChip T="string" Variant="@(selected ? Variant.Filled : Variant.Outlined)"
+                                         Color="@(selected ? Color.Primary : Color.Default)" Size="Size.Small"
+                                         OnClick="() => ToggleField(fid)" Style="cursor: pointer;">
+                                    @field.Label
+                                </MudChip>
+                            </MudTooltip>
                         }
                     </div>
                 }
@@ -138,7 +145,24 @@
                                 var fld = context;
                             }
                             <MudTd>@(idx + 1)</MudTd>
-                            <MudTd><MudText Typo="Typo.body2" Style="font-weight: 500;">@fld.Label</MudText></MudTd>
+                            <MudTd>
+                                @* Inline "table.column" caption disambiguates
+                                   same-labeled fields without needing a hover.
+                                   Skipped when there's nothing to show. *@
+                                @{
+                                    var src = FieldSource(fld);
+                                }
+                                <MudStack Spacing="0" Style="line-height: 1.2;">
+                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@fld.Label</MudText>
+                                    @if (!string.IsNullOrEmpty(src))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                                 Style="font-family: monospace; font-size: 0.7rem;">
+                                            @src
+                                        </MudText>
+                                    }
+                                </MudStack>
+                            </MudTd>
                             <MudTd><MudText Typo="Typo.caption">@fld.DataType</MudText></MudTd>
                             <MudTd>
                                 <MudIconButton Icon="@(_hiddenColumns.Contains(fld.Id) ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
@@ -175,7 +199,13 @@
                             <MudSelectItem T="string" Value="@("")">-- None --</MudSelectItem>
                             @foreach (var f in _orderedFields)
                             {
-                                <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                                @* Append the source descriptor in parens so two
+                                   "Loan Officer" entries (etc.) read as distinct
+                                   in the picker without needing a hover. *@
+                                var srcDesc = FieldSource(f);
+                                <MudSelectItem T="string" Value="@f.Id">
+                                    @f.Label@(string.IsNullOrEmpty(srcDesc) ? string.Empty : $" — {srcDesc}")
+                                </MudSelectItem>
                             }
                         </MudSelect>
                         <MudSelect T="string" @bind-Value="_defaultSortDir" Label="Direction" Variant="Variant.Outlined"
@@ -327,6 +357,24 @@
         string.IsNullOrWhiteSpace(_fieldSearch) ||
         f.Label.Contains(_fieldSearch, StringComparison.OrdinalIgnoreCase) ||
         f.Id.Contains(_fieldSearch, StringComparison.OrdinalIgnoreCase);
+
+    // Friendly source descriptor for disambiguating fields with the same
+    // label. Returns "table.column" for plain fields; "<sql expression>"
+    // (truncated) for inline-expression fields. Empty string when neither
+    // exists. Used as a tooltip body and as a small caption next to the
+    // label so admins can tell apart fields like two "Loan Officer" rows
+    // sourced from different tables.
+    private static string FieldSource(FieldDefinition f)
+    {
+        if (!string.IsNullOrWhiteSpace(f.SqlExpression))
+        {
+            var expr = f.SqlExpression.Trim();
+            return expr.Length > 60 ? $"<expr> {expr[..57]}…" : $"<expr> {expr}";
+        }
+        if (string.IsNullOrEmpty(f.SourceTable)) return f.SourceColumn ?? string.Empty;
+        if (string.IsNullOrEmpty(f.SourceColumn)) return f.SourceTable;
+        return $"{f.SourceTable}.{f.SourceColumn}";
+    }
 
     private void ToggleField(string fieldId)
     {

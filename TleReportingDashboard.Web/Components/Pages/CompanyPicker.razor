@@ -218,6 +218,11 @@
                     var target = _visible.FirstOrDefault(c => c.Id == lastId);
                     if (target is not null)
                     {
+                        // Stay on the loading spinner until the navigation
+                        // actually transitions — otherwise Blazor's render
+                        // pass after _loading=false would briefly paint the
+                        // picker grid before the URL change takes effect,
+                        // which is the "all-companies blink" the user sees.
                         Navigation.NavigateTo($"/master-dashboard/{target.Code}", replace: true);
                         return;
                     }
@@ -228,10 +233,11 @@
         {
             Logger.LogWarning(ex, "CompanyPicker load failed");
         }
-        finally
-        {
-            _loading = false;
-        }
+        // Only reached when we're NOT redirecting — flip the spinner off so
+        // the picker / empty state can paint. The redirect path returns
+        // early above, leaving _loading = true so the spinner persists
+        // until the new page swaps in.
+        _loading = false;
     }
 
     private void PickCompany(CompanySummary c)

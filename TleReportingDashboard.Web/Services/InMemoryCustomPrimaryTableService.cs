@@ -27,7 +27,10 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
         Guid connectionId, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
         string? createdById, string? createdByEmail,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? tableType = null,
+        string? primaryColumn = null,
+        string? additionalKeyColumns = null)
     {
         if (!PrimaryTableRef.TableRegex().IsMatch(tableName))
             throw new ArgumentException("Table name contains invalid characters.", nameof(tableName));
@@ -35,6 +38,12 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
         if (normalizedAlias.Length > 0 && !PrimaryTableRef.AliasRegex().IsMatch(normalizedAlias))
             throw new ArgumentException("Alias must start with a letter/underscore and contain only letters, digits, or underscores.", nameof(alias));
         alias = normalizedAlias;
+
+        // Same normalization rules as the SQL service so behavior matches
+        // in dev-without-DB mode.
+        var normalizedTableType = string.IsNullOrWhiteSpace(tableType) ? null : tableType.Trim();
+        var normalizedPrimaryColumn = NormalizeIdentifier(primaryColumn, "primaryColumn");
+        var normalizedAdditionalKeys = NormalizeKeyColumnList(additionalKeyColumns);
 
         if (isDefaultPrimary) isPrimary = true;
 
@@ -48,6 +57,9 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             if (isDefaultPrimary) ClearDefaultsOnConnection(connectionId, existing.Id);
             existing.IsPrimary = isPrimary;
             existing.IsDefaultPrimary = isDefaultPrimary;
+            existing.TableType = normalizedTableType;
+            existing.PrimaryColumn = normalizedPrimaryColumn;
+            existing.AdditionalKeyColumns = normalizedAdditionalKeys;
             return Task.FromResult(existing);
         }
 
@@ -75,7 +87,10 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             IsDefaultPrimary = isDefaultPrimary,
             CreatedAt = DateTime.UtcNow,
             CreatedById = createdById,
-            CreatedByEmail = createdByEmail
+            CreatedByEmail = createdByEmail,
+            TableType = normalizedTableType,
+            PrimaryColumn = normalizedPrimaryColumn,
+            AdditionalKeyColumns = normalizedAdditionalKeys
         };
         _rows[record.Id] = record;
         return Task.FromResult(record);
@@ -84,13 +99,20 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
     public Task UpdateAsync(
         Guid id, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? tableType = null,
+        string? primaryColumn = null,
+        string? additionalKeyColumns = null)
     {
         if (!PrimaryTableRef.TableRegex().IsMatch(tableName))
             throw new ArgumentException("Table name contains invalid characters.", nameof(tableName));
         var normalizedAlias = string.IsNullOrWhiteSpace(alias) ? string.Empty : alias.Trim();
         if (normalizedAlias.Length > 0 && !PrimaryTableRef.AliasRegex().IsMatch(normalizedAlias))
             throw new ArgumentException("Alias must start with a letter/underscore and contain only letters, digits, or underscores.", nameof(alias));
+
+        var normalizedTableType = string.IsNullOrWhiteSpace(tableType) ? null : tableType.Trim();
+        var normalizedPrimaryColumn = NormalizeIdentifier(primaryColumn, "primaryColumn");
+        var normalizedAdditionalKeys = NormalizeKeyColumnList(additionalKeyColumns);
 
         if (isDefaultPrimary) isPrimary = true;
 
@@ -115,8 +137,41 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             existing.Alias = normalizedAlias;
             existing.IsPrimary = isPrimary;
             existing.IsDefaultPrimary = isDefaultPrimary;
+            existing.TableType = normalizedTableType;
+            existing.PrimaryColumn = normalizedPrimaryColumn;
+            existing.AdditionalKeyColumns = normalizedAdditionalKeys;
         }
         return Task.CompletedTask;
+    }
+
+    // Same identifier rules as CustomPrimaryTableService — kept inline so
+    // dev-without-DB mode validates the same way the live service does.
+    private static string? NormalizeIdentifier(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var trimmed = value.Trim();
+        if (!PrimaryTableRef.AliasRegex().IsMatch(trimmed))
+            throw new ArgumentException(
+                $"\"{trimmed}\" is not a valid column name. Use letters, digits, and underscores only.",
+                paramName);
+        return trimmed;
+    }
+
+    private static string? NormalizeKeyColumnList(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var parts = value
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        if (parts.Count == 0) return null;
+        foreach (var p in parts)
+        {
+            if (!PrimaryTableRef.AliasRegex().IsMatch(p))
+                throw new ArgumentException(
+                    $"\"{p}\" is not a valid column name. Use letters, digits, and underscores only.",
+                    nameof(value));
+        }
+        return string.Join(", ", parts);
     }
 
     public Task DeleteAsync(Guid id, CancellationToken ct = default)

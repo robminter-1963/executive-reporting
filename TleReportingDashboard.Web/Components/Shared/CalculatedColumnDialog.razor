@@ -1,0 +1,174 @@
+@using TleReportingDashboard.Web.Services
+
+@* Add / edit a calculated dashboard column. Formula references OTHER
+   columns by [bracketed identifier] — autocompleted from AvailableColumns
+   so admins don't have to remember exact names. Live syntax check below
+   the formula input flips green/red as the user types. *@
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Calculate" />
+            <MudText Typo="Typo.h6">@(IsNew ? "Add Calculated Column" : "Edit Calculated Column")</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 520px;">
+            <MudTextField @bind-Value="_label" Label="Column Label" Immediate
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Placeholder="e.g. % Abandoned" />
+
+            <MudTextField @bind-Value="_formula" @bind-Value:after="ValidateFormula"
+                          Label="Formula" Immediate
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Style="font-family: monospace;"
+                          Placeholder="[Abandoned] / [Calls] * 100"
+                          HelperText="Operators: + - * /  Parens: ( )  Identifiers: [Column Name]" />
+
+            @if (_formulaError is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense Variant="Variant.Outlined">
+                    @_formulaError
+                </MudAlert>
+            }
+            else if (!string.IsNullOrWhiteSpace(_formula))
+            {
+                <MudAlert Severity="Severity.Success" Dense Variant="Variant.Outlined">
+                    Formula parses cleanly.
+                </MudAlert>
+            }
+
+            @if (AvailableColumns is { Count: > 0 })
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Click to insert:</MudText>
+                <MudStack Row Wrap="Wrap.Wrap" Spacing="1">
+                    @foreach (var col in AvailableColumns)
+                    {
+                        var label = col.Label;
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                 OnClick="@(() => InsertColumn(label))">
+                            @label
+                        </MudChip>
+                    }
+                </MudStack>
+            }
+
+            <MudGrid Spacing="2">
+                <MudItem xs="6">
+                    <MudSelect T="string" @bind-Value="_dataType" Label="Data Type"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                               HelperText="Drives column width and default alignment.">
+                        <MudSelectItem T="string" Value="@("decimal")">decimal</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("integer")">integer</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("percent")">percent</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("currency")">currency</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudSelect T="string" @bind-Value="_format" Label="Format"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                               HelperText="Common .NET formats. Custom masks also work.">
+                        <MudSelectItem T="string" Value="@("")">(default for data type)</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("N0")">N0 — Number, no decimals</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("N1")">N1 — Number, 1 decimal</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("N2")">N2 — Number, 2 decimals</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("P0")">P0 — Percent (multiplies by 100)</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("P1")">P1 — Percent, 1 decimal</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("P2")">P2 — Percent, 2 decimals</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("C0")">C0 — Currency, no decimals</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("C2")">C2 — Currency, 2 decimals</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                <strong>Tip:</strong> If your formula already multiplies by 100 (e.g. <code>[Abandoned] / [Calls] * 100</code>),
+                pick <code>N1</code> or <code>N2</code> for the format — not <code>P1</code>, which would multiply again.
+            </MudText>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@(!IsValid)">
+            @(IsNew ? "Add" : "Save")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public bool IsNew { get; set; }
+    [Parameter] public string? InitialKey { get; set; }
+    [Parameter] public string InitialLabel { get; set; } = string.Empty;
+    [Parameter] public string InitialFormula { get; set; } = string.Empty;
+    [Parameter] public string? InitialFormat { get; set; }
+    [Parameter] public string? InitialDataType { get; set; }
+    // Friendly chips the user can click to drop a column reference into
+    // the formula. Each entry is (Key, Label) — Label is what's inserted
+    // wrapped in brackets, since the dashboard's formula resolver matches
+    // against either key or label.
+    [Parameter] public List<ColumnPick> AvailableColumns { get; set; } = new();
+
+    private string _label = string.Empty;
+    private string _formula = string.Empty;
+    private string _format = string.Empty;
+    private string _dataType = "decimal";
+    private string? _formulaError;
+
+    private bool IsValid =>
+        !string.IsNullOrWhiteSpace(_label) &&
+        !string.IsNullOrWhiteSpace(_formula) &&
+        _formulaError is null;
+
+    protected override void OnInitialized()
+    {
+        _label = InitialLabel;
+        _formula = InitialFormula;
+        _format = InitialFormat ?? string.Empty;
+        _dataType = string.IsNullOrEmpty(InitialDataType) ? "decimal" : InitialDataType;
+        ValidateFormula();
+    }
+
+    private void ValidateFormula()
+    {
+        var (ok, err) = CalculatedColumnEvaluator.Validate(_formula);
+        _formulaError = ok ? null : err;
+    }
+
+    private void InsertColumn(string label)
+    {
+        // Append the bracketed reference at the end. Could be smarter
+        // (insert at cursor) but MudTextField doesn't expose the caret
+        // position cleanly; appending is good enough for v1.
+        var separator = string.IsNullOrWhiteSpace(_formula) ? string.Empty : " ";
+        _formula = $"{_formula}{separator}[{label}]";
+        ValidateFormula();
+    }
+
+    private void Cancel() => MudDialog?.Cancel();
+
+    private void Ok()
+    {
+        var result = new CalcDialogResult
+        {
+            Key = InitialKey ?? $"calc_{Guid.NewGuid():N}".Substring(0, 12),
+            Label = _label.Trim(),
+            Formula = _formula.Trim(),
+            Format = string.IsNullOrWhiteSpace(_format) ? null : _format,
+            DataType = string.IsNullOrWhiteSpace(_dataType) ? null : _dataType
+        };
+        MudDialog?.Close(DialogResult.Ok(result));
+    }
+
+    public sealed record ColumnPick(string Key, string Label);
+
+    public sealed class CalcDialogResult
+    {
+        public string Key { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        public string Formula { get; set; } = string.Empty;
+        public string? Format { get; set; }
+        public string? DataType { get; set; }
+    }
+}

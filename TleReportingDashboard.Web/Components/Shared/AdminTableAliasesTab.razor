@@ -62,6 +62,7 @@
                     <MudTh Style="width: 60px; text-align: center;">Primary</MudTh>
                     <MudTh>Schema.Table</MudTh>
                     <MudTh>Alias</MudTh>
+                    <MudTh>Type / Keys</MudTh>
                     <MudTh>Created by</MudTh>
                     <MudTh Style="width: 120px;"></MudTh>
                 </HeaderContent>
@@ -92,6 +93,27 @@
                         else
                         {
                             <code style="font-family: monospace;">@context.Alias</code>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        @* Type / Keys summary. Empty when the admin hasn't
+                           classified the row — keeps the column compact for
+                           bulk catalogs that don't all need typing. *@
+                        @if (string.IsNullOrEmpty(context.TableType) && string.IsNullOrEmpty(context.PrimaryColumn))
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary"><em>—</em></MudText>
+                        }
+                        else
+                        {
+                            <MudStack Spacing="0" Style="line-height: 1.2;">
+                                <MudText Typo="Typo.caption" Style="font-weight: 500;">@TableTypes.Display(context.TableType)</MudText>
+                                @if (!string.IsNullOrEmpty(context.PrimaryColumn))
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-family: monospace; font-size: 0.7rem;">
+                                        @context.PrimaryColumn@(string.IsNullOrEmpty(context.AdditionalKeyColumns) ? string.Empty : $", {context.AdditionalKeyColumns}")
+                                    </MudText>
+                                }
+                            </MudStack>
                         }
                     </MudTd>
                     <MudTd>
@@ -210,6 +232,9 @@
                 { x => x.InitialAlias, null },
                 { x => x.InitialIsPrimary, false },
                 { x => x.InitialIsDefaultPrimary, false },
+                { x => x.InitialTableType, null },
+                { x => x.InitialPrimaryColumn, null },
+                { x => x.InitialAdditionalKeyColumns, null },
                 { x => x.AvailableTables, _dbTables },
                 { x => x.AvailableFields, fields },
                 { x => x.TakenAliases, BuildTakenAliases(excludeEntryId: null) }
@@ -222,7 +247,10 @@
         {
             await TableAliasSvc.AddAsync(connId, edited.TableName, edited.Alias,
                 edited.IsPrimary, edited.IsDefaultPrimary,
-                _userId, _userEmail);
+                _userId, _userEmail,
+                tableType: edited.TableType,
+                primaryColumn: edited.PrimaryColumn,
+                additionalKeyColumns: edited.AdditionalKeyColumns);
             await LoadEntriesAsync();
             await NotifyChangedAsync();
             Snackbar.Add($"Added \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\".", Severity.Success);
@@ -250,6 +278,9 @@
                 { x => x.InitialAlias, string.IsNullOrEmpty(entry.Alias) ? null : entry.Alias },
                 { x => x.InitialIsPrimary, entry.IsPrimary },
                 { x => x.InitialIsDefaultPrimary, entry.IsDefaultPrimary },
+                { x => x.InitialTableType, entry.TableType },
+                { x => x.InitialPrimaryColumn, entry.PrimaryColumn },
+                { x => x.InitialAdditionalKeyColumns, entry.AdditionalKeyColumns },
                 { x => x.AvailableTables, _dbTables },
                 { x => x.AvailableFields, fields },
                 { x => x.AvailableRoles, roles },
@@ -267,7 +298,10 @@
         try
         {
             await TableAliasSvc.UpdateAsync(entry.Id, edited.TableName, edited.Alias,
-                edited.IsPrimary, edited.IsDefaultPrimary);
+                edited.IsPrimary, edited.IsDefaultPrimary,
+                tableType: edited.TableType,
+                primaryColumn: edited.PrimaryColumn,
+                additionalKeyColumns: edited.AdditionalKeyColumns);
             await LoadEntriesAsync();
             await NotifyChangedAsync();
             Snackbar.Add($"Updated to \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\".", Severity.Success);

@@ -67,6 +67,25 @@
                     </MudListItem>
                 }
             </MudList>
+
+            @* Optional section picker — only shown when this tab has at
+               least one section. Default is "(no section)" so admins who
+               don't use sections see no extra UI / friction. The new
+               tile gets its section_id set on insert via AddTileAsync. *@
+            @if (Sections is { Count: > 0 })
+            {
+                <MudSelect T="int?" @bind-Value="_selectedSectionId"
+                           Label="Section" Variant="Variant.Outlined"
+                           Margin="Margin.Dense" Dense
+                           HelperText="Optional. Choose '(no section)' to leave the tile in the un-grouped bucket."
+                           Style="max-width: 320px;">
+                    <MudSelectItem T="int?" Value="@((int?)null)">(no section)</MudSelectItem>
+                    @foreach (var s in Sections.OrderBy(x => x.SortOrder))
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)s.Id)">@s.Label</MudSelectItem>
+                    }
+                </MudSelect>
+            }
         </MudStack>
     </DialogContent>
     <DialogActions>
@@ -81,12 +100,22 @@
 @code {
     [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
     [Parameter] public List<SavedReport> Reports { get; set; } = new();
+    // Optional. When the active tab has sections, the dialog renders a
+    // section picker so the admin can drop the new tile straight into a
+    // group. Empty list = picker is hidden, exactly the pre-sections UX.
+    [Parameter] public List<MasterDashboardSection> Sections { get; set; } = new();
 
     private SavedReport? _selected;
+    // null = "(no section)" — tile lands in the un-grouped bucket.
+    private int? _selectedSectionId;
 
     private void Select(SavedReport report) => _selected = report;
     private void Cancel() => MudDialog?.Cancel();
-    private void Ok() => MudDialog?.Close(DialogResult.Ok(_selected!.Id));
+    private void Ok() => MudDialog?.Close(DialogResult.Ok(new AddTileResult(_selected!.Id, _selectedSectionId)));
+
+    // Returned to the caller via DialogResult.Data so adding a tile can
+    // carry both the picked report and the chosen section in one round-trip.
+    public sealed record AddTileResult(Guid ReportId, int? SectionId);
 
     // Compact one-line summary of a saved report's filter dict so users can
     // distinguish two reports that share a name. JsonDocument streaming

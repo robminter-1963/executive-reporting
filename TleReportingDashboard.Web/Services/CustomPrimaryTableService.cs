@@ -24,7 +24,8 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         await using var cmd = new SqlCommand(@"
             SELECT id, connection_id, table_name, alias,
                    is_primary, is_default_primary,
-                   created_at, created_by_id, created_by_email
+                   created_at, created_by_id, created_by_email,
+                   table_type, primary_column, additional_key_columns
             FROM EMPOWER.RPT_custom_primary_tables
             WHERE connection_id = @c
             ORDER BY is_default_primary DESC, is_primary DESC, table_name, alias;", conn);
@@ -41,8 +42,20 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         Guid connectionId, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
         string? createdById, string? createdByEmail,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? tableType = null,
+        string? primaryColumn = null,
+        string? additionalKeyColumns = null)
     {
+        // Normalize the new typing fields. Blank → NULL so the DB doesn't
+        // store empty strings (keeps "is set" checks unambiguous). Column
+        // names go through the alias regex (column identifiers and table
+        // aliases share the same SQL identifier rules); the type string
+        // is open-ended so future LOS adapters can register their own.
+        var normalizedTableType = string.IsNullOrWhiteSpace(tableType) ? null : tableType.Trim();
+        var normalizedPrimaryColumn = NormalizeIdentifier(primaryColumn, "primaryColumn");
+        var normalizedAdditionalKeys = NormalizeKeyColumnList(additionalKeyColumns);
+
         // Validate shape before hitting the DB — the emitter trusts these
         // values to end up in SQL, so we reject anything outside the safe
         // identifier regex at this boundary. Alias is optional; empty string
@@ -113,8 +126,9 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             INSERT INTO EMPOWER.RPT_custom_primary_tables
                 (id, connection_id, table_name, alias,
                  is_primary, is_default_primary,
-                 created_at, created_by_id, created_by_email)
-            VALUES (@id, @c, @t, @a, @ip, @idp, @ca, @cbi, @cbe);", conn);
+                 created_at, created_by_id, created_by_email,
+                 table_type, primary_column, additional_key_columns)
+            VALUES (@id, @c, @t, @a, @ip, @idp, @ca, @cbi, @cbe, @tt, @pc, @ak);", conn);
         insert.Parameters.Add(new SqlParameter("@id", id));
         insert.Parameters.Add(new SqlParameter("@c", connectionId));
         insert.Parameters.Add(new SqlParameter("@t", tableName));
@@ -124,6 +138,9 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         insert.Parameters.Add(new SqlParameter("@ca", createdAt));
         insert.Parameters.Add(new SqlParameter("@cbi", (object?)createdById ?? DBNull.Value));
         insert.Parameters.Add(new SqlParameter("@cbe", (object?)createdByEmail ?? DBNull.Value));
+        insert.Parameters.Add(new SqlParameter("@tt", (object?)normalizedTableType ?? DBNull.Value));
+        insert.Parameters.Add(new SqlParameter("@pc", (object?)normalizedPrimaryColumn ?? DBNull.Value));
+        insert.Parameters.Add(new SqlParameter("@ak", (object?)normalizedAdditionalKeys ?? DBNull.Value));
         await insert.ExecuteNonQueryAsync(ct);
 
         return new CustomPrimaryTableRecord
@@ -136,20 +153,32 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             IsDefaultPrimary = isDefaultPrimary,
             CreatedAt = createdAt,
             CreatedById = createdById,
-            CreatedByEmail = createdByEmail
+            CreatedByEmail = createdByEmail,
+            TableType = normalizedTableType,
+            PrimaryColumn = normalizedPrimaryColumn,
+            AdditionalKeyColumns = normalizedAdditionalKeys
         };
     }
 
     public async Task UpdateAsync(
         Guid id, string tableName, string? alias,
         bool isPrimary, bool isDefaultPrimary,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? tableType = null,
+        string? primaryColumn = null,
+        string? additionalKeyColumns = null)
     {
         if (!PrimaryTableRef.TableRegex().IsMatch(tableName))
             throw new ArgumentException("Table name contains invalid characters.", nameof(tableName));
         var normalizedAlias = string.IsNullOrWhiteSpace(alias) ? string.Empty : alias.Trim();
         if (normalizedAlias.Length > 0 && !PrimaryTableRef.AliasRegex().IsMatch(normalizedAlias))
             throw new ArgumentException("Alias must start with a letter/underscore and contain only letters, digits, or underscores.", nameof(alias));
+
+        // Same normalization as AddAsync — kept here rather than refactored
+        // out so the validation error messages target the right input.
+        var normalizedTableType = string.IsNullOrWhiteSpace(tableType) ? null : tableType.Trim();
+        var normalizedPrimaryColumn = NormalizeIdentifier(primaryColumn, "primaryColumn");
+        var normalizedAdditionalKeys = NormalizeKeyColumnList(additionalKeyColumns);
 
         if (isDefaultPrimary) isPrimary = true;
 
@@ -194,13 +223,18 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         await using var cmd = new SqlCommand(@"
             UPDATE EMPOWER.RPT_custom_primary_tables
                SET table_name = @t, alias = @a,
-                   is_primary = @ip, is_default_primary = @idp
+                   is_primary = @ip, is_default_primary = @idp,
+                   table_type = @tt, primary_column = @pc,
+                   additional_key_columns = @ak
              WHERE id = @id;", conn);
         cmd.Parameters.Add(new SqlParameter("@id", id));
         cmd.Parameters.Add(new SqlParameter("@t", tableName));
         cmd.Parameters.Add(new SqlParameter("@a", normalizedAlias));
         cmd.Parameters.Add(new SqlParameter("@ip", isPrimary));
         cmd.Parameters.Add(new SqlParameter("@idp", isDefaultPrimary));
+        cmd.Parameters.Add(new SqlParameter("@tt", (object?)normalizedTableType ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@pc", (object?)normalizedPrimaryColumn ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@ak", (object?)normalizedAdditionalKeys ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -226,7 +260,10 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         IsDefaultPrimary = !r.IsDBNull(5) && r.GetBoolean(5),
         CreatedAt = r.GetDateTime(6),
         CreatedById = r.IsDBNull(7) ? null : r.GetString(7),
-        CreatedByEmail = r.IsDBNull(8) ? null : r.GetString(8)
+        CreatedByEmail = r.IsDBNull(8) ? null : r.GetString(8),
+        TableType = r.IsDBNull(9) ? null : r.GetString(9),
+        PrimaryColumn = r.IsDBNull(10) ? null : r.GetString(10),
+        AdditionalKeyColumns = r.IsDBNull(11) ? null : r.GetString(11)
     };
 
     private async Task<CustomPrimaryTableRecord?> GetByIdAsync(Guid id, CancellationToken ct)
@@ -236,12 +273,48 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         await using var cmd = new SqlCommand(@"
             SELECT id, connection_id, table_name, alias,
                    is_primary, is_default_primary,
-                   created_at, created_by_id, created_by_email
+                   created_at, created_by_id, created_by_email,
+                   table_type, primary_column, additional_key_columns
             FROM EMPOWER.RPT_custom_primary_tables
             WHERE id = @id;", conn);
         cmd.Parameters.Add(new SqlParameter("@id", id));
         await using var r = await cmd.ExecuteReaderAsync(ct);
         return await r.ReadAsync(ct) ? ReadRecord(r) : null;
+    }
+
+    // Validates a single SQL identifier (column name) using the same regex
+    // as table aliases — column names follow the same rules. Empty input
+    // returns null (= no value); invalid input throws so the editor surfaces
+    // the error before the row hits the DB.
+    private static string? NormalizeIdentifier(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var trimmed = value.Trim();
+        if (!PrimaryTableRef.AliasRegex().IsMatch(trimmed))
+            throw new ArgumentException(
+                $"\"{trimmed}\" is not a valid column name. Use letters, digits, and underscores only.",
+                paramName);
+        return trimmed;
+    }
+
+    // Splits a comma-separated key-column list, trims each entry, validates
+    // each as a SQL identifier, and re-joins with ", " for stable storage.
+    // Returns null when the input is blank — keeps "no extras" unambiguous.
+    private static string? NormalizeKeyColumnList(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var parts = value
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        if (parts.Count == 0) return null;
+        foreach (var p in parts)
+        {
+            if (!PrimaryTableRef.AliasRegex().IsMatch(p))
+                throw new ArgumentException(
+                    $"\"{p}\" is not a valid column name. Use letters, digits, and underscores only.",
+                    nameof(value));
+        }
+        return string.Join(", ", parts);
     }
 
     // Flips off is_default_primary for every row on the given connection,

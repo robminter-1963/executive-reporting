@@ -445,8 +445,109 @@ public static class QueryBuilder
             return false;
         }
 
+        // Build a graph of joins keyed by source alias, then BFS from the
+        // primary table to find the chain of joins needed to reach each
+        // required table. Replaces the previous "first match by target"
+        // approach, which couldn't handle multi-hop paths like
+        // lead → account → campaign (only "campaign" is in requiredTables,
+        // but you also need the lead → account join to bring "a" into
+        // scope before account → campaign can reference it).
+        //
+        // Sources of a join: aliases referenced in its ON clause that AREN'T
+        // its own targets. Targets of a join: aliases it introduces (defined
+        // by `JOIN x AS alias`) plus its parsed ToTable when set. Both are
+        // computed from the JoinConfig — the parser may have left FromTable
+        // empty, so we lean on the RawSql for ground truth.
+        IEnumerable<string> JoinDefinedTargets(JoinConfig j)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrEmpty(j.ToTable) && seen.Add(j.ToTable)) yield return j.ToTable;
+            if (!string.IsNullOrEmpty(j.RawSql))
+            {
+                foreach (Match m in DefinedAliasRegex.Matches(j.RawSql))
+                {
+                    var a = m.Groups[1].Value;
+                    if (JoinSqlKeywords.Contains(a)) continue;
+                    if (seen.Add(a)) yield return a;
+                }
+            }
+        }
+
+        IEnumerable<string> JoinSourceAliases(JoinConfig j)
+        {
+            // Aliases referenced in the join's RawSql that aren't its own
+            // targets. These are the "parent" dependencies — what must be
+            // in scope before this join can run.
+            if (string.IsNullOrEmpty(j.RawSql)) yield break;
+            var selfTargets = new HashSet<string>(JoinDefinedTargets(j), StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match m in ReferencedAliasRegex.Matches(j.RawSql))
+            {
+                var a = m.Groups[1].Value;
+                if (JoinSqlKeywords.Contains(a)) continue;
+                if (selfTargets.Contains(a)) continue;
+                if (seen.Add(a)) yield return a;
+            }
+        }
+
+        var joinAdjacency = new Dictionary<string, List<(JoinConfig Join, List<string> Targets)>>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var jc in joinConfigs)
+        {
+            if (TargetsPrimary(jc)) continue; // never bring the primary in via a JOIN
+            var sources = JoinSourceAliases(jc).ToList();
+            var targets = JoinDefinedTargets(jc).ToList();
+            if (targets.Count == 0) continue; // can't reach anything
+            foreach (var src in sources)
+            {
+                if (!joinAdjacency.TryGetValue(src, out var list))
+                    joinAdjacency[src] = list = new List<(JoinConfig, List<string>)>();
+                list.Add((jc, targets));
+            }
+        }
+
+        // BFS from every primary identifier (full name, alias, bare name)
+        // so a join authored against any of those forms gets discovered.
+        var joinPath = new Dictionary<string, List<JoinConfig>>(StringComparer.OrdinalIgnoreCase);
+        var visitedBfs = new HashSet<string>(primaryIdentifiers, StringComparer.OrdinalIgnoreCase);
+        foreach (var pid in primaryIdentifiers) joinPath[pid] = new List<JoinConfig>();
+        var bfsQueue = new Queue<string>(primaryIdentifiers);
+        while (bfsQueue.Count > 0)
+        {
+            var cur = bfsQueue.Dequeue();
+            if (!joinAdjacency.TryGetValue(cur, out var edges)) continue;
+            foreach (var (jc, targets) in edges)
+            {
+                foreach (var tgt in targets)
+                {
+                    if (!visitedBfs.Add(tgt)) continue;
+                    joinPath[tgt] = new List<JoinConfig>(joinPath[cur]) { jc };
+                    bfsQueue.Enqueue(tgt);
+                }
+            }
+        }
+
+        // Emit the path joins for every required table. Joins are added to
+        // emittedJoinIds so the secondary per-field JoinIds loop later in
+        // this method doesn't double-emit them.
         foreach (var table in requiredTables.Where(t => !primaryIdentifiers.Contains(t)))
         {
+            if (joinPath.TryGetValue(table, out var path) && path.Count > 0)
+            {
+                foreach (var jc in path)
+                {
+                    if (!emittedJoinIds.Add(jc.Id)) continue;
+                    AddFragment(jc.RawSql);
+                    foreach (var tgt in JoinDefinedTargets(jc)) joinedTables.Add(tgt);
+                }
+                joinedTables.Add(table);
+                continue;
+            }
+
+            // BFS didn't reach this table — fall back to the legacy
+            // "first match" picker so reports with joins authored before
+            // the source-aware resolver still run. The SortJoinFragmentsByDependency
+            // pass downstream will reorder fragments topologically.
             var joinConfig = joinConfigs.FirstOrDefault(j =>
                 !TargetsPrimary(j) &&
                 (string.Equals(j.ToTable, table, StringComparison.OrdinalIgnoreCase) ||
@@ -457,12 +558,11 @@ public static class QueryBuilder
             {
                 if (!string.IsNullOrEmpty(joinConfig.RawSql))
                 {
-                    // Use the pre-validated raw SQL from schema_config.json
                     AddFragment(joinConfig.RawSql);
                 }
                 else
                 {
-                    // Fallback: reconstruct from parts (legacy JoinConfig without RawSql)
+                    // Reconstruct from parts (legacy JoinConfig without RawSql)
                     ValidateJoinType(joinConfig.JoinType);
                     ValidateIdentifier(joinConfig.FromTable, "JoinConfig FromTable");
                     ValidateIdentifier(joinConfig.FromColumn, "JoinConfig FromColumn");

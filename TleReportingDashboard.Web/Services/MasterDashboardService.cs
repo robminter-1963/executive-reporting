@@ -15,12 +15,20 @@ public class MasterDashboardService : IMasterDashboardService
 {
     private readonly string _connectionString;
     private readonly IAdminService _admins;
+    private readonly ConfigDbCache _cache;
+    private readonly EditorModeState _editorMode;
 
-    public MasterDashboardService(IConfiguration configuration, IAdminService admins)
+    public MasterDashboardService(
+        IConfiguration configuration,
+        IAdminService admins,
+        ConfigDbCache cache,
+        EditorModeState editorMode)
     {
         _connectionString = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required.");
         _admins = admins;
+        _cache = cache;
+        _editorMode = editorMode;
     }
 
     // Throws on anything other than a global or company admin. Methods that
@@ -79,29 +87,38 @@ public class MasterDashboardService : IMasterDashboardService
 
     public async Task<List<MasterDashboardTab>> GetTabsAsync(Guid companyId)
     {
-        var tabs = new List<MasterDashboardTab>();
-        await using var conn = new SqlConnection(_connectionString);
-        await conn.OpenAsync();
-        await using var cmd = new SqlCommand(@"
-            SELECT id, company_id, label, sort_order, title_align
-              FROM EMPOWER.RPT_master_dashboard_tabs
-             WHERE company_id = @CompanyId
-             ORDER BY sort_order", conn);
-        cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
-
-        await using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            tabs.Add(new MasterDashboardTab
+        // Defensive copy — same aliasing concern as GetTilesAsync. The
+        // page mutates `_tabs` for drag-drop reorder and add/remove flows.
+        var cached = await _cache.GetOrAddAsync(
+            ConfigDbCache.Key("MasterDashboardService", "Tabs", companyId),
+            async () =>
             {
-                Id = reader.GetInt32(0),
-                CompanyId = reader.GetGuid(1),
-                Label = reader.GetString(2),
-                SortOrder = reader.GetInt32(3),
-                TitleAlign = reader.IsDBNull(4) ? "left" : reader.GetString(4)
-            });
-        }
-        return tabs;
+                var tabs = new List<MasterDashboardTab>();
+                await using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+                await using var cmd = new SqlCommand(@"
+                    SELECT id, company_id, label, sort_order, title_align
+                      FROM EMPOWER.RPT_master_dashboard_tabs
+                     WHERE company_id = @CompanyId
+                     ORDER BY sort_order", conn);
+                cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
+
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    tabs.Add(new MasterDashboardTab
+                    {
+                        Id = reader.GetInt32(0),
+                        CompanyId = reader.GetGuid(1),
+                        Label = reader.GetString(2),
+                        SortOrder = reader.GetInt32(3),
+                        TitleAlign = reader.IsDBNull(4) ? "left" : reader.GetString(4)
+                    });
+                }
+                return tabs;
+            },
+            bypass: _editorMode.IsActive);
+        return new List<MasterDashboardTab>(cached);
     }
 
     public async Task<MasterDashboardTab> AddTabAsync(Guid companyId, string label, string? userEmail)
@@ -120,6 +137,7 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
         cmd.Parameters.Add(new SqlParameter("@Label", label));
         var newId = (int)(await cmd.ExecuteScalarAsync())!;
+        InvalidateLayoutCache();
         return new MasterDashboardTab { Id = newId, CompanyId = companyId, Label = label };
     }
 
@@ -134,6 +152,7 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@Label", tab.Label));
         cmd.Parameters.Add(new SqlParameter("@Id", tab.Id));
         await cmd.ExecuteNonQueryAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task RemoveTabAsync(int tabId, string? userEmail)
@@ -154,6 +173,7 @@ public class MasterDashboardService : IMasterDashboardService
             "DELETE FROM EMPOWER.RPT_master_dashboard_tabs WHERE id = @Id", conn);
         cmd2.Parameters.Add(new SqlParameter("@Id", tabId));
         await cmd2.ExecuteNonQueryAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task UpdateTabOrderAsync(List<MasterDashboardTab> tabs, string? userEmail)
@@ -175,70 +195,96 @@ public class MasterDashboardService : IMasterDashboardService
             cmd.Parameters.Add(new SqlParameter("@Id", tab.Id));
             await cmd.ExecuteNonQueryAsync();
         }
+        InvalidateLayoutCache();
     }
+
+    // Single helper for write paths — drops every cache entry under this
+    // service's prefix in one call, so a write doesn't have to enumerate
+    // which specific keys it might have invalidated. Kept as a private
+    // method so the prefix string isn't repeated all over the file.
+    private void InvalidateLayoutCache() => _cache.Invalidate("MasterDashboardService:");
 
     // ════════════════════════════════════════════════════════════════════════
     // Tiles
     // ════════════════════════════════════════════════════════════════════════
 
-    public async Task<Dictionary<Guid, List<string>>> GetPlacedReportTabsAsync(Guid companyId)
-    {
-        var result = new Dictionary<Guid, List<string>>();
-        await using var conn = new SqlConnection(_connectionString);
-        await conn.OpenAsync();
-        await using var cmd = new SqlCommand(@"
-            SELECT DISTINCT tl.report_id, tb.label
-            FROM EMPOWER.RPT_master_dashboard_tiles tl
-            INNER JOIN EMPOWER.RPT_master_dashboard_tabs tb ON tb.id = tl.tab_id
-            WHERE tl.company_id = @CompanyId
-            ORDER BY tb.label", conn);
-        cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
+    public Task<Dictionary<Guid, List<string>>> GetPlacedReportTabsAsync(Guid companyId) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("MasterDashboardService", "PlacedReportTabs", companyId),
+            async () =>
+            {
+                var result = new Dictionary<Guid, List<string>>();
+                await using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+                await using var cmd = new SqlCommand(@"
+                    SELECT DISTINCT tl.report_id, tb.label
+                    FROM EMPOWER.RPT_master_dashboard_tiles tl
+                    INNER JOIN EMPOWER.RPT_master_dashboard_tabs tb ON tb.id = tl.tab_id
+                    WHERE tl.company_id = @CompanyId
+                    ORDER BY tb.label", conn);
+                cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
 
-        await using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            var reportId = reader.GetGuid(0);
-            var tabLabel = reader.GetString(1);
-            if (!result.TryGetValue(reportId, out var labels))
-                result[reportId] = labels = new List<string>();
-            labels.Add(tabLabel);
-        }
-        return result;
-    }
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var reportId = reader.GetGuid(0);
+                    var tabLabel = reader.GetString(1);
+                    if (!result.TryGetValue(reportId, out var labels))
+                        result[reportId] = labels = new List<string>();
+                    labels.Add(tabLabel);
+                }
+                return result;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task<List<MasterDashboardTile>> GetTilesAsync(Guid companyId, int tabId)
     {
-        var tiles = new List<MasterDashboardTile>();
-        await using var conn = new SqlConnection(_connectionString);
-        await conn.OpenAsync();
-        await using var cmd = new SqlCommand(@"
-            SELECT t.id, t.company_id, t.tab_id, t.report_id, r.name,
-                   t.sort_order, t.col_span, t.height, t.title_align, t.section_id
-            FROM EMPOWER.RPT_master_dashboard_tiles t
-            INNER JOIN EMPOWER.RPT_saved_reports r ON r.id = t.report_id
-            WHERE t.company_id = @CompanyId AND t.tab_id = @TabId
-            ORDER BY t.sort_order", conn);
-        cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
-        cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
-
-        await using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            tiles.Add(new MasterDashboardTile
+        // Defensive copy on return so callers can mutate freely without
+        // poisoning the cache. The page (`MasterDashboard.razor`) does
+        // `_tiles.Add/Remove/Insert/RemoveAt/RemoveAll` for drag-drop,
+        // section delete, etc. Without this copy those mutations rewrite
+        // the cached list in place via reference aliasing — fine until
+        // the next user / session reads the cache and gets the mutated
+        // result. Closing the browser doesn't help because the cache is
+        // a process-singleton.
+        var cached = await _cache.GetOrAddAsync(
+            ConfigDbCache.Key("MasterDashboardService", "Tiles", companyId, tabId),
+            async () =>
             {
-                Id = reader.GetInt32(0),
-                CompanyId = reader.GetGuid(1),
-                TabId = reader.GetInt32(2),
-                ReportId = reader.GetGuid(3),
-                ReportName = reader.GetString(4),
-                SortOrder = reader.GetInt32(5),
-                ColSpan = reader.GetInt32(6),
-                Height = reader.GetInt32(7),
-                TitleAlign = reader.IsDBNull(8) ? "left" : reader.GetString(8),
-                SectionId = reader.IsDBNull(9) ? null : reader.GetInt32(9)
-            });
-        }
-        return tiles;
+                var tiles = new List<MasterDashboardTile>();
+                await using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+                await using var cmd = new SqlCommand(@"
+                    SELECT t.id, t.company_id, t.tab_id, t.report_id, r.name,
+                           t.sort_order, t.col_span, t.height, t.title_align, t.section_id
+                    FROM EMPOWER.RPT_master_dashboard_tiles t
+                    INNER JOIN EMPOWER.RPT_saved_reports r ON r.id = t.report_id
+                    WHERE t.company_id = @CompanyId AND t.tab_id = @TabId
+                    ORDER BY t.sort_order", conn);
+                cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
+                cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
+
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    tiles.Add(new MasterDashboardTile
+                    {
+                        Id = reader.GetInt32(0),
+                        CompanyId = reader.GetGuid(1),
+                        TabId = reader.GetInt32(2),
+                        ReportId = reader.GetGuid(3),
+                        ReportName = reader.GetString(4),
+                        SortOrder = reader.GetInt32(5),
+                        ColSpan = reader.GetInt32(6),
+                        Height = reader.GetInt32(7),
+                        TitleAlign = reader.IsDBNull(8) ? "left" : reader.GetString(8),
+                        SectionId = reader.IsDBNull(9) ? null : reader.GetInt32(9)
+                    });
+                }
+                return tiles;
+            },
+            bypass: _editorMode.IsActive);
+        return new List<MasterDashboardTile>(cached);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -247,30 +293,40 @@ public class MasterDashboardService : IMasterDashboardService
 
     public async Task<List<MasterDashboardSection>> GetSectionsAsync(int tabId)
     {
-        var sections = new List<MasterDashboardSection>();
-        await using var conn = new SqlConnection(_connectionString);
-        await conn.OpenAsync();
-        await using var cmd = new SqlCommand(@"
-            SELECT id, tab_id, label, sort_order, title_align, collapsed
-            FROM EMPOWER.RPT_master_dashboard_sections
-            WHERE tab_id = @TabId
-            ORDER BY sort_order", conn);
-        cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
-
-        await using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            sections.Add(new MasterDashboardSection
+        // Defensive copy — same aliasing concern as GetTilesAsync. The
+        // page mutates `_sections` for drag-drop reorder and section
+        // add/remove flows; without the copy those land in the cache.
+        var cached = await _cache.GetOrAddAsync(
+            ConfigDbCache.Key("MasterDashboardService", "Sections", tabId),
+            async () =>
             {
-                Id = reader.GetInt32(0),
-                TabId = reader.GetInt32(1),
-                Label = reader.GetString(2),
-                SortOrder = reader.GetInt32(3),
-                TitleAlign = reader.IsDBNull(4) ? "left" : reader.GetString(4),
-                Collapsed = !reader.IsDBNull(5) && reader.GetBoolean(5)
-            });
-        }
-        return sections;
+                var sections = new List<MasterDashboardSection>();
+                await using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+                await using var cmd = new SqlCommand(@"
+                    SELECT id, tab_id, label, sort_order, title_align, collapsed
+                    FROM EMPOWER.RPT_master_dashboard_sections
+                    WHERE tab_id = @TabId
+                    ORDER BY sort_order", conn);
+                cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
+
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    sections.Add(new MasterDashboardSection
+                    {
+                        Id = reader.GetInt32(0),
+                        TabId = reader.GetInt32(1),
+                        Label = reader.GetString(2),
+                        SortOrder = reader.GetInt32(3),
+                        TitleAlign = reader.IsDBNull(4) ? "left" : reader.GetString(4),
+                        Collapsed = !reader.IsDBNull(5) && reader.GetBoolean(5)
+                    });
+                }
+                return sections;
+            },
+            bypass: _editorMode.IsActive);
+        return new List<MasterDashboardSection>(cached);
     }
 
     public async Task<MasterDashboardSection> AddSectionAsync(int tabId, string label, string? userEmail)
@@ -303,6 +359,7 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
         cmd.Parameters.Add(new SqlParameter("@Label", label));
         var newId = (int)(await cmd.ExecuteScalarAsync())!;
+        InvalidateLayoutCache();
         return new MasterDashboardSection { Id = newId, TabId = tabId, Label = label };
     }
 
@@ -319,6 +376,7 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@Label", label));
         cmd.Parameters.Add(new SqlParameter("@Id", sectionId));
         await cmd.ExecuteNonQueryAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task UpdateSectionOrderAsync(List<MasterDashboardSection> sections, string? userEmail)
@@ -342,6 +400,7 @@ public class MasterDashboardService : IMasterDashboardService
             cmd.Parameters.Add(new SqlParameter("@Id", s.Id));
             await cmd.ExecuteNonQueryAsync();
         }
+        InvalidateLayoutCache();
     }
 
     public async Task RemoveSectionAsync(int sectionId, string? userEmail)
@@ -376,6 +435,7 @@ public class MasterDashboardService : IMasterDashboardService
         }
 
         await tx.CommitAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task SetSectionCollapsedAsync(int sectionId, bool collapsed, string? userEmail)
@@ -391,6 +451,7 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@Collapsed", collapsed));
         cmd.Parameters.Add(new SqlParameter("@Id", sectionId));
         await cmd.ExecuteNonQueryAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task SetSectionAlignAsync(int sectionId, string align, string? userEmail)
@@ -417,6 +478,7 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@Align", normalized));
         cmd.Parameters.Add(new SqlParameter("@Id", sectionId));
         await cmd.ExecuteNonQueryAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task MoveSectionToTabAsync(int sectionId, int targetTabId, string? userEmail)
@@ -469,7 +531,13 @@ public class MasterDashboardService : IMasterDashboardService
             )
             UPDATE t
             SET t.tab_id = @TargetTabId,
-                t.sort_order = (SELECT m FROM target_max) + ttm.rn
+                t.sort_order = (SELECT m FROM target_max) + ttm.rn,
+                -- Self-heal company_id alongside tab_id. The
+                -- same-company guard above already blocks cross-
+                -- company section moves, but a tile carrying a stale
+                -- company_id from earlier corruption gets cleaned up
+                -- here as a side effect of the section move.
+                t.company_id = (SELECT company_id FROM EMPOWER.RPT_master_dashboard_tabs WHERE id = @TargetTabId)
             FROM EMPOWER.RPT_master_dashboard_tiles t
             INNER JOIN tiles_to_move ttm ON ttm.id = t.id", conn, (SqlTransaction)tx))
         {
@@ -479,6 +547,7 @@ public class MasterDashboardService : IMasterDashboardService
         }
 
         await tx.CommitAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task MoveTileToSectionAsync(int tileId, int? sectionId, string? userEmail)
@@ -506,46 +575,51 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@SectionId", (object?)sectionId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@Id", tileId));
         await cmd.ExecuteNonQueryAsync();
+        InvalidateLayoutCache();
     }
 
-    public async Task<List<SavedReport>> GetAvailableReportsAsync(Guid companyId)
-    {
-        var reports = new List<SavedReport>();
-        await using var conn = new SqlConnection(_connectionString);
-        await conn.OpenAsync();
-        // Reports are company-scoped too (saved_reports.company_id). Only
-        // surface candidates that belong to the current company so tiles
-        // can't accidentally pull another company's data.
-        //
-        // Pull filters + updated_at so the AddTileDialog can show a per-row
-        // subtitle distinguishing reports that share a name (e.g. one
-        // "Active Pipeline" per loan type). Sort by name then most-recently-
-        // edited so duplicates cluster and the freshest copy is on top.
-        await using var cmd = new SqlCommand(@"
-            SELECT id, name, internal_name, owner_id, filters, column_state, updated_at
-            FROM EMPOWER.RPT_saved_reports
-            WHERE company_id = @CompanyId
-              AND (column_state LIKE '%""ShowOnMaster"":true%'
-                   OR column_state LIKE '%""ShowOnMaster"": true%')
-            ORDER BY ISNULL(internal_name, name), updated_at DESC", conn);
-        cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
-
-        await using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            reports.Add(new SavedReport
+    public Task<List<SavedReport>> GetAvailableReportsAsync(Guid companyId) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("MasterDashboardService", "AvailableReports", companyId),
+            async () =>
             {
-                Id = reader.GetGuid(0),
-                Name = reader.GetString(1),
-                InternalName = reader.IsDBNull(2) ? null : reader.GetString(2),
-                OwnerId = reader.GetString(3),
-                Filters = reader.IsDBNull(4) ? null : reader.GetString(4),
-                ColumnState = reader.IsDBNull(5) ? null : reader.GetString(5),
-                UpdatedAt = reader.GetDateTime(6)
-            });
-        }
-        return reports;
-    }
+                var reports = new List<SavedReport>();
+                await using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+                // Reports are company-scoped too (saved_reports.company_id). Only
+                // surface candidates that belong to the current company so tiles
+                // can't accidentally pull another company's data.
+                //
+                // Pull filters + updated_at so the AddTileDialog can show a per-row
+                // subtitle distinguishing reports that share a name (e.g. one
+                // "Active Pipeline" per loan type). Sort by name then most-recently-
+                // edited so duplicates cluster and the freshest copy is on top.
+                await using var cmd = new SqlCommand(@"
+                    SELECT id, name, internal_name, owner_id, filters, column_state, updated_at
+                    FROM EMPOWER.RPT_saved_reports
+                    WHERE company_id = @CompanyId
+                      AND (column_state LIKE '%""ShowOnMaster"":true%'
+                           OR column_state LIKE '%""ShowOnMaster"": true%')
+                    ORDER BY ISNULL(internal_name, name), updated_at DESC", conn);
+                cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
+
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    reports.Add(new SavedReport
+                    {
+                        Id = reader.GetGuid(0),
+                        Name = reader.GetString(1),
+                        InternalName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                        OwnerId = reader.GetString(3),
+                        Filters = reader.IsDBNull(4) ? null : reader.GetString(4),
+                        ColumnState = reader.IsDBNull(5) ? null : reader.GetString(5),
+                        UpdatedAt = reader.GetDateTime(6)
+                    });
+                }
+                return reports;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task AddTileAsync(Guid companyId, int tabId, Guid reportId, string? userEmail, int colSpan = 12, int? sectionId = null)
     {
@@ -589,6 +663,7 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@ColSpan", colSpan));
         cmd.Parameters.Add(new SqlParameter("@SectionId", (object?)sectionId ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task MoveTileToTabAsync(int tileId, int targetTabId, string? userEmail)
@@ -602,19 +677,31 @@ public class MasterDashboardService : IMasterDashboardService
         // Append to the target tab's sort order so the moved tile lands at
         // the end. No-op when the tile already lives on the target tab
         // (WHERE tab_id <> @TargetTabId).
+        // Re-sync company_id alongside tab_id. Without this, moving a tile
+        // between tabs of different companies leaves the tile carrying its
+        // OLD company_id; the cross-company guard on MoveTileToSectionAsync
+        // then rejects perfectly valid same-company moves later because the
+        // stale company_id no longer matches the section's parent tab.
+        // Also clear any section_id — the old section lives under the old
+        // tab and would dangle.
         await using var cmd = new SqlCommand(@"
-            UPDATE EMPOWER.RPT_master_dashboard_tiles
-               SET tab_id = @TargetTabId,
-                   sort_order = ISNULL(
+            UPDATE t
+               SET t.tab_id = @TargetTabId,
+                   t.company_id = tb.company_id,
+                   t.section_id = NULL,
+                   t.sort_order = ISNULL(
                        (SELECT MAX(sort_order) + 1
                           FROM EMPOWER.RPT_master_dashboard_tiles
                          WHERE tab_id = @TargetTabId),
                        0)
-             WHERE id = @Id
-               AND tab_id <> @TargetTabId;", conn);
+              FROM EMPOWER.RPT_master_dashboard_tiles t
+              JOIN EMPOWER.RPT_master_dashboard_tabs   tb ON tb.id = @TargetTabId
+             WHERE t.id = @Id
+               AND t.tab_id <> @TargetTabId;", conn);
         cmd.Parameters.Add(new SqlParameter("@Id", tileId));
         cmd.Parameters.Add(new SqlParameter("@TargetTabId", targetTabId));
         await cmd.ExecuteNonQueryAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task RemoveTileAsync(int tileId, string? userEmail)
@@ -629,6 +716,7 @@ public class MasterDashboardService : IMasterDashboardService
             "DELETE FROM EMPOWER.RPT_master_dashboard_tiles WHERE id = @Id", conn);
         cmd.Parameters.Add(new SqlParameter("@Id", tileId));
         await cmd.ExecuteNonQueryAsync();
+        InvalidateLayoutCache();
     }
 
     public async Task UpdateLayoutAsync(List<MasterDashboardTile> tiles, string? userEmail)
@@ -653,5 +741,6 @@ public class MasterDashboardService : IMasterDashboardService
             cmd.Parameters.Add(new SqlParameter("@Id", tile.Id));
             await cmd.ExecuteNonQueryAsync();
         }
+        InvalidateLayoutCache();
     }
 }

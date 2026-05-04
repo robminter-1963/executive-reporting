@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Moq;
 using TleReportingDashboard.Web.Configuration;
@@ -39,7 +40,14 @@ public class SchemaServiceTests
 
         var logger = new Mock<ILogger<SchemaService>>();
         var connectionAdmin = new Mock<ICompanyConnectionAdminService>();
-        _service = new SchemaService(store.Object, codeSetService.Object, connectionAdmin.Object, logger.Object);
+        // Real ConfigDbCache + EditorModeState — both are simple value types
+        // around an IMemoryCache + counter, so a real instance is cheaper
+        // than mocking the interface surface. EditorModeState in its default
+        // state has IsActive=false so the cache serves cached values, which
+        // is what every test here expects (single-call observable behavior).
+        var cache = new ConfigDbCache(new MemoryCache(new MemoryCacheOptions()));
+        var editorMode = new EditorModeState();
+        _service = new SchemaService(store.Object, codeSetService.Object, connectionAdmin.Object, cache, editorMode, logger.Object);
     }
 
     [Fact]

@@ -64,6 +64,52 @@ public class QueryRequest
     // detail view) just leave this null and the emitter treats it as a
     // no-op. Feature-flagged on the UI side via Features:AdvancedFilters.
     public FilterGroup? AdvancedFilters { get; set; }
+
+    // Per-report SQL-mode calculated columns. Each carries a raw SQL
+    // expression that QueryBuilder appends to the SELECT as
+    // "<expr> AS <Key>", plus the schema join ids the expression depends
+    // on (pulled into the FROM/JOIN chain so referenced aliases resolve).
+    // Null/empty = no SQL calcs — formula-mode calcs evaluate client-side
+    // and don't appear here. Same trust model as FieldConfig.SqlExpression:
+    // admin-authored, embedded as-is.
+    public List<TableCalcSqlSelector>? TableCalcSqlColumns { get; set; }
+
+    // When true, QueryBuilder skips its fallback "ORDER BY first selected
+    // field" emission. Used when the admin explicitly chose "(None)" in
+    // the Sort By dropdown — the SQL stays unsorted (Postgres-friendly;
+    // OFFSET on SQL Server still requires ORDER BY, so the dialect path
+    // re-enables the fallback for that DB to keep paging working).
+    // Defaults to false so existing callers and pre-multi-sort reports
+    // keep getting a deterministic ORDER BY.
+    public bool DisableDefaultSort { get; set; }
+
+    // When true, QueryBuilder emits `SELECT DISTINCT` instead of `SELECT`.
+    // Useful when the report's join chain produces row-multiplication
+    // (e.g. a one-to-many LEFT JOIN where the admin only cares about the
+    // parent's distinct rows). Defaults to false — most reports want the
+    // raw row counts. Toggled per-report from the Report Builder; persisted
+    // in ColumnState alongside other table-view options.
+    public bool Distinct { get; set; }
+
+    // Primary-key columns of the report's primary table, in PK ordinal
+    // order. When SortField is null/empty, QueryBuilder uses these as a
+    // behind-the-scenes ORDER BY so OFFSET pagination stays deterministic
+    // even when the admin picked "(None)" in the Sort By dropdown.
+    // Raw column names (not alias-qualified) — QueryBuilder qualifies
+    // with the primary table's alias at emission. Empty/null = no
+    // auto-fallback (legacy behavior: ORDER BY first selected field).
+    public List<string>? FallbackSortColumns { get; set; }
+}
+
+// One SQL-mode calc column carried on the request. Key is the column
+// alias used in the SELECT (also the row-dict key on the way back).
+// SqlExpression is appended as-is between the alias and the next column.
+// JoinIds reference JoinDefinition.Id strings on the connection schema.
+public sealed class TableCalcSqlSelector
+{
+    public required string Key { get; init; }
+    public required string SqlExpression { get; init; }
+    public List<string>? JoinIds { get; init; }
 }
 
 // Row-level scoping payload. Carried on QueryRequest.Scoping; resolved

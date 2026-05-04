@@ -21,16 +21,19 @@ public class SchemaConfigStore : ISchemaConfigStore
 
     private readonly string _connStr;
     private readonly ILogger<SchemaConfigStore> _logger;
+    private readonly ConfigDbCache _configCache;
     private readonly ConcurrentDictionary<Guid, SchemaConfig> _cache = new();
     private readonly SemaphoreSlim _loadMutex = new(1, 1);
 
     public SchemaConfigStore(
         IConfiguration configuration,
+        ConfigDbCache configCache,
         ILogger<SchemaConfigStore> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException(
                 "ConfigDb connection string is required for SchemaConfigStore.");
+        _configCache = configCache;
         _logger = logger;
     }
 
@@ -112,6 +115,11 @@ public class SchemaConfigStore : ISchemaConfigStore
         await tx.CommitAsync();
 
         _cache[connectionId] = config;
+        // Drop every SchemaService-derived entry so the next read from
+        // every other circuit gets the saved version, not the pre-edit
+        // copy. Editor-mode bypass would have evicted the editing user's
+        // own keys already; this catches everyone else.
+        _configCache.Invalidate("SchemaService:");
         _logger.LogInformation("Schema config saved for connection {ConnectionId} by {User} ({Fields} fields, {Joins} joins)",
             connectionId, updatedBy ?? "unknown", config.Fields.Count, config.Joins.Count);
         OnChanged?.Invoke(connectionId);
@@ -147,7 +155,11 @@ public class SchemaConfigStore : ISchemaConfigStore
         return result is not null;
     }
 
-    public void Invalidate(Guid connectionId) => _cache.TryRemove(connectionId, out _);
+    public void Invalidate(Guid connectionId)
+    {
+        _cache.TryRemove(connectionId, out _);
+        _configCache.Invalidate("SchemaService:");
+    }
 
     // ── Private helpers ─────────────────────────────────────────────────
 

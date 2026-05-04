@@ -5,38 +5,49 @@ namespace TleReportingDashboard.Web.Services;
 public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
 {
     private readonly string _connStr;
+    private readonly ConfigDbCache _cache;
+    private readonly EditorModeState _editorMode;
 
-    public CustomPrimaryTableService(IConfiguration configuration)
+    public CustomPrimaryTableService(
+        IConfiguration configuration,
+        ConfigDbCache cache,
+        EditorModeState editorMode)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required.");
+        _cache = cache;
+        _editorMode = editorMode;
     }
 
-    public async Task<List<CustomPrimaryTableRecord>> GetByConnectionAsync(
-        Guid connectionId, CancellationToken ct = default)
-    {
-        var result = new List<CustomPrimaryTableRecord>();
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        // Ordered: defaults first, then other suggested primaries, then the
-        // rest. Keeps the admin editor and the builder dropdown visually
-        // aligned without requiring a re-sort at the UI layer.
-        await using var cmd = new SqlCommand(@"
-            SELECT id, connection_id, table_name, alias,
-                   is_primary, is_default_primary,
-                   created_at, created_by_id, created_by_email,
-                   table_type, primary_column, additional_key_columns
-            FROM EMPOWER.RPT_custom_primary_tables
-            WHERE connection_id = @c
-            ORDER BY is_default_primary DESC, is_primary DESC, table_name, alias;", conn);
-        cmd.Parameters.Add(new SqlParameter("@c", connectionId));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            result.Add(ReadRecord(reader));
-        }
-        return result;
-    }
+    public Task<List<CustomPrimaryTableRecord>> GetByConnectionAsync(
+        Guid connectionId, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("CustomPrimaryTableService", "ByConnection", connectionId),
+            async () =>
+            {
+                var result = new List<CustomPrimaryTableRecord>();
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                // Ordered: defaults first, then other suggested primaries, then the
+                // rest. Keeps the admin editor and the builder dropdown visually
+                // aligned without requiring a re-sort at the UI layer.
+                await using var cmd = new SqlCommand(@"
+                    SELECT id, connection_id, table_name, alias,
+                           is_primary, is_default_primary,
+                           created_at, created_by_id, created_by_email,
+                           table_type, primary_column, additional_key_columns
+                    FROM EMPOWER.RPT_custom_primary_tables
+                    WHERE connection_id = @c
+                    ORDER BY is_default_primary DESC, is_primary DESC, table_name, alias;", conn);
+                cmd.Parameters.Add(new SqlParameter("@c", connectionId));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    result.Add(ReadRecord(reader));
+                }
+                return result;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task<CustomPrimaryTableRecord> AddAsync(
         Guid connectionId, string tableName, string? alias,
@@ -142,6 +153,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         insert.Parameters.Add(new SqlParameter("@pc", (object?)normalizedPrimaryColumn ?? DBNull.Value));
         insert.Parameters.Add(new SqlParameter("@ak", (object?)normalizedAdditionalKeys ?? DBNull.Value));
         await insert.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("CustomPrimaryTableService:");
 
         return new CustomPrimaryTableRecord
         {
@@ -236,6 +248,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         cmd.Parameters.Add(new SqlParameter("@pc", (object?)normalizedPrimaryColumn ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@ak", (object?)normalizedAdditionalKeys ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("CustomPrimaryTableService:");
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
@@ -246,6 +259,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             "DELETE FROM EMPOWER.RPT_custom_primary_tables WHERE id = @id;", conn);
         cmd.Parameters.Add(new SqlParameter("@id", id));
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("CustomPrimaryTableService:");
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
@@ -338,23 +352,27 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
 
     // ── Role-scoped owner fields ───────────────────────────────────────────
 
-    public async Task<IReadOnlyDictionary<Guid, string>> GetRoleOwnerFieldsAsync(Guid primaryTableId, CancellationToken ct = default)
-    {
-        var map = new Dictionary<Guid, string>();
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(@"
-            SELECT role_id, owner_field_id
-              FROM EMPOWER.RPT_primary_table_role_owners
-             WHERE primary_table_id = @pid;", conn);
-        cmd.Parameters.Add(new SqlParameter("@pid", primaryTableId));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            map[reader.GetGuid(0)] = reader.GetString(1);
-        }
-        return map;
-    }
+    public Task<IReadOnlyDictionary<Guid, string>> GetRoleOwnerFieldsAsync(Guid primaryTableId, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("CustomPrimaryTableService", "RoleOwners", primaryTableId),
+            async () =>
+            {
+                var map = new Dictionary<Guid, string>();
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(@"
+                    SELECT role_id, owner_field_id
+                      FROM EMPOWER.RPT_primary_table_role_owners
+                     WHERE primary_table_id = @pid;", conn);
+                cmd.Parameters.Add(new SqlParameter("@pid", primaryTableId));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    map[reader.GetGuid(0)] = reader.GetString(1);
+                }
+                return (IReadOnlyDictionary<Guid, string>)map;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task SetRoleOwnerAsync(Guid primaryTableId, Guid roleId, string ownerFieldId, CancellationToken ct = default)
     {
@@ -377,6 +395,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         cmd.Parameters.Add(new SqlParameter("@rid", roleId));
         cmd.Parameters.Add(new SqlParameter("@fid", ownerFieldId.Trim()));
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("CustomPrimaryTableService:RoleOwners:");
     }
 
     public async Task ClearRoleOwnerAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default)
@@ -389,19 +408,24 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         cmd.Parameters.Add(new SqlParameter("@pid", primaryTableId));
         cmd.Parameters.Add(new SqlParameter("@rid", roleId));
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("CustomPrimaryTableService:RoleOwners:");
     }
 
-    public async Task<string?> ResolveOwnerFieldForRoleAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default)
-    {
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(@"
-            SELECT owner_field_id
-              FROM EMPOWER.RPT_primary_table_role_owners
-             WHERE primary_table_id = @pid AND role_id = @rid;", conn);
-        cmd.Parameters.Add(new SqlParameter("@pid", primaryTableId));
-        cmd.Parameters.Add(new SqlParameter("@rid", roleId));
-        var result = await cmd.ExecuteScalarAsync(ct);
-        return result as string;
-    }
+    public Task<string?> ResolveOwnerFieldForRoleAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("CustomPrimaryTableService", "ResolveOwner", primaryTableId, roleId),
+            async () =>
+            {
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(@"
+                    SELECT owner_field_id
+                      FROM EMPOWER.RPT_primary_table_role_owners
+                     WHERE primary_table_id = @pid AND role_id = @rid;", conn);
+                cmd.Parameters.Add(new SqlParameter("@pid", primaryTableId));
+                cmd.Parameters.Add(new SqlParameter("@rid", roleId));
+                var result = await cmd.ExecuteScalarAsync(ct);
+                return result as string;
+            },
+            bypass: _editorMode.IsActive);
 }

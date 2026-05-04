@@ -5,6 +5,7 @@
 @inject ICompanyRegistry CompanyRegistry
 @inject IUserManagementService UserManagement
 @inject IAdminService AdminService
+@inject IAdminAccessService AdminAccess
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject ILogger<CompanyPicker> Logger
@@ -120,6 +121,13 @@
         width: 240px;
         aspect-ratio: 3 / 2;
         cursor: pointer;
+        /* Match Master Dashboard tiles: 12px corners + the same layered
+           drop shadow so the picker reads as part of the same visual
+           system. Hover keeps the existing lift; the resting shadow
+           replaces MudPaper's Elevation default. */
+        border-radius: 12px;
+        box-shadow: 7px 7px 9px rgba(0, 0, 0, 0.20),
+                    5px 5px 7px rgba(0, 0, 0, 0.14);
         /* Overshoot cubic-bezier gives the hover lift a little "hop" feel
            without a full keyframe animation — transform springs past the
            target position and settles. */
@@ -135,7 +143,8 @@
     }
     .company-card:hover {
         transform: translateY(-12px);
-        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.20);
+        box-shadow: 10px 14px 18px rgba(0, 0, 0, 0.24),
+                    7px 9px 12px rgba(0, 0, 0, 0.18);
     }
     .company-logo {
         max-width: 100%;
@@ -180,17 +189,24 @@
 
             var all = await CompanyRegistry.GetActiveAsync();
             var isAdmin = AdminService.IsAdmin(_userEmail);
+            // Roles with any admin-section access (Administrator, System
+            // Support, etc.) bypass the per-company grant list — they need
+            // to navigate to every company to do administrative work. Same
+            // mental model as `is_admin` historically had; just generalized
+            // to anyone whose role grants admin access.
+            var hasAdminAccess = await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
 
-            if (isAdmin)
+            if (isAdmin || hasAdminAccess)
             {
                 _visible = all;
                 _isRegistered = true;
             }
             else if (!string.IsNullOrEmpty(_userEmail))
             {
-                // Non-admins only see companies they've been granted access to.
-                // Access is email-keyed in UserManagementService so it works
-                // even for pre-provisioned users who haven't signed in yet.
+                // Non-admin / non-admin-section users only see companies
+                // they've been granted access to. Access is email-keyed in
+                // UserManagementService so it works even for pre-
+                // provisioned users who haven't signed in yet.
                 var userRow = await UserManagement.GetByEmailAsync(_userEmail);
                 _isRegistered = userRow is not null;
 
@@ -204,16 +220,58 @@
                 _isRegistered = false;
             }
 
+            // Single-company users can't reach the picker. Even with
+            // ?all=1 forcing it, there's nothing to pick — auto-redirect
+            // straight to their only company. This rule does NOT apply to
+            // global admins or admin-section users: they see every active
+            // company by design, so _visible.Count > 1 in the typical case
+            // and the regular flow takes over.
+            if (!isAdmin && !hasAdminAccess && _visible.Count == 1)
+            {
+                Navigation.NavigateTo($"/master-dashboard/{_visible[0].Code}", replace: true);
+                return;
+            }
+
             // Auto-redirect to last-visited company, but only when the URL
             // doesn't carry ?all=1 (the "show me the picker anyway" escape
             // hatch used by the Ralis logo and the breadcrumb).
             var query = QueryHelpers.ParseQuery(new Uri(Navigation.Uri).Query);
             var forcePicker = query.TryGetValue("all", out var v) && v.ToString() == "1";
 
-            if (!forcePicker && !string.IsNullOrEmpty(_userEmail))
+            if (forcePicker && !string.IsNullOrEmpty(_userEmail))
             {
-                var last = await UserManagement.GetByEmailAsync(_userEmail);
-                if (last?.LastVisitedCompanyId is Guid lastId)
+                // The user explicitly chose the "All Companies" view —
+                // persist that as their preference so the next sign-in
+                // lands here instead of auto-redirecting back into the
+                // last-visited company. The flag is a separate column from
+                // last_visited_company_id because the latter gets re-set
+                // on every Master Dashboard load (including bookmarks /
+                // session restore), which would clobber this choice.
+                // PickCompany resets it back to false. Fire-and-forget; a
+                // transient SQL hiccup shouldn't block the picker render.
+                try { await UserManagement.SetPrefersCompanyPickerAsync(_userEmail, true); }
+                catch (Exception ex) { Logger.LogWarning(ex, "Could not set PrefersCompanyPicker for {Email}", _userEmail); }
+            }
+            else if (!string.IsNullOrEmpty(_userEmail))
+            {
+                // forceRefresh=true bypasses the per-email cache for this
+                // critical-redirect read. Cache writes have a tiny race
+                // window — between SetPrefers's Invalidate and a
+                // concurrent reader's in-flight factory completion, an
+                // older snapshot can land back in the cache. The picker's
+                // entire reason to read this field is to honor changes
+                // made earlier in the session, so eat the extra DB query.
+                var last = await UserManagement.GetByEmailAsync(_userEmail, forceRefresh: true);
+
+                // Sticky picker preference wins over last-visited auto-redirect.
+                if (last?.PrefersCompanyPicker == true)
+                {
+                    // Show the picker — user explicitly chose "All Companies"
+                    // as their default. Stays on the picker even though
+                    // last_visited_company_id may still hold a value from
+                    // their most recent company navigation.
+                }
+                else if (last?.LastVisitedCompanyId is Guid lastId)
                 {
                     var target = _visible.FirstOrDefault(c => c.Id == lastId);
                     if (target is not null)
@@ -240,11 +298,18 @@
         _loading = false;
     }
 
-    private void PickCompany(CompanySummary c)
+    private async Task PickCompany(CompanySummary c)
     {
-        // Last-visited is saved on the dashboard page's load rather than
-        // here — keeps the write next to the thing it tracks (what URL the
-        // user actually ended up on).
+        // Picking a specific company from the picker is the user's signal
+        // that they're back to per-company defaults — clear the sticky
+        // "always show the picker" flag so the next sign-in auto-redirects
+        // again. Last-visited is saved on the dashboard page's load rather
+        // than here, keeping the write next to the thing it tracks.
+        if (!string.IsNullOrEmpty(_userEmail))
+        {
+            try { await UserManagement.SetPrefersCompanyPickerAsync(_userEmail, false); }
+            catch (Exception ex) { Logger.LogWarning(ex, "Could not reset PrefersCompanyPicker for {Email}", _userEmail); }
+        }
         Navigation.NavigateTo($"/master-dashboard/{c.Code}");
     }
 

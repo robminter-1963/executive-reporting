@@ -13,7 +13,16 @@ public interface IUserManagementService
 {
     // ── Users ──
     Task<List<UserRecord>> GetAllAsync(CancellationToken ct = default);
-    Task<UserRecord?> GetByEmailAsync(string email, CancellationToken ct = default);
+    // forceRefresh=true bypasses the per-email cache and reads fresh from
+    // the DB. Used by callers that depend on near-real-time reads of fields
+    // toggled elsewhere in the same session (e.g. CompanyPicker checking
+    // prefers_company_picker right after SetPrefersCompanyPickerAsync) —
+    // the cache's race window between invalidate-and-in-flight-factory
+    // could otherwise serve a stale value.
+    Task<UserRecord?> GetByEmailAsync(string email, CancellationToken ct = default)
+        => GetByEmailAsync(email, forceRefresh: false, ct);
+
+    Task<UserRecord?> GetByEmailAsync(string email, bool forceRefresh, CancellationToken ct = default);
 
     // Pre-provisioning. email is required; displayName optional (filled from
     // claims on first sign-in if null here). roleId is optional — picking a
@@ -40,14 +49,47 @@ public interface IUserManagementService
     // sign-in. Cheap, fire-and-forget call from the master dashboard page.
     Task SetLastVisitedCompanyAsync(string email, Guid companyId, CancellationToken ct = default);
 
+    // Clears the last-visited company so /  shows the company picker on
+    // next sign-in. Called when the user explicitly navigates to the picker
+    // ("All Companies" view) — that choice IS their preference, persist it.
+    Task ClearLastVisitedCompanyAsync(string email, CancellationToken ct = default);
+
+    // Sets the sticky "always start at the picker" flag. TRUE when the
+    // user landed on /?all=1; FALSE when they pick a company from the
+    // picker. Survives across sessions even when last_visited_company_id
+    // gets re-set by Master Dashboard URL navigations.
+    Task SetPrefersCompanyPickerAsync(string email, bool prefers, CancellationToken ct = default);
+
     // ── Company access ──
     Task<List<UserCompanyAccess>> GetCompanyAccessAsync(string email, CancellationToken ct = default);
+
+    // Resolves the canonical login email for a user given the address they
+    // actually authenticated with. Supports the multi-tenant Entra case
+    // where one logical person has accounts in several ADs (e.g.
+    // paul.bae@theloanexchange.com in TLE's tenant + paul.bae@cashcall.com
+    // in CashCall's tenant). The per-company email override on
+    // RPT_user_companies doubles as the alias map: when an admin assigns
+    // a user to CompanyB and types the user's CompanyB AD address as the
+    // company email, signing in with that address resolves back to the
+    // canonical RPT_users row.
+    //
+    // Returns the matching RPT_users.email, or null when no match is found
+    // (caller treats null as "user not registered" — same as today).
+    // Caller can compare the result to `loginEmail` to decide whether
+    // the address was a direct hit or routed through a per-company alias.
+    Task<string?> ResolveCanonicalUserEmailAsync(string loginEmail, CancellationToken ct = default);
 
     // Grant or update role for (email, company). Uses a MERGE so callers
     // don't have to distinguish first-grant from role-change. If the user
     // has a user_id already, the row is keyed by that; otherwise the email
     // is used as the stub user_id until first sign-in.
+    //
+    // `companyEmail` is the optional per-company email override. Pass null
+    // (the default) to leave any existing override alone — useful when the
+    // caller is only changing role. Pass an explicit empty string to clear
+    // the override and fall back to the user's login email.
     Task UpsertCompanyAccessAsync(string email, Guid companyId, string role,
+                                  string? companyEmail = null,
                                   CancellationToken ct = default);
 
     Task RevokeCompanyAccessAsync(string email, Guid companyId, CancellationToken ct = default);
@@ -115,11 +157,33 @@ public sealed record UserRecord(
     // service keeps it in sync with role name == "Administrator".
     public Guid? RoleId { get; init; }
     public string? RoleName { get; init; }
+    // Mirror of RPT_roles.admin_sections for the user's role. Pulled
+    // through the same LEFT JOIN that populates RoleId/RoleName so a
+    // single user fetch carries everything access checks need. Null /
+    // empty = no admin sections allowed; Administrator role bypasses.
+    public IReadOnlyList<string>? RoleAdminSections { get; init; }
+
+    // Sticky "default to the company picker" preference. Set TRUE when the
+    // user lands on /?all=1; reset FALSE when they pick a specific company
+    // FROM the picker. Direct URL navigation to /master-dashboard/<code>
+    // doesn't touch this flag, so the preference survives bookmarks /
+    // browser session restore even though last_visited_company_id gets
+    // re-set on every Master Dashboard load.
+    public bool PrefersCompanyPicker { get; init; }
 }
 
 // Per-(user, company) role grant. Non-admin users need at least one of these
 // to see a company in the picker. Admins ignore this table — they see every
 // active company automatically.
+//
+// `Email` is the user's login/Entra address (matches RPT_users.email). It's
+// also the lookup key into RPT_users for everything auth-related.
+//
+// `CompanyEmail` is an optional per-company override — set when the user has
+// a separate address inside a particular tenant (e.g. one Outlook account per
+// company). NULL = fall back to `Email`. Auth still goes by Entra OID; this
+// is for code paths that need to REACH the user in a particular company's
+// context (scheduled deliveries, display labels, share notifications).
 public sealed record UserCompanyAccess(
     string Email,
     Guid CompanyId,
@@ -127,7 +191,8 @@ public sealed record UserCompanyAccess(
     string CompanyName,
     string Role,
     bool IsDefault,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    string? CompanyEmail = null);
 
 // One row per (user, company-connection) showing the connection's label
 // plus the user's login in it (null if never set). Returned by

@@ -1,5 +1,6 @@
 @inject IUserManagementService UserManagement
 @inject ICompanyRegistry CompanyRegistry
+@inject IAdminService AdminService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @using TleReportingDashboard.Web.Services
@@ -82,11 +83,19 @@
                     }
                 </MudTd>
                 <MudTd Style="text-align: center;">
-                    @* Admins see every company automatically, so the count
-                       isn't meaningful for them; show a "— all —" hint. *@
-                    @if (context.IsAdmin)
+                    @* Admins and admin-section roles (System Support et al.)
+                       see every company automatically, so the count isn't
+                       meaningful for them; show a "— all —" hint instead. *@
+                    @{
+                        var hasAdminAccess = context.IsAdmin
+                            || (context.RoleAdminSections is { Count: > 0 });
+                    }
+                    @if (hasAdminAccess)
                     {
-                        <MudTooltip Text="Admins see every company automatically">
+                        var tip = context.IsAdmin
+                            ? "Admins see every company automatically"
+                            : "This role has admin-section access — sees every company automatically";
+                        <MudTooltip Text="@tip">
                             <MudButton Variant="Variant.Outlined" Size="Size.Small"
                                        StartIcon="@Icons.Material.Filled.Apartment"
                                        OnClick="@(() => OpenAccessDialog(context))">
@@ -161,7 +170,8 @@
         var parameters = new DialogParameters<UserEditorDialog>
         {
             { x => x.Existing, null },
-            { x => x.CreatedBy, CurrentUserEmail }
+            { x => x.CreatedBy, CurrentUserEmail },
+            { x => x.ActingUserIsAdmin, AdminService.IsAdmin(CurrentUserEmail) }
         };
         var options = new DialogOptions
         {
@@ -179,7 +189,8 @@
         var parameters = new DialogParameters<UserEditorDialog>
         {
             { x => x.Existing, u },
-            { x => x.CreatedBy, CurrentUserEmail }
+            { x => x.CreatedBy, CurrentUserEmail },
+            { x => x.ActingUserIsAdmin, AdminService.IsAdmin(CurrentUserEmail) }
         };
         var options = new DialogOptions
         {

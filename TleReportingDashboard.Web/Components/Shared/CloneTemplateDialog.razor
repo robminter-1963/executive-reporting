@@ -1,0 +1,91 @@
+@using MudBlazor
+
+@*
+    Asks the admin where to land a cloned grid template. The dialog opens
+    pre-selected on the source template's own connection so "just clone it"
+    is a single-click action; admins who want to retarget pick a different
+    entry from the dropdown.
+
+    No validation against the target connection's schema — the field ids
+    bake into the cloned ColumnState as-is. Per product direction: an admin
+    cloning across connections accepts that any field id missing on the
+    target schema renders as a blank column until they edit the template.
+*@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width: 460px;">
+            <MudText Typo="Typo.body2">
+                Clone <strong>@SourceName</strong>. Pick the connection the
+                copy should belong to — defaults to the original.
+            </MudText>
+
+            <MudTextField @bind-Value="_newName" Label="New template name"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Required RequiredError="Name is required" />
+
+            <MudSelect T="Guid?" @bind-Value="_targetConnectionId" Label="Connection"
+                       Variant="Variant.Outlined" Margin="Margin.Dense">
+                @foreach (var conn in Connections.OrderBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase))
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)conn.Id)">@conn.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+
+            @* "Use at your own risk" surface — only renders when the admin
+               actually picks a different connection. Field ids in the
+               cloned ColumnState bake against the source schema; on the
+               target connection they may resolve to nothing, render blank,
+               or fail at query time. The dialog still allows the clone —
+               this is just a heads-up that the editor pass afterwards is
+               part of the workflow, not optional. *@
+            @if (_targetConnectionId is not null
+                 && SourceConnectionId is not null
+                 && _targetConnectionId != SourceConnectionId)
+            {
+                <MudAlert Severity="Severity.Warning" Dense Variant="Variant.Outlined">
+                    Cloning across connections is <strong>use at your own risk</strong>.
+                    Field ids from the source schema may not exist on the target —
+                    open the cloned template afterwards and tune up any blank columns.
+                </MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="!CanSubmit()" OnClick="Submit">
+            Clone
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string SourceName { get; set; } = string.Empty;
+    [Parameter] public Guid? SourceConnectionId { get; set; }
+    [Parameter] public IReadOnlyList<ConnectionOption> Connections { get; set; } = Array.Empty<ConnectionOption>();
+
+    private string _newName = string.Empty;
+    private Guid? _targetConnectionId;
+
+    public sealed record ConnectionOption(Guid Id, string DisplayName);
+    public sealed record Result(string NewName, Guid? TargetConnectionId);
+
+    protected override void OnInitialized()
+    {
+        _newName = $"{SourceName} (Copy)";
+        _targetConnectionId = SourceConnectionId;
+    }
+
+    private bool CanSubmit() => !string.IsNullOrWhiteSpace(_newName);
+
+    private void Submit()
+    {
+        if (!CanSubmit()) return;
+        MudDialog.Close(DialogResult.Ok(new Result(_newName.Trim(), _targetConnectionId)));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

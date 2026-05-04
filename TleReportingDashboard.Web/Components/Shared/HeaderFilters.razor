@@ -14,38 +14,51 @@
                            title="Clear date range" />
         </MudStack>
 
-        <MudSelect T="string" @bind-Value="_selectedDateField" Label="Date Field" Variant="Variant.Outlined"
-                   Margin="Margin.Dense" Style="max-width: 180px;" Dense>
-            @foreach (var field in DateFields)
-            {
-                <MudSelectItem Value="@field.Id">@field.Label</MudSelectItem>
-            }
-        </MudSelect>
+        @{
+            var dateField = DateFields.FirstOrDefault(f => f.Id == _selectedDateField);
+            var dateFieldTooltip = dateField is null
+                ? string.Empty
+                : ComposeSourceTooltip(dateField.SourceTable, dateField.SourceColumn, dateField.SqlExpression ?? string.Empty);
+        }
+        <MudTooltip Text="@dateFieldTooltip" Placement="Placement.Top"
+                    Disabled="@string.IsNullOrEmpty(dateFieldTooltip)">
+            <MudSelect T="string" @bind-Value="_selectedDateField" Label="Date Field" Variant="Variant.Outlined"
+                       Margin="Margin.Dense" Style="max-width: 180px;" Dense>
+                @foreach (var field in DateFields)
+                {
+                    <MudSelectItem Value="@field.Id">@field.Label</MudSelectItem>
+                }
+            </MudSelect>
+        </MudTooltip>
 
         @foreach (var filter in _activeFilters)
         {
+            var filterTooltip = ComposeSourceTooltip(filter.SourceTable, filter.SourceColumn, filter.SqlExpression);
             <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                @if (filter.CodeSetValues.Any())
-                {
-                    @* Enumerated field — multi-select dropdown *@
-                    <MudSelect T="string" MultiSelection MultiSelectionTextFunc="@(vals => $"{vals.Count()} selected")"
-                               SelectedValues="filter.SelectedValues"
-                               SelectedValuesChanged="@(vals => OnMultiSelectChanged(filter, vals))"
-                               Label="@filter.Label" Variant="Variant.Outlined"
-                               Margin="Margin.Dense" Style="min-width: 200px; max-width: 280px;" Dense>
-                        @foreach (var csv in filter.CodeSetValues.OrderBy(x => x.Description, StringComparer.OrdinalIgnoreCase))
-                        {
-                            <MudSelectItem T="string" Value="@csv.Description">@csv.Description</MudSelectItem>
-                        }
-                    </MudSelect>
-                }
-                else
-                {
-                    @* Free-text field *@
-                    <MudTextField @bind-Value="filter.Value" Label="@filter.Label" Variant="Variant.Outlined"
-                                  Margin="Margin.Dense" Style="max-width: 180px;"
-                                  DebounceInterval="500" OnDebounceIntervalElapsed="() => EmitFilters()" />
-                }
+                <MudTooltip Text="@filterTooltip" Placement="Placement.Top"
+                            Disabled="@string.IsNullOrEmpty(filterTooltip)">
+                    @if (filter.CodeSetValues.Any())
+                    {
+                        @* Enumerated field — multi-select dropdown *@
+                        <MudSelect T="string" MultiSelection MultiSelectionTextFunc="@(vals => $"{vals.Count()} selected")"
+                                   SelectedValues="filter.SelectedValues"
+                                   SelectedValuesChanged="@(vals => OnMultiSelectChanged(filter, vals))"
+                                   Label="@filter.Label" Variant="Variant.Outlined"
+                                   Margin="Margin.Dense" Style="min-width: 200px; max-width: 280px;" Dense>
+                            @foreach (var csv in filter.CodeSetValues.OrderBy(x => x.Description, StringComparer.OrdinalIgnoreCase))
+                            {
+                                <MudSelectItem T="string" Value="@csv.Description">@csv.Description</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    else
+                    {
+                        @* Free-text field *@
+                        <MudTextField @bind-Value="filter.Value" Label="@filter.Label" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" Style="max-width: 180px;"
+                                      DebounceInterval="500" OnDebounceIntervalElapsed="() => EmitFilters()" />
+                    }
+                </MudTooltip>
                 <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
                                OnClick="() => RemoveFilter(filter.FieldId)"
                                title="Remove filter" />
@@ -58,13 +71,19 @@
             {
                 @if (!_activeFilters.Any(f => f.FieldId == field.Id))
                 {
+                    var menuTooltip = ComposeSourceTooltip(field.SourceTable, field.SourceColumn, field.SqlExpression ?? string.Empty);
                     <MudMenuItem OnClick="() => AddFilter(field)">
-                        @field.Label
-                        @if (field.CodeSetId.HasValue)
-                        {
-                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info"
-                                     Style="font-size: 0.6rem; margin-left: 4px;">list</MudChip>
-                        }
+                        <MudTooltip Text="@menuTooltip" Placement="Placement.Right"
+                                    Disabled="@string.IsNullOrEmpty(menuTooltip)">
+                            <span>
+                                @field.Label
+                                @if (field.CodeSetId.HasValue)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info"
+                                             Style="font-size: 0.6rem; margin-left: 4px;">list</MudChip>
+                                }
+                            </span>
+                        </MudTooltip>
                     </MudMenuItem>
                 }
             }
@@ -131,7 +150,10 @@
             {
                 FieldId = field.Id,
                 Label = field.Label,
-                CodeSetId = field.CodeSetId
+                CodeSetId = field.CodeSetId,
+                SourceTable = field.SourceTable,
+                SourceColumn = field.SourceColumn,
+                SqlExpression = field.SqlExpression ?? string.Empty
             };
 
             // Load codeset values if enumerated
@@ -206,7 +228,10 @@
             FieldId = field.Id,
             Label = field.Label,
             Value = string.Empty,
-            CodeSetId = field.CodeSetId
+            CodeSetId = field.CodeSetId,
+            SourceTable = field.SourceTable,
+            SourceColumn = field.SourceColumn,
+            SqlExpression = field.SqlExpression ?? string.Empty
         };
 
         // Load codeset values if this is an enumerated field
@@ -274,5 +299,28 @@
         public int? CodeSetId { get; set; }
         public List<CodeSetValue> CodeSetValues { get; set; } = new();
         public HashSet<string> SelectedValues { get; set; } = new();
+        // Source identifiers, populated at capture time and surfaced as
+        // tooltips so admins can tell which underlying table/column a
+        // filter actually targets — same Label can come from multiple
+        // tables (e.g. lead.loan_type__c vs opportunity.loan_type__c) and
+        // picking the wrong one silently changes which rows the report
+        // sees.
+        public string SourceTable { get; set; } = string.Empty;
+        public string SourceColumn { get; set; } = string.Empty;
+        public string SqlExpression { get; set; } = string.Empty;
+    }
+
+    // Composes a one-line tooltip for a field. Prefers <table>.<column>;
+    // falls back to the raw SqlExpression for derived fields (CASE WHENs,
+    // CAST chains, etc.) so the tooltip still says something useful for
+    // admin-authored expressions. Empty input yields empty tooltip — the
+    // caller suppresses MudTooltip in that case.
+    private static string ComposeSourceTooltip(string sourceTable, string sourceColumn, string sqlExpression)
+    {
+        if (!string.IsNullOrWhiteSpace(sourceTable) && !string.IsNullOrWhiteSpace(sourceColumn))
+            return $"{sourceTable}.{sourceColumn}";
+        if (!string.IsNullOrWhiteSpace(sqlExpression))
+            return sqlExpression.Length > 200 ? sqlExpression[..200] + "…" : sqlExpression;
+        return string.Empty;
     }
 }

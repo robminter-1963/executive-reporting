@@ -43,7 +43,6 @@
     <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
         <MudTable Items="_roles" Dense Hover Class="pa-0" T="RoleRecord">
             <HeaderContent>
-                <MudTh Style="width: 80px; text-align: center;">Order</MudTh>
                 <MudTh>Name</MudTh>
                 <MudTh>Description</MudTh>
                 <MudTh Style="width: 160px;">Scope</MudTh>
@@ -54,12 +53,51 @@
             <RowTemplate>
                 @if (_editingId == context.Id)
                 {
-                    <MudTd></MudTd>
                     <MudTd>
-                        <MudTextField @bind-Value="_editName" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        @* Built-in roles (Administrator, System Support)
+                           can't be renamed — the name is a protocol-level
+                           handle the rest of the app keys off. RoleService
+                           re-validates on save so a forged request can't
+                           slip a rename through either. *@
+                        <MudTextField @bind-Value="_editName" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      Disabled="@IsBuiltInRole(context)"
+                                      HelperText="@(IsBuiltInRole(context) ? "Built-in role — name can't be changed" : null)" />
                     </MudTd>
                     <MudTd>
-                        <MudTextField @bind-Value="_editDescription" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        <MudStack Spacing="2">
+                            <MudTextField @bind-Value="_editDescription" Variant="Variant.Outlined" Margin="Margin.Dense" />
+
+                            @* Per-role admin-section access. Only renders when
+                               the parent confirms the current user is a global
+                               admin AND the role being edited isn't the
+                               Administrator row (admin always has every
+                               section; saving the list there would mislead).
+                               Each section in AdminSections.All becomes a
+                               checkbox; on Save the checked keys serialize
+                               to RPT_roles.admin_sections. *@
+                            @if (CanEditAdminSections && !IsAdministratorRole(context))
+                            {
+                                <MudPaper Elevation="0" Class="pa-2"
+                                          Style="border: 1px solid #DADCE0; border-radius: 4px; background: #FAFAFA;">
+                                    <MudText Typo="Typo.caption" Style="font-weight: 600; color: #5F6368;">
+                                        Admin sections this role can access
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-bottom: 4px;">
+                                        Tick a section to grant access to its tab on the Admin page. Leave all unchecked = no admin access. Administrator role bypasses this list.
+                                    </MudText>
+                                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 2px;">
+                                        @foreach (var sec in AdminSections.All)
+                                        {
+                                            var secKey = sec.Key;
+                                            var checkedNow = _editAdminSections.Contains(secKey);
+                                            <MudCheckBox T="bool" Value="@checkedNow" Dense Color="Color.Primary"
+                                                         ValueChanged="@((bool v) => ToggleEditSection(secKey, v))"
+                                                         Label="@sec.Label" />
+                                        }
+                                    </div>
+                                </MudPaper>
+                            }
+                        </MudStack>
                     </MudTd>
                     <MudTd>
                         @if (IsAdministratorRole(context))
@@ -99,24 +137,15 @@
                 }
                 else
                 {
-                    <MudTd Style="text-align: center; white-space: nowrap;">
-                        <MudTooltip Text="Move up">
-                            <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
-                                           Disabled="@(_roles.IndexOf(context) == 0)"
-                                           OnClick="@(() => MoveUp(context))" />
-                        </MudTooltip>
-                        <MudTooltip Text="Move down">
-                            <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
-                                           Disabled="@(_roles.IndexOf(context) == _roles.Count - 1)"
-                                           OnClick="@(() => MoveDown(context))" />
-                        </MudTooltip>
-                    </MudTd>
                     <MudTd>
-                        @if (IsAdministratorRole(context))
+                        @if (IsBuiltInRole(context))
                         {
+                            var shieldTip = IsAdministratorRole(context)
+                                ? "Built-in role — can't be renamed or deleted. Renaming would also break the admin-flag auto-sync."
+                                : "Built-in role — can't be renamed or deleted.";
                             <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
                                 <strong>@context.Name</strong>
-                                <MudTooltip Text="Renaming this role breaks the admin-flag auto-sync">
+                                <MudTooltip Text="@shieldTip">
                                     <MudIcon Icon="@Icons.Material.Filled.Shield" Size="Size.Small" Color="Color.Primary" />
                                 </MudTooltip>
                             </MudStack>
@@ -126,7 +155,33 @@
                             <strong>@context.Name</strong>
                         }
                     </MudTd>
-                    <MudTd>@(string.IsNullOrEmpty(context.Description) ? "—" : context.Description)</MudTd>
+                    <MudTd>
+                        @(string.IsNullOrEmpty(context.Description) ? "—" : context.Description)
+                        @* Admin-section-access summary. Administrator implicitly
+                           has every section so we show "All admin sections";
+                           other roles show the count + a tooltip listing the
+                           granted keys, so global admins can spot elevated
+                           roles at a glance. Empty list → no marker (the role
+                           has no admin access at all). *@
+                        @if (IsAdministratorRole(context))
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined"
+                                     Icon="@Icons.Material.Filled.AdminPanelSettings"
+                                     Style="margin-left: 6px; height: 20px; font-size: 0.7rem;">
+                                All admin sections
+                            </MudChip>
+                        }
+                        else if (context.AdminSections is { Count: > 0 } secs)
+                        {
+                            <MudTooltip Text="@($"Admin sections: {string.Join(", ", secs.Select(LabelForSection))}")">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined"
+                                         Icon="@Icons.Material.Filled.LockPerson"
+                                         Style="margin-left: 6px; height: 20px; font-size: 0.7rem;">
+                                    @secs.Count admin section@(secs.Count == 1 ? "" : "s")
+                                </MudChip>
+                            </MudTooltip>
+                        }
+                    </MudTd>
                     <MudTd>
                         @if (context.ScopeRule == ScopeRules.Self)
                         {
@@ -165,10 +220,16 @@
                             <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
                                            OnClick="@(() => StartEdit(context))" />
                         </MudTooltip>
-                        <MudTooltip Text="Delete role">
-                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
-                                           OnClick="@(() => DeleteRole(context))" />
-                        </MudTooltip>
+                        @* Delete is hidden for built-in roles. Service-layer
+                           guard refuses too, so a direct API call still
+                           can't drop them. *@
+                        @if (!IsBuiltInRole(context))
+                        {
+                            <MudTooltip Text="Delete role">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                               OnClick="@(() => DeleteRole(context))" />
+                            </MudTooltip>
+                        }
                     </MudTd>
                 }
             </RowTemplate>
@@ -191,11 +252,19 @@
     private string _newScope = ScopeRules.All;
     private SaveStatusIndicator? _addIndicator;
 
+    // Only global admins see / edit per-role admin-section access. The
+    // Roles tab itself is reachable by any user whose role grants the
+    // "roles" section, but the System Support–style roles can't grant
+    // themselves elevation through this surface. Parent (Admin.razor)
+    // passes _isFullAdmin to gate the editor visibility.
+    [Parameter] public bool CanEditAdminSections { get; set; }
+
     private Guid? _editingId;
     private string _editName = string.Empty;
     private string _editDescription = string.Empty;
     private string _editScope = ScopeRules.All;
     private bool _editIsActive;
+    private HashSet<string> _editAdminSections = new(StringComparer.OrdinalIgnoreCase);
 
     protected override async Task OnInitializedAsync()
     {
@@ -213,6 +282,12 @@
     // are warned in the UI before they rename the Administrator row.
     private static bool IsAdministratorRole(RoleRecord r) =>
         string.Equals(r.Name, RoleRecord.AdministratorName, StringComparison.OrdinalIgnoreCase);
+
+    // Built-in roles can't be renamed or deleted. Currently Administrator
+    // (admin-flag auto-sync depends on the name) and System Support
+    // (cross-company support role with admin-section access).
+    private static bool IsBuiltInRole(RoleRecord r) =>
+        RoleRecord.IsBuiltInName(r.Name);
 
     private async Task AddRole()
     {
@@ -245,9 +320,28 @@
         _editDescription = r.Description ?? string.Empty;
         _editScope = IsAdministratorRole(r) ? ScopeRules.All : r.ScopeRule;
         _editIsActive = r.IsActive;
+        // Seed the admin-section checkbox state from the role's stored
+        // list. Administrator role bypasses the column at access-check
+        // time, so we hydrate empty for the editor (the Save path also
+        // forces null for that role).
+        _editAdminSections = IsAdministratorRole(r) || r.AdminSections is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(r.AdminSections, StringComparer.OrdinalIgnoreCase);
     }
 
     private void CancelEdit() => _editingId = null;
+
+    private void ToggleEditSection(string sectionKey, bool isChecked)
+    {
+        if (isChecked) _editAdminSections.Add(sectionKey);
+        else _editAdminSections.Remove(sectionKey);
+    }
+
+    // Maps a stored section key (e.g. "db_connections") to its human label
+    // for tooltip rendering. Falls back to the raw key if the catalog
+    // doesn't recognize it (legacy / future-key resilience).
+    private static string LabelForSection(string key) =>
+        AdminSections.All.FirstOrDefault(s => s.Key == key).Label ?? key;
 
     private async Task SaveEdit()
     {
@@ -257,7 +351,8 @@
             await RoleService.UpdateAsync(id, _editName.Trim(),
                 string.IsNullOrWhiteSpace(_editDescription) ? null : _editDescription.Trim(),
                 _editScope,
-                _editIsActive);
+                _editIsActive,
+                _editAdminSections.ToList());
             _editingId = null;
             await ReloadAsync();
             Snackbar.Add("Role updated.", Severity.Success);
@@ -294,26 +389,10 @@
         }
     }
 
-    private Task MoveUp(RoleRecord r) => SwapWithNeighbor(r, -1);
-    private Task MoveDown(RoleRecord r) => SwapWithNeighbor(r, +1);
-
-    private async Task SwapWithNeighbor(RoleRecord r, int direction)
-    {
-        var idx = _roles.IndexOf(r);
-        var target = idx + direction;
-        if (idx < 0 || target < 0 || target >= _roles.Count) return;
-
-        (_roles[idx], _roles[target]) = (_roles[target], _roles[idx]);
-
-        try
-        {
-            await RoleService.UpdateSortOrderAsync(_roles.Select(x => x.Id).ToList());
-            await ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to reorder: {ex.Message}", Severity.Error);
-            await ReloadAsync();
-        }
-    }
+    // Manual Move Up / Move Down was removed when CreateAsync + UpdateAsync
+    // both started auto-alphabetizing via RenumberSortOrderAlphabeticallyAsync
+    // (Administrator pinned to slot 0). Any manual reorder would get
+    // clobbered on the next add or rename, which made the arrows worse than
+    // useless. RoleService.UpdateSortOrderAsync is left in place for any
+    // future reordering needs (data import, scripted re-sort, etc.).
 }

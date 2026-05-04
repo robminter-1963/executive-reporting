@@ -8,12 +8,16 @@ public sealed class UserManagementService : IUserManagementService
     private readonly IAdminService _admins;
     private readonly IRoleService _roles;
     private readonly ITeamSourceService _teamSources;
+    private readonly ConfigDbCache _cache;
+    private readonly EditorModeState _editorMode;
     private readonly ILogger<UserManagementService> _logger;
 
     public UserManagementService(IConfiguration configuration,
                                  IAdminService admins,
                                  IRoleService roles,
                                  ITeamSourceService teamSources,
+                                 ConfigDbCache cache,
+                                 EditorModeState editorMode,
                                  ILogger<UserManagementService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
@@ -21,6 +25,8 @@ public sealed class UserManagementService : IUserManagementService
         _admins = admins;
         _roles = roles;
         _teamSources = teamSources;
+        _cache = cache;
+        _editorMode = editorMode;
         _logger = logger;
     }
 
@@ -31,35 +37,47 @@ public sealed class UserManagementService : IUserManagementService
     private const string UserSelectSql = @"
         SELECT u.email, u.user_id, u.display_name, u.is_admin, u.is_active,
                u.last_visited_company_id, u.created_at, u.created_by, u.updated_at,
-               u.role_id, r.name AS role_name
+               u.role_id, r.name AS role_name, u.prefers_company_picker,
+               r.admin_sections AS role_admin_sections
           FROM EMPOWER.RPT_users u
      LEFT JOIN EMPOWER.RPT_roles r ON r.id = u.role_id";
 
-    public async Task<List<UserRecord>> GetAllAsync(CancellationToken ct = default)
-    {
-        var rows = new List<UserRecord>();
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(
-            UserSelectSql + " ORDER BY u.is_active DESC, u.display_name, u.email;", conn);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            rows.Add(ReadUser(reader));
-        }
-        return rows;
-    }
+    public Task<List<UserRecord>> GetAllAsync(CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("UserManagementService", "All"),
+            async () =>
+            {
+                var rows = new List<UserRecord>();
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(
+                    UserSelectSql + " ORDER BY u.is_active DESC, u.display_name, u.email;", conn);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    rows.Add(ReadUser(reader));
+                }
+                return rows;
+            },
+            bypass: _editorMode.IsActive);
 
-    public async Task<UserRecord?> GetByEmailAsync(string email, CancellationToken ct = default)
-    {
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(
-            UserSelectSql + " WHERE u.email = @email;", conn);
-        cmd.Parameters.Add(new SqlParameter("@email", email));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        return await reader.ReadAsync(ct) ? ReadUser(reader) : null;
-    }
+    public Task<UserRecord?> GetByEmailAsync(string email, CancellationToken ct = default)
+        => GetByEmailAsync(email, forceRefresh: false, ct);
+
+    public Task<UserRecord?> GetByEmailAsync(string email, bool forceRefresh, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("UserManagementService", "ByEmail", email),
+            async () =>
+            {
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(
+                    UserSelectSql + " WHERE u.email = @email;", conn);
+                cmd.Parameters.Add(new SqlParameter("@email", email));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                return await reader.ReadAsync(ct) ? ReadUser(reader) : null;
+            },
+            bypass: forceRefresh || _editorMode.IsActive);
 
     public async Task<UserRecord> CreateAsync(string email, string? displayName, Guid? roleId,
                                               string? createdBy, CancellationToken ct = default)
@@ -81,6 +99,7 @@ public sealed class UserManagementService : IUserManagementService
         cmd.Parameters.Add(new SqlParameter("@roleId", (object?)roleId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@createdBy", (object?)createdBy ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("UserManagementService:");
 
         // Mirror to RPT_admins for the legacy IsAdmin() check.
         if (isAdmin)
@@ -118,6 +137,7 @@ public sealed class UserManagementService : IUserManagementService
         cmd.Parameters.Add(new SqlParameter("@roleId", (object?)roleId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@isActive", isActive));
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("UserManagementService:");
 
         // Keep RPT_admins in sync with the derived boolean. If the role
         // changed from Administrator → something else, the global row gets
@@ -173,6 +193,7 @@ public sealed class UserManagementService : IUserManagementService
         }
 
         _admins.Invalidate();
+        _cache.Invalidate("UserManagementService:");
         _logger.LogInformation("User deleted: {Email}", email);
     }
 
@@ -247,44 +268,148 @@ public sealed class UserManagementService : IUserManagementService
         cmd.Parameters.Add(new SqlParameter("@email", email));
         cmd.Parameters.Add(new SqlParameter("@companyId", companyId));
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "ByEmail", email));
+        _cache.Invalidate("UserManagementService:All");
+    }
+
+    public async Task ClearLastVisitedCompanyAsync(string email, CancellationToken ct = default)
+    {
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(@"
+            UPDATE EMPOWER.RPT_users
+               SET last_visited_company_id = NULL,
+                   updated_at              = SYSUTCDATETIME()
+             WHERE email = @email
+               AND last_visited_company_id IS NOT NULL;", conn);
+        cmd.Parameters.Add(new SqlParameter("@email", email));
+        await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "ByEmail", email));
+        _cache.Invalidate("UserManagementService:All");
+    }
+
+    public async Task SetPrefersCompanyPickerAsync(string email, bool prefers, CancellationToken ct = default)
+    {
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        // Unconditional UPDATE — an earlier guarded form
+        // (`AND prefers_company_picker <> @prefers`) was no-opping silently
+        // in some BIT/bool comparison cases, leaving the picker preference
+        // never actually written. The unconditional write is cheap (one
+        // row, one column) and avoids that whole class of bug.
+        await using var cmd = new SqlCommand(@"
+            UPDATE EMPOWER.RPT_users
+               SET prefers_company_picker = @prefers,
+                   updated_at             = SYSUTCDATETIME()
+             WHERE email = @email;", conn);
+        // Explicit BIT type so the inferred parameter type can't drift
+        // between provider versions or affect the WHERE comparison.
+        cmd.Parameters.Add(new SqlParameter("@email", System.Data.SqlDbType.NVarChar, 256) { Value = email });
+        cmd.Parameters.Add(new SqlParameter("@prefers", System.Data.SqlDbType.Bit) { Value = prefers });
+        await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "ByEmail", email));
+        _cache.Invalidate("UserManagementService:All");
     }
 
     // ── Company access ──────────────────────────────────────────────────────
 
-    public async Task<List<UserCompanyAccess>> GetCompanyAccessAsync(string email, CancellationToken ct = default)
+    public Task<string?> ResolveCanonicalUserEmailAsync(string loginEmail, CancellationToken ct = default)
     {
-        var rows = new List<UserCompanyAccess>();
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(@"
-            SELECT c.id, c.code, c.name, uc.role, uc.is_default, uc.created_at
-              FROM EMPOWER.RPT_user_companies uc
-              JOIN EMPOWER.RPT_users u
-                ON u.email = @email
-             JOIN EMPOWER.RPT_companies c ON c.id = uc.company_id
-             WHERE uc.user_id = u.user_id OR uc.user_id = u.email
-             ORDER BY c.name;", conn);
-        cmd.Parameters.Add(new SqlParameter("@email", email));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            rows.Add(new UserCompanyAccess(
-                email,
-                reader.GetGuid(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3),
-                reader.GetBoolean(4),
-                reader.GetDateTime(5)));
-        }
-        return rows;
+        if (string.IsNullOrWhiteSpace(loginEmail)) return Task.FromResult<string?>(null);
+        return _cache.GetOrAddAsync(
+            ConfigDbCache.Key("UserManagementService", "ResolveCanonicalEmail", loginEmail),
+            async () =>
+            {
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+
+                // 1. Direct hit on RPT_users.email — the common case
+                //    (single-AD users; the address they signed in with
+                //    matches their canonical login).
+                await using (var direct = new SqlCommand(
+                    "SELECT email FROM EMPOWER.RPT_users WHERE email = @loginEmail;", conn))
+                {
+                    direct.Parameters.Add(new SqlParameter("@loginEmail", System.Data.SqlDbType.NVarChar, 256)
+                    {
+                        Value = loginEmail
+                    });
+                    if (await direct.ExecuteScalarAsync(ct) is string hit)
+                        return hit;
+                }
+
+                // 2. Indirect hit via RPT_user_companies.email — the
+                //    multi-AD case. The address the user signed in with
+                //    is registered as a company-specific contact email
+                //    on someone else's grant row; we route back to the
+                //    user it belongs to. uc.user_id can be either the
+                //    canonical OID or the email stub (pre-binding), so
+                //    both forms are checked in the join.
+                await using (var indirect = new SqlCommand(@"
+                    SELECT TOP 1 u.email
+                      FROM EMPOWER.RPT_users u
+                      JOIN EMPOWER.RPT_user_companies uc
+                        ON uc.user_id = u.user_id OR uc.user_id = u.email
+                     WHERE uc.email = @loginEmail;", conn))
+                {
+                    indirect.Parameters.Add(new SqlParameter("@loginEmail", System.Data.SqlDbType.NVarChar, 256)
+                    {
+                        Value = loginEmail
+                    });
+                    return await indirect.ExecuteScalarAsync(ct) as string;
+                }
+            },
+            bypass: _editorMode.IsActive);
     }
 
+    public Task<List<UserCompanyAccess>> GetCompanyAccessAsync(string email, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("UserManagementService", "CompanyAccess", email),
+            async () =>
+            {
+                var rows = new List<UserCompanyAccess>();
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(@"
+                    SELECT c.id, c.code, c.name, uc.role, uc.is_default, uc.created_at, uc.email
+                      FROM EMPOWER.RPT_user_companies uc
+                      JOIN EMPOWER.RPT_users u
+                        ON u.email = @email
+                     JOIN EMPOWER.RPT_companies c ON c.id = uc.company_id
+                     WHERE uc.user_id = u.user_id OR uc.user_id = u.email
+                     ORDER BY c.name;", conn);
+                cmd.Parameters.Add(new SqlParameter("@email", email));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    rows.Add(new UserCompanyAccess(
+                        email,
+                        reader.GetGuid(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.GetString(3),
+                        reader.GetBoolean(4),
+                        reader.GetDateTime(5),
+                        reader.IsDBNull(6) ? null : reader.GetString(6)));
+                }
+                return rows;
+            },
+            bypass: _editorMode.IsActive);
+
     public async Task UpsertCompanyAccessAsync(string email, Guid companyId, string role,
+                                                string? companyEmail = null,
                                                 CancellationToken ct = default)
     {
         if (!UserRoles.IsValid(role))
             throw new ArgumentException($"Role must be one of: {string.Join(", ", UserRoles.All)}.", nameof(role));
+
+        // Tri-state on companyEmail:
+        //   null  → don't touch the column (caller is only setting role)
+        //   ""    → clear the override (fall back to login email)
+        //   any   → trim + persist as the override
+        // Empty → NULL semantics keep the "no value" invariant clean instead
+        // of also treating empty strings as "no override" at read time.
+        bool updateEmail = companyEmail is not null;
+        var trimmedCompanyEmail = string.IsNullOrWhiteSpace(companyEmail) ? null : companyEmail.Trim();
 
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
@@ -301,58 +426,91 @@ public sealed class UserManagementService : IUserManagementService
         // should see a sensible mapping.
         var legacyPermission = role == UserRoles.Viewer ? "View" : "Edit";
 
-        await using var cmd = new SqlCommand(@"
-            MERGE EMPOWER.RPT_user_companies AS t
-            USING (SELECT @userId AS user_id, @companyId AS company_id) AS s
-               ON t.user_id = s.user_id AND t.company_id = s.company_id
-            WHEN MATCHED THEN
-                UPDATE SET role       = @role,
-                           permission = @permission
-            WHEN NOT MATCHED THEN
-                INSERT (user_id, company_id, role, permission, is_default)
-                VALUES (@userId, @companyId, @role, @permission, 0);", conn);
+        // Two MERGE shapes — one preserves the existing email when the caller
+        // didn't pass one, the other overwrites. Done with two separate SQL
+        // bodies rather than a CASE inside one MERGE so the "don't touch"
+        // semantics are bulletproof.
+        var sql = updateEmail
+            ? @"MERGE EMPOWER.RPT_user_companies AS t
+                USING (SELECT @userId AS user_id, @companyId AS company_id) AS s
+                   ON t.user_id = s.user_id AND t.company_id = s.company_id
+                WHEN MATCHED THEN
+                    UPDATE SET role       = @role,
+                               permission = @permission,
+                               email      = @email
+                WHEN NOT MATCHED THEN
+                    INSERT (user_id, company_id, role, permission, is_default, email)
+                    VALUES (@userId, @companyId, @role, @permission, 0, @email);"
+            : @"MERGE EMPOWER.RPT_user_companies AS t
+                USING (SELECT @userId AS user_id, @companyId AS company_id) AS s
+                   ON t.user_id = s.user_id AND t.company_id = s.company_id
+                WHEN MATCHED THEN
+                    UPDATE SET role       = @role,
+                               permission = @permission
+                WHEN NOT MATCHED THEN
+                    INSERT (user_id, company_id, role, permission, is_default)
+                    VALUES (@userId, @companyId, @role, @permission, 0);";
+
+        await using var cmd = new SqlCommand(sql, conn);
         cmd.Parameters.Add(new SqlParameter("@userId", key));
         cmd.Parameters.Add(new SqlParameter("@companyId", companyId));
         cmd.Parameters.Add(new SqlParameter("@role", role));
         cmd.Parameters.Add(new SqlParameter("@permission", legacyPermission));
+        if (updateEmail)
+        {
+            // Explicit size on the @email parameter. Without it, ADO.NET
+            // infers the size from the value's length, and a small inferred
+            // size from one execution can prime the parameter type cache and
+            // truncate a longer value on a subsequent run. The column is
+            // NVARCHAR(256) — match it.
+            cmd.Parameters.Add(new SqlParameter("@email", System.Data.SqlDbType.NVarChar, 256)
+            {
+                Value = (object?)trimmedCompanyEmail ?? DBNull.Value
+            });
+        }
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("UserManagementService:CompanyAccess:");
 
-        _logger.LogInformation("Company access upserted: {Email} → {CompanyId} role={Role}",
-            email, companyId, role);
+        _logger.LogInformation("Company access upserted: {Email} → {CompanyId} role={Role} companyEmailSet={Set}",
+            email, companyId, role, updateEmail);
     }
 
     // ── Per-connection logins (row-level scoping inputs) ───────────────────
 
-    public async Task<List<UserConnectionLogin>> GetConnectionLoginsAsync(string email, Guid companyId, CancellationToken ct = default)
-    {
-        var rows = new List<UserConnectionLogin>();
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        // LEFT JOIN so connections with no login row for this user still
-        // come back (ExternalUserId = null). Resolves user_id by either
-        // Entra OID OR the email stub to match the pre-provisioning path.
-        await using var cmd = new SqlCommand(@"
-            SELECT cc.id, cc.name, cc.is_active, ucl.external_user_id
-              FROM EMPOWER.RPT_company_connections cc
-              JOIN EMPOWER.RPT_users u ON u.email = @email
-         LEFT JOIN EMPOWER.RPT_user_connection_logins ucl
-                ON ucl.connection_id = cc.id
-               AND (ucl.user_id = u.user_id OR ucl.user_id = u.email)
-             WHERE cc.company_id = @companyId
-             ORDER BY cc.is_active DESC, cc.name;", conn);
-        cmd.Parameters.Add(new SqlParameter("@email", email));
-        cmd.Parameters.Add(new SqlParameter("@companyId", companyId));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            rows.Add(new UserConnectionLogin(
-                reader.GetGuid(0),
-                reader.GetString(1),
-                reader.GetBoolean(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3)));
-        }
-        return rows;
-    }
+    public Task<List<UserConnectionLogin>> GetConnectionLoginsAsync(string email, Guid companyId, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("UserManagementService", "ConnectionLogins", email, companyId),
+            async () =>
+            {
+                var rows = new List<UserConnectionLogin>();
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                // LEFT JOIN so connections with no login row for this user still
+                // come back (ExternalUserId = null). Resolves user_id by either
+                // Entra OID OR the email stub to match the pre-provisioning path.
+                await using var cmd = new SqlCommand(@"
+                    SELECT cc.id, cc.name, cc.is_active, ucl.external_user_id
+                      FROM EMPOWER.RPT_company_connections cc
+                      JOIN EMPOWER.RPT_users u ON u.email = @email
+                 LEFT JOIN EMPOWER.RPT_user_connection_logins ucl
+                        ON ucl.connection_id = cc.id
+                       AND (ucl.user_id = u.user_id OR ucl.user_id = u.email)
+                     WHERE cc.company_id = @companyId
+                     ORDER BY cc.is_active DESC, cc.name;", conn);
+                cmd.Parameters.Add(new SqlParameter("@email", email));
+                cmd.Parameters.Add(new SqlParameter("@companyId", companyId));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    rows.Add(new UserConnectionLogin(
+                        reader.GetGuid(0),
+                        reader.GetString(1),
+                        reader.GetBoolean(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3)));
+                }
+                return rows;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task UpsertConnectionLoginAsync(string email, Guid connectionId, string? externalUserId,
                                                   CancellationToken ct = default)
@@ -395,27 +553,33 @@ public sealed class UserManagementService : IUserManagementService
             await cmd.ExecuteNonQueryAsync(ct);
         }
 
+        _cache.Invalidate("UserManagementService:ConnectionLogins:");
+        _cache.Invalidate("UserManagementService:ExternalUserId:");
         _logger.LogInformation("Connection login upserted: {Email} → {ConnectionId} externalId={ExternalId}",
             email, connectionId, trimmed ?? "(cleared)");
     }
 
-    public async Task<string?> GetExternalUserIdAsync(string email, Guid connectionId, CancellationToken ct = default)
-    {
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(@"
-            SELECT ucl.external_user_id
-              FROM EMPOWER.RPT_user_connection_logins ucl
-              JOIN EMPOWER.RPT_users u ON u.email = @email
-             WHERE ucl.connection_id = @connectionId
-               AND (ucl.user_id = u.user_id OR ucl.user_id = u.email);", conn);
-        cmd.Parameters.Add(new SqlParameter("@email", email));
-        cmd.Parameters.Add(new SqlParameter("@connectionId", connectionId));
-        var result = await cmd.ExecuteScalarAsync(ct);
-        if (result is null || result is DBNull) return null;
-        var value = (string)result;
-        return string.IsNullOrWhiteSpace(value) ? null : value;
-    }
+    public Task<string?> GetExternalUserIdAsync(string email, Guid connectionId, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("UserManagementService", "ExternalUserId", email, connectionId),
+            async () =>
+            {
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(@"
+                    SELECT ucl.external_user_id
+                      FROM EMPOWER.RPT_user_connection_logins ucl
+                      JOIN EMPOWER.RPT_users u ON u.email = @email
+                     WHERE ucl.connection_id = @connectionId
+                       AND (ucl.user_id = u.user_id OR ucl.user_id = u.email);", conn);
+                cmd.Parameters.Add(new SqlParameter("@email", email));
+                cmd.Parameters.Add(new SqlParameter("@connectionId", connectionId));
+                var result = await cmd.ExecuteScalarAsync(ct);
+                if (result is null || result is DBNull) return null;
+                var value = (string)result;
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task RevokeCompanyAccessAsync(string email, Guid companyId, CancellationToken ct = default)
     {
@@ -432,6 +596,7 @@ public sealed class UserManagementService : IUserManagementService
         cmd.Parameters.Add(new SqlParameter("@email", email));
         cmd.Parameters.Add(new SqlParameter("@companyId", companyId));
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("UserManagementService:CompanyAccess:");
 
         _logger.LogInformation("Company access revoked: {Email} → {CompanyId}", email, companyId);
     }
@@ -450,8 +615,27 @@ public sealed class UserManagementService : IUserManagementService
         r.GetDateTime(8))
     {
         RoleId   = r.IsDBNull(9)  ? null : r.GetGuid(9),
-        RoleName = r.IsDBNull(10) ? null : r.GetString(10)
+        RoleName = r.IsDBNull(10) ? null : r.GetString(10),
+        PrefersCompanyPicker = r.GetBoolean(11),
+        RoleAdminSections = r.IsDBNull(12) ? null : ParseAdminSectionsJson(r.GetString(12))
     };
+
+    // Mirror of RoleService.ParseSectionsJson — kept here so UserRecord
+    // population doesn't pull in a service dependency. Filters to known
+    // section keys and swallows malformed JSON (returns null).
+    private static List<string>? ParseAdminSectionsJson(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var arr = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json);
+            return arr?.Where(AdminSections.IsValid).ToList();
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private async Task<string?> ResolveUserKeyAsync(SqlConnection conn, string email, CancellationToken ct)
     {
@@ -541,28 +725,32 @@ public sealed class UserManagementService : IUserManagementService
         return rows;
     }
 
-    public async Task<List<UserTeamAssignment>> GetUserTeamsAsync(string email, CancellationToken ct = default)
-    {
-        var rows = new List<UserTeamAssignment>();
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
+    public Task<List<UserTeamAssignment>> GetUserTeamsAsync(string email, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("UserManagementService", "UserTeams", email),
+            async () =>
+            {
+                var rows = new List<UserTeamAssignment>();
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
 
-        // Resolve on either user_id form (Entra OID or email stub) so
-        // assignments survive the stub→OID rewrite on first sign-in.
-        await using var cmd = new SqlCommand(@"
-            SELECT ut.connection_id, ut.team_id
-              FROM EMPOWER.RPT_user_teams ut
-              JOIN EMPOWER.RPT_users u ON u.email = @email
-             WHERE ut.user_id = u.user_id OR ut.user_id = u.email
-             ORDER BY ut.connection_id, ut.team_id;", conn);
-        cmd.Parameters.Add(new SqlParameter("@email", email));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            rows.Add(new UserTeamAssignment(reader.GetGuid(0), reader.GetInt32(1)));
-        }
-        return rows;
-    }
+                // Resolve on either user_id form (Entra OID or email stub) so
+                // assignments survive the stub→OID rewrite on first sign-in.
+                await using var cmd = new SqlCommand(@"
+                    SELECT ut.connection_id, ut.team_id
+                      FROM EMPOWER.RPT_user_teams ut
+                      JOIN EMPOWER.RPT_users u ON u.email = @email
+                     WHERE ut.user_id = u.user_id OR ut.user_id = u.email
+                     ORDER BY ut.connection_id, ut.team_id;", conn);
+                cmd.Parameters.Add(new SqlParameter("@email", email));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    rows.Add(new UserTeamAssignment(reader.GetGuid(0), reader.GetInt32(1)));
+                }
+                return rows;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task SetUserTeamsAsync(string email, IReadOnlyList<UserTeamAssignment> teams,
                                          CancellationToken ct = default)
@@ -606,6 +794,7 @@ public sealed class UserManagementService : IUserManagementService
             }
 
             await tx.CommitAsync(ct);
+            _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "UserTeams", email));
             _logger.LogInformation("Team assignments set for {Email}: {Count} team(s).", email, seen.Count);
         }
         catch

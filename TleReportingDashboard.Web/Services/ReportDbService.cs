@@ -7,12 +7,20 @@ namespace TleReportingDashboard.Web.Services;
 public class ReportDbService : IReportService, ISharingService, IScheduleService
 {
     private readonly string _connectionString;
+    private readonly ConfigDbCache _cache;
+    private readonly EditorModeState _editorMode;
     private readonly ILogger<ReportDbService> _logger;
 
-    public ReportDbService(IConfiguration configuration, ILogger<ReportDbService> logger)
+    public ReportDbService(
+        IConfiguration configuration,
+        ConfigDbCache cache,
+        EditorModeState editorMode,
+        ILogger<ReportDbService> logger)
     {
         _connectionString = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required.");
+        _cache = cache;
+        _editorMode = editorMode;
         _logger = logger;
     }
 
@@ -27,32 +35,44 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
     // IReportService
     // ════════════════════════════════════════════════════════════════════════
 
-    public async Task<List<SavedReport>> GetReportsAsync(string userId)
-    {
-        await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            "SELECT * FROM EMPOWER.RPT_saved_reports WHERE owner_id = @UserId ORDER BY name", conn);
-        cmd.Parameters.Add(new SqlParameter("@UserId", userId));
-        return await ReadReportsAsync(cmd);
-    }
+    public Task<List<SavedReport>> GetReportsAsync(string userId) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Reports", "ByOwner", userId),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                await using var cmd = new SqlCommand(
+                    "SELECT * FROM EMPOWER.RPT_saved_reports WHERE owner_id = @UserId ORDER BY name", conn);
+                cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+                return await ReadReportsAsync(cmd);
+            },
+            bypass: _editorMode.IsActive);
 
-    public async Task<List<SavedReport>> GetAllReportsAsync()
-    {
-        await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            "SELECT * FROM EMPOWER.RPT_saved_reports ORDER BY name", conn);
-        return await ReadReportsAsync(cmd);
-    }
+    public Task<List<SavedReport>> GetAllReportsAsync() =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Reports", "All"),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                await using var cmd = new SqlCommand(
+                    "SELECT * FROM EMPOWER.RPT_saved_reports ORDER BY name", conn);
+                return await ReadReportsAsync(cmd);
+            },
+            bypass: _editorMode.IsActive);
 
-    public async Task<SavedReport?> GetReportByIdAsync(Guid id)
-    {
-        await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            "SELECT * FROM EMPOWER.RPT_saved_reports WHERE id = @Id", conn);
-        cmd.Parameters.Add(new SqlParameter("@Id", id));
-        var rows = await ReadReportsAsync(cmd);
-        return rows.FirstOrDefault();
-    }
+    public Task<SavedReport?> GetReportByIdAsync(Guid id) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Reports", "ById", id),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                await using var cmd = new SqlCommand(
+                    "SELECT * FROM EMPOWER.RPT_saved_reports WHERE id = @Id", conn);
+                cmd.Parameters.Add(new SqlParameter("@Id", id));
+                var rows = await ReadReportsAsync(cmd);
+                return rows.FirstOrDefault();
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task<SavedReport> SaveReportAsync(SavedReport report)
     {
@@ -73,6 +93,8 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
                       @PrimaryTable, @LastRunAt, @CreatedAt, @UpdatedAt)", conn);
         AddReportParams(cmd, report);
         await cmd.ExecuteNonQueryAsync();
+        _cache.Invalidate("ReportDbService:Reports:");
+        _cache.Invalidate("MasterDashboardService:");
         _logger.LogInformation("Report saved: {Id} {Name}", report.Id, report.Name);
         return report;
     }
@@ -96,6 +118,8 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         AddReportParams(cmd, report);
         var rows = await cmd.ExecuteNonQueryAsync();
         if (rows == 0) throw new UnauthorizedAccessException("Report not found or not owned by user.");
+        _cache.Invalidate("ReportDbService:Reports:");
+        _cache.Invalidate("MasterDashboardService:");
         return report;
     }
 
@@ -108,31 +132,41 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@UserId", userId));
         var rows = await cmd.ExecuteNonQueryAsync();
         if (rows == 0) throw new UnauthorizedAccessException("Report not found or not owned by user.");
+        _cache.Invalidate("ReportDbService:Reports:");
+        _cache.Invalidate("MasterDashboardService:");
     }
 
     // ════════════════════════════════════════════════════════════════════════
     // ISharingService
     // ════════════════════════════════════════════════════════════════════════
 
-    public async Task<List<ReportShare>> GetSharesForReportAsync(Guid reportId)
-    {
-        await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            "SELECT * FROM EMPOWER.RPT_report_shares WHERE report_id = @ReportId", conn);
-        cmd.Parameters.Add(new SqlParameter("@ReportId", reportId));
-        return await ReadSharesAsync(cmd);
-    }
+    public Task<List<ReportShare>> GetSharesForReportAsync(Guid reportId) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Shares", "ByReport", reportId),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                await using var cmd = new SqlCommand(
+                    "SELECT * FROM EMPOWER.RPT_report_shares WHERE report_id = @ReportId", conn);
+                cmd.Parameters.Add(new SqlParameter("@ReportId", reportId));
+                return await ReadSharesAsync(cmd);
+            },
+            bypass: _editorMode.IsActive);
 
-    public async Task<List<SavedReport>> GetSharedWithMeAsync(string userId)
-    {
-        await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            @"SELECT r.* FROM EMPOWER.RPT_saved_reports r
-              INNER JOIN EMPOWER.RPT_report_shares s ON r.id = s.report_id
-              WHERE s.shared_with_id = @UserId ORDER BY r.name", conn);
-        cmd.Parameters.Add(new SqlParameter("@UserId", userId));
-        return await ReadReportsAsync(cmd);
-    }
+    public Task<List<SavedReport>> GetSharedWithMeAsync(string userId) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Shares", "SharedWith", userId),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                await using var cmd = new SqlCommand(
+                    @"SELECT r.* FROM EMPOWER.RPT_saved_reports r
+                      INNER JOIN EMPOWER.RPT_report_shares s ON r.id = s.report_id
+                      WHERE s.shared_with_id = @UserId ORDER BY r.name", conn);
+                cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+                return await ReadReportsAsync(cmd);
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task<ReportShare> ShareReportAsync(ReportShare share)
     {
@@ -152,6 +186,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@SharedById", share.SharedById));
         cmd.Parameters.Add(new SqlParameter("@CreatedAt", share.CreatedAt));
         await cmd.ExecuteNonQueryAsync();
+        _cache.Invalidate("ReportDbService:Shares:");
         return share;
     }
 
@@ -163,37 +198,50 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@Id", shareId));
         cmd.Parameters.Add(new SqlParameter("@RequesterId", requesterId));
         await cmd.ExecuteNonQueryAsync();
+        _cache.Invalidate("ReportDbService:Shares:");
     }
 
     // ════════════════════════════════════════════════════════════════════════
     // IScheduleService
     // ════════════════════════════════════════════════════════════════════════
 
-    public async Task<List<ReportSchedule>> GetSchedulesForReportAsync(Guid reportId)
-    {
-        await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            "SELECT * FROM EMPOWER.RPT_report_schedules WHERE report_id = @ReportId", conn);
-        cmd.Parameters.Add(new SqlParameter("@ReportId", reportId));
-        return await ReadSchedulesAsync(cmd);
-    }
+    public Task<List<ReportSchedule>> GetSchedulesForReportAsync(Guid reportId) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Schedules", "ByReport", reportId),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                await using var cmd = new SqlCommand(
+                    "SELECT * FROM EMPOWER.RPT_report_schedules WHERE report_id = @ReportId", conn);
+                cmd.Parameters.Add(new SqlParameter("@ReportId", reportId));
+                return await ReadSchedulesAsync(cmd);
+            },
+            bypass: _editorMode.IsActive);
 
-    public async Task<List<ReportSchedule>> GetSchedulesForUserAsync(string userId)
-    {
-        await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            "SELECT * FROM EMPOWER.RPT_report_schedules WHERE owner_id = @UserId", conn);
-        cmd.Parameters.Add(new SqlParameter("@UserId", userId));
-        return await ReadSchedulesAsync(cmd);
-    }
+    public Task<List<ReportSchedule>> GetSchedulesForUserAsync(string userId) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Schedules", "ByUser", userId),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                await using var cmd = new SqlCommand(
+                    "SELECT * FROM EMPOWER.RPT_report_schedules WHERE owner_id = @UserId", conn);
+                cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+                return await ReadSchedulesAsync(cmd);
+            },
+            bypass: _editorMode.IsActive);
 
-    public async Task<List<ReportSchedule>> GetAllSchedulesAsync()
-    {
-        await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            "SELECT * FROM EMPOWER.RPT_report_schedules", conn);
-        return await ReadSchedulesAsync(cmd);
-    }
+    public Task<List<ReportSchedule>> GetAllSchedulesAsync() =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Schedules", "All"),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                await using var cmd = new SqlCommand(
+                    "SELECT * FROM EMPOWER.RPT_report_schedules", conn);
+                return await ReadSchedulesAsync(cmd);
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task<ReportSchedule> CreateScheduleAsync(ReportSchedule schedule)
     {
@@ -212,6 +260,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         AddScheduleParams(cmd, schedule);
         cmd.Parameters.Add(new SqlParameter("@CreatedAt", schedule.CreatedAt));
         await cmd.ExecuteNonQueryAsync();
+        _cache.Invalidate("ReportDbService:Schedules:");
         return schedule;
     }
 
@@ -228,6 +277,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
               WHERE id = @Id AND owner_id = @OwnerId", conn);
         AddScheduleParams(cmd, schedule);
         await cmd.ExecuteNonQueryAsync();
+        _cache.Invalidate("ReportDbService:Schedules:");
         return schedule;
     }
 
@@ -258,6 +308,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@Id", scheduleId));
         cmd.Parameters.Add(new SqlParameter("@UserId", userId));
         await cmd.ExecuteNonQueryAsync();
+        _cache.Invalidate("ReportDbService:Schedules:");
     }
 
     public async Task DeleteScheduleAsync(Guid scheduleId, string userId)
@@ -268,6 +319,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@Id", scheduleId));
         cmd.Parameters.Add(new SqlParameter("@UserId", userId));
         await cmd.ExecuteNonQueryAsync();
+        _cache.Invalidate("ReportDbService:Schedules:");
     }
 
     // ════════════════════════════════════════════════════════════════════════

@@ -27,14 +27,33 @@
 
             @* Only active roles are offered. Picking "Administrator" flips
                the is_admin flag server-side; nothing else shows it in the
-               UI. Null / "— None —" leaves role_id NULL and is_admin false. *@
+               UI. Null / "— None —" leaves role_id NULL and is_admin false.
+
+               Privilege gate: only existing global admins can grant or
+               revoke the Administrator role. Non-admins (e.g. System
+               Support, who has the Users admin section but isn't a global
+               admin) get the dropdown filtered to hide it; if they're
+               editing a user whose current role is Administrator, the
+               whole dropdown is locked so they can't demote that admin
+               either. *@
+            @{
+                var editingAdmin = !IsNew && (Existing?.IsAdmin ?? false);
+                var lockRoleField = !ActingUserIsAdmin && editingAdmin;
+            }
             <MudSelect T="Guid?" @bind-Value="_roleId" Label="Role"
                        Variant="Variant.Outlined" Margin="Margin.Dense"
                        ToStringFunc="@RoleToLabel"
+                       Disabled="@lockRoleField"
+                       HelperText="@(lockRoleField ? "Only an Administrator can change this user's role." : null)"
                        Clearable AdornmentIcon="@Icons.Material.Filled.Badge">
                 <MudSelectItem T="Guid?" Value="@((Guid?)null)">— None —</MudSelectItem>
                 @foreach (var r in _roles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
                 {
+                    if (!ActingUserIsAdmin
+                        && string.Equals(r.Name, RoleRecord.AdministratorName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue; // hide Administrator from non-admin assigners
+                    }
                     <MudSelectItem T="Guid?" Value="@((Guid?)r.Id)">@r.Name</MudSelectItem>
                 }
             </MudSelect>
@@ -89,6 +108,14 @@
     // Edit mode: pass the existing record. Create mode: pass null.
     [Parameter] public UserRecord? Existing { get; set; }
     [Parameter] public string? CreatedBy { get; set; }
+
+    // Whether the acting user (the one with this dialog open) is a global
+    // admin. Drives the Administrator-role gate: non-admins can't grant
+    // it on create and can't change the role of an existing admin.
+    // Defaults to false — opening the dialog without setting this errs
+    // on the safe side (Administrator hidden + lock applied if editing
+    // an admin).
+    [Parameter] public bool ActingUserIsAdmin { get; set; }
 
     private bool IsNew => Existing is null;
 

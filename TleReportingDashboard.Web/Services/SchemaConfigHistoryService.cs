@@ -5,23 +5,37 @@ namespace TleReportingDashboard.Web.Services;
 public sealed class SchemaConfigHistoryService : ISchemaConfigHistoryService
 {
     private readonly string _connStr;
+    private readonly ConfigDbCache _cache;
+    private readonly EditorModeState _editorMode;
     private readonly ILogger<SchemaConfigHistoryService> _logger;
 
     public SchemaConfigHistoryService(
         IConfiguration configuration,
+        ConfigDbCache cache,
+        EditorModeState editorMode,
         ILogger<SchemaConfigHistoryService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException(
                 "ConfigDb connection string is required for SchemaConfigHistoryService.");
+        _cache = cache;
+        _editorMode = editorMode;
         _logger = logger;
     }
 
-    public async Task<List<SchemaConfigHistoryRecord>> GetAsync(
+    public Task<List<SchemaConfigHistoryRecord>> GetAsync(
         Guid? connectionId = null,
         DateTime? fromUtc = null,
         DateTime? toUtc = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("SchemaConfigHistoryService", "Get",
+                connectionId, fromUtc?.Ticks, toUtc?.Ticks),
+            () => GetImplAsync(connectionId, fromUtc, toUtc, ct),
+            bypass: _editorMode.IsActive);
+
+    private async Task<List<SchemaConfigHistoryRecord>> GetImplAsync(
+        Guid? connectionId, DateTime? fromUtc, DateTime? toUtc, CancellationToken ct)
     {
         // Single SELECT that joins the connection + company name in one
         // round trip. JSON payload excluded from the list view — admins
@@ -70,16 +84,20 @@ public sealed class SchemaConfigHistoryService : ISchemaConfigHistoryService
         return rows;
     }
 
-    public async Task<string?> GetJsonAsync(long historyId, CancellationToken ct = default)
-    {
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(
-            "SELECT json FROM EMPOWER.RPT_schema_config_history WHERE history_id = @id;", conn);
-        cmd.Parameters.Add(new SqlParameter("@id", historyId));
-        var raw = await cmd.ExecuteScalarAsync(ct);
-        return raw as string;
-    }
+    public Task<string?> GetJsonAsync(long historyId, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("SchemaConfigHistoryService", "Json", historyId),
+            async () =>
+            {
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(
+                    "SELECT json FROM EMPOWER.RPT_schema_config_history WHERE history_id = @id;", conn);
+                cmd.Parameters.Add(new SqlParameter("@id", historyId));
+                var raw = await cmd.ExecuteScalarAsync(ct);
+                return raw as string;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task<int> DeleteAsync(IEnumerable<long> historyIds, CancellationToken ct = default)
     {
@@ -101,6 +119,7 @@ public sealed class SchemaConfigHistoryService : ISchemaConfigHistoryService
             cmd.Parameters.Add(new SqlParameter(paramNames[i], ids[i]));
 
         var deleted = await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("SchemaConfigHistoryService:");
         _logger.LogInformation("Schema history bulk delete: {Requested} ids, {Deleted} rows affected",
             ids.Count, deleted);
         return deleted;
@@ -126,6 +145,7 @@ public sealed class SchemaConfigHistoryService : ISchemaConfigHistoryService
         cmd.Parameters.Add(new SqlParameter("@cid", (object?)connectionId ?? DBNull.Value));
 
         var deleted = await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("SchemaConfigHistoryService:");
         _logger.LogInformation(
             "Schema history date-range purge: conn={Cid} range=[{From:o}, {To:o}] deleted={Deleted}",
             connectionId, fromUtc, toUtc, deleted);

@@ -1,0 +1,374 @@
+@using TleReportingDashboard.Web.Services
+@using TleReportingDashboard.Web.Services.Promotion
+@using Microsoft.AspNetCore.Components.Forms
+@using MudBlazor
+@inject IPromotionPackageService Promotion
+@inject ICompanyRegistry Companies
+@inject ICompanyConnectionAdminService Connections
+@inject ISchemaConfigStore SchemaStore
+@inject IConfiguration Configuration
+@inject IWebHostEnvironment HostEnv
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<MudStack Spacing="3" Class="pa-2">
+    <MudText Typo="Typo.body2" Color="Color.Secondary">
+        Promote configuration from <strong>@_envLabel</strong> to a target environment
+        by exporting a package, then importing it on the destination instance.
+        Schema configs are supported today; reports / dashboards will follow.
+    </MudText>
+
+    <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 16px;">
+        <MudTabs Elevation="0" Rounded ApplyEffectsToContainer>
+            @* ── Export tab ────────────────────────────────────── *@
+            <MudTabPanel Text="Export package" Icon="@Icons.Material.Filled.FileDownload">
+                <MudStack Spacing="3" Class="pt-3">
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                        Pick which connection schemas to bundle. The package is a
+                        single JSON file you'll upload on the destination instance.
+                    </MudText>
+
+                    @if (_exportLoading)
+                    {
+                        <MudProgressLinear Indeterminate Color="Color.Primary" />
+                    }
+                    else if (_exportRows.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense>
+                            No connections with a saved schema config were found.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudTable Items="_exportRows" Dense Hover T="ExportRow">
+                            <HeaderContent>
+                                <MudTh Style="width: 40px;"></MudTh>
+                                <MudTh>Connection</MudTh>
+                                <MudTh>Company</MudTh>
+                                <MudTh Style="width: 120px; text-align: right;">Fields</MudTh>
+                                <MudTh Style="width: 120px; text-align: right;">Joins</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>
+                                    <MudCheckBox T="bool" Value="@context.Selected"
+                                                 ValueChanged="@((bool v) => context.Selected = v)"
+                                                 Dense Color="Color.Primary" />
+                                </MudTd>
+                                <MudTd>@context.ConnectionName</MudTd>
+                                <MudTd>@context.CompanyName</MudTd>
+                                <MudTd Style="text-align: right;">@context.FieldCount</MudTd>
+                                <MudTd Style="text-align: right;">@context.JoinCount</MudTd>
+                            </RowTemplate>
+                        </MudTable>
+
+                        <MudTextField @bind-Value="_exportNotes" Label="Notes (optional)"
+                                      Lines="2" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      HelperText="Free-form text travels with the package. Useful for 'tested with X / linked to ticket Y'." />
+
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.FileDownload"
+                                       Disabled="@(!_exportRows.Any(r => r.Selected) || _exporting)"
+                                       OnClick="OnExport">
+                                @(_exporting ? "Exporting..." : "Export selected")
+                            </MudButton>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @_exportRows.Count(r => r.Selected) of @_exportRows.Count selected
+                            </MudText>
+                        </MudStack>
+                    }
+                </MudStack>
+            </MudTabPanel>
+
+            @* ── Import tab ────────────────────────────────────── *@
+            <MudTabPanel Text="Import package" Icon="@Icons.Material.Filled.FileUpload">
+                <MudStack Spacing="3" Class="pt-3">
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                        Upload a package exported from an upstream environment.
+                        You'll see a preview of every entry; mapping each to a
+                        target connection here is required before anything writes.
+                    </MudText>
+
+                    <InputFile id="promotion-upload" OnChange="OnPackageUploaded" accept=".json" style="display:none" />
+                    <label for="promotion-upload"
+                           style="display: inline-flex; gap: 8px; align-items: center; padding: 8px 16px;
+                                  border: 1px solid #1976D2; border-radius: 4px; color: #1976D2;
+                                  cursor: pointer; width: max-content; font-weight: 500;">
+                        <MudIcon Icon="@Icons.Material.Filled.UploadFile" Size="Size.Small" />
+                        Choose package file...
+                    </label>
+
+                    @if (_parsedPackage is not null)
+                    {
+                        <MudPaper Elevation="0" Style="border: 1px solid #DADCE0; border-radius: 4px; padding: 12px; background: #FAFAFA;">
+                            <MudStack Spacing="1">
+                                <MudText Typo="Typo.subtitle2">Package summary</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Source environment: <strong>@_parsedPackage.SourceEnvironment</strong>
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Exported: @_parsedPackage.ExportedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                                    @(string.IsNullOrEmpty(_parsedPackage.ExportedBy) ? "" : $" by {_parsedPackage.ExportedBy}")
+                                </MudText>
+                                @if (!string.IsNullOrWhiteSpace(_parsedPackage.Notes))
+                                {
+                                    <MudText Typo="Typo.caption">Notes: @_parsedPackage.Notes</MudText>
+                                }
+                            </MudStack>
+                        </MudPaper>
+
+                        @if (_parsedPackage.SchemaConfigs.Count == 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Dense>
+                                Package contains no schema config entries.
+                            </MudAlert>
+                        }
+                        else
+                        {
+                            <MudTable Items="_importRows" Dense T="ImportRow">
+                                <HeaderContent>
+                                    <MudTh>Source connection</MudTh>
+                                    <MudTh>Source company</MudTh>
+                                    <MudTh Style="width: 120px; text-align: right;">Fields</MudTh>
+                                    <MudTh Style="width: 360px;">Target connection (this env)</MudTh>
+                                    <MudTh Style="width: 200px;">Status</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>@context.Entry.SourceConnectionName</MudTd>
+                                    <MudTd>@context.Entry.SourceCompanyName</MudTd>
+                                    <MudTd Style="text-align: right;">@context.Entry.Schema.Fields.Count</MudTd>
+                                    <MudTd>
+                                        <MudSelect T="Guid?" Value="context.TargetConnectionId"
+                                                   ValueChanged="@((Guid? v) => context.TargetConnectionId = v)"
+                                                   ToStringFunc="@_targetLabel"
+                                                   Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                   Dense Clearable>
+                                            <MudSelectItem T="Guid?" Value="@((Guid?)null)">— pick target —</MudSelectItem>
+                                            @foreach (var t in _targetConnections)
+                                            {
+                                                <MudSelectItem T="Guid?" Value="@((Guid?)t.Id)">@_targetLabel(t.Id)</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                    </MudTd>
+                                    <MudTd>
+                                        @if (context.Result is { } r)
+                                        {
+                                            <MudChip T="string" Size="Size.Small"
+                                                     Color="@(r.Success ? Color.Success : Color.Error)"
+                                                     Variant="Variant.Outlined">
+                                                @r.Message
+                                            </MudChip>
+                                        }
+                                    </MudTd>
+                                </RowTemplate>
+                            </MudTable>
+
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.PlayArrow"
+                                           Disabled="@(!_importRows.Any(r => r.TargetConnectionId.HasValue) || _importing)"
+                                           OnClick="OnImport">
+                                    @(_importing ? "Importing..." : "Apply mapped entries")
+                                </MudButton>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Each mapped entry overwrites the target's current schema and writes a history row.
+                                </MudText>
+                            </MudStack>
+                        }
+                    }
+                </MudStack>
+            </MudTabPanel>
+        </MudTabs>
+    </MudPaper>
+</MudStack>
+
+@code {
+    [Parameter] public string CurrentUserEmail { get; set; } = string.Empty;
+
+    private string _envLabel = "this environment";
+
+    // Export-side state
+    private bool _exportLoading = true;
+    private bool _exporting;
+    private List<ExportRow> _exportRows = new();
+    private string _exportNotes = string.Empty;
+
+    // Import-side state
+    private PromotionPackage? _parsedPackage;
+    private byte[]? _uploadedBytes;
+    private List<ImportRow> _importRows = new();
+    private List<CompanyConnectionRecord> _targetConnections = new();
+    private Dictionary<Guid, string> _connectionLabelCache = new();
+    private bool _importing;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _envLabel = Configuration["Environment:Label"]
+            ?? HostEnv.EnvironmentName
+            ?? "this environment";
+
+        // Pre-load both sides — connection lists are small, doing it
+        // upfront keeps the tab snappy when switching between Export
+        // and Import tabs.
+        await ReloadConnectionsAsync();
+        _exportLoading = false;
+    }
+
+    private async Task ReloadConnectionsAsync()
+    {
+        var rows = new List<ExportRow>();
+        var allTargets = new List<CompanyConnectionRecord>();
+        var labels = new Dictionary<Guid, string>();
+        var companies = await Companies.GetActiveAsync();
+        foreach (var co in companies)
+        {
+            var conns = await Connections.GetByCompanyAsync(co.Id);
+            foreach (var c in conns.Where(x => x.IsActive))
+            {
+                allTargets.Add(c);
+                labels[c.Id] = $"{c.Name}  ·  {co.Name}";
+
+                var schema = SchemaStore.GetForConnection(c.Id);
+                if (schema.Fields.Count > 0 || schema.Joins.Count > 0)
+                {
+                    rows.Add(new ExportRow(
+                        c.Id,
+                        c.Name,
+                        co.Name,
+                        schema.Fields.Count,
+                        schema.Joins.Count));
+                }
+            }
+        }
+        _exportRows = rows.OrderBy(r => r.CompanyName).ThenBy(r => r.ConnectionName).ToList();
+        _targetConnections = allTargets.OrderBy(c => labels[c.Id]).ToList();
+        _connectionLabelCache = labels;
+    }
+
+    private string _targetLabel(Guid? id)
+    {
+        if (id is not Guid g) return "— pick target —";
+        return _connectionLabelCache.GetValueOrDefault(g, g.ToString());
+    }
+
+    private async Task OnExport()
+    {
+        _exporting = true;
+        try
+        {
+            var ids = _exportRows.Where(r => r.Selected).Select(r => r.ConnectionId).ToList();
+            var bytes = await Promotion.ExportAsync(ids, CurrentUserEmail,
+                string.IsNullOrWhiteSpace(_exportNotes) ? null : _exportNotes.Trim());
+            var fileName = $"promotion-{_envLabel.ToLowerInvariant()}-{DateTime.Now:yyyy-MM-dd_HHmm}.json";
+
+            // Hand the bytes to the browser as a download. JS interop
+            // builds a Blob URL and triggers a synthetic click — the
+            // standard pattern for streaming server-built files in a
+            // Blazor Server app without a controller endpoint.
+            await JS.InvokeVoidAsync("downloadFile", fileName,
+                Convert.ToBase64String(bytes), "application/json");
+            Snackbar.Add($"Exported {ids.Count} entries.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private async Task OnPackageUploaded(InputFileChangeEventArgs e)
+    {
+        if (e.File is null) return;
+        try
+        {
+            // 4 MB cap. Schema configs run a few hundred KB at most;
+            // anything larger is almost certainly the wrong file. Browser-
+            // side validation isn't reliable, so guard server-side.
+            const long maxBytes = 4L * 1024 * 1024;
+            await using var stream = e.File.OpenReadStream(maxBytes);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            _uploadedBytes = ms.ToArray();
+            _parsedPackage = Promotion.Parse(_uploadedBytes);
+            _importRows = _parsedPackage.SchemaConfigs
+                .Select(s => new ImportRow(s, null, null))
+                .ToList();
+            // Auto-map by source connection name when an exact match
+            // exists in this env's targets — admins can still override.
+            foreach (var row in _importRows)
+            {
+                var match = _targetConnections.FirstOrDefault(t =>
+                    string.Equals(t.Name, row.Entry.SourceConnectionName, StringComparison.OrdinalIgnoreCase));
+                if (match is not null) row.TargetConnectionId = match.Id;
+            }
+        }
+        catch (Exception ex)
+        {
+            _parsedPackage = null;
+            _uploadedBytes = null;
+            _importRows = new();
+            Snackbar.Add($"Couldn't parse package: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OnImport()
+    {
+        _importing = true;
+        try
+        {
+            foreach (var row in _importRows)
+            {
+                if (row.TargetConnectionId is not Guid target) continue;
+                row.Result = await Promotion.ImportSchemaConfigAsync(
+                    row.Entry, target, CurrentUserEmail);
+            }
+            var ok = _importRows.Count(r => r.Result?.Success == true);
+            var fail = _importRows.Count(r => r.Result?.Success == false);
+            Snackbar.Add(
+                $"Import complete — {ok} applied, {fail} failed.",
+                fail == 0 ? Severity.Success : Severity.Warning);
+            await ReloadConnectionsAsync();
+        }
+        finally
+        {
+            _importing = false;
+        }
+    }
+
+    private sealed class ExportRow
+    {
+        public Guid ConnectionId { get; }
+        public string ConnectionName { get; }
+        public string CompanyName { get; }
+        public int FieldCount { get; }
+        public int JoinCount { get; }
+        public bool Selected { get; set; }
+
+        public ExportRow(Guid id, string connName, string companyName, int fields, int joins)
+        {
+            ConnectionId = id;
+            ConnectionName = connName;
+            CompanyName = companyName;
+            FieldCount = fields;
+            JoinCount = joins;
+        }
+    }
+
+    private sealed class ImportRow
+    {
+        public PromotionPackage.SchemaConfigEntry Entry { get; }
+        public Guid? TargetConnectionId { get; set; }
+        public ImportResult? Result { get; set; }
+
+        public ImportRow(PromotionPackage.SchemaConfigEntry entry,
+                         Guid? targetConnectionId, ImportResult? result)
+        {
+            Entry = entry;
+            TargetConnectionId = targetConnectionId;
+            Result = result;
+        }
+    }
+}

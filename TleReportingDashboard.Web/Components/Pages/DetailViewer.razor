@@ -8,8 +8,10 @@
 @inject ISchemaService SchemaService
 @inject IUserPreferenceService PreferenceService
 @inject IAdminService AdminService
+@inject IAdminAccessService AdminAccess
 @inject IUserManagementService UserManagement
 @inject IQueryScopeResolver ScopeResolver
+@inject SchemaBuilderService SchemaBrowser
 @inject AuthenticationStateProvider AuthStateProvider
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -82,57 +84,78 @@
     </style>
 </HeadContent>
 
-<MudMainContent Style="padding: 16px;">
+<MudMainContent Style="padding: 0;">
     @if (_isLoading)
     {
         <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
     }
 
     <MudStack Spacing="3">
-        <MudPaper Elevation="0" Class="pa-4" Style="border-bottom: 1px solid #E8EAED;">
-            <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
-                <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                    @* No back arrow — the detail screen is a modal-style
-                       overlay; users exit via Close. A Back here invited
-                       browser history navigation away from the parent
-                       report, which dropped any unsaved drill-down state. *@
-                    <MudStack Spacing="0">
-                        <MudText Typo="Typo.h5" Style="font-weight: 600;">@_title</MudText>
-                        @if (!string.IsNullOrEmpty(_groupLabel) && !string.IsNullOrEmpty(GroupKey))
-                        {
-                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="mt-1">
-                                <MudChip T="string" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small">
-                                    @_groupLabel
-                                </MudChip>
-                                <MudText Typo="Typo.body1" Style="font-weight: 500;">
-                                    @GroupKey
-                                </MudText>
-                            </MudStack>
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1">All Records</MudText>
-                        }
+        <MudPaper Elevation="0" Style="padding: 4px 16px; border-bottom: 1px solid #E8EAED;">
+            <MudStack Spacing="2">
+                @* Active company's logo — rendered statically (no link)
+                   above the description + export row, so users always
+                   know which company's data they're drilled into. Same
+                   gray letterbox treatment the master dashboard uses.
+                   Hidden when the company has no logo uploaded. *@
+                @if (_logoDataUri is not null)
+                {
+                    <div style="background: #A9A9A9; border-radius: 4px;
+                                padding: 4px 8px; display: inline-flex;
+                                align-items: center; align-self: flex-start;">
+                        <img src="@_logoDataUri" alt=""
+                             style="height: 36px; max-width: 160px; object-fit: contain;" />
+                    </div>
+                }
+                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                        @* No back arrow — the detail screen is a modal-style
+                           overlay; users exit via Close. A Back here invited
+                           browser history navigation away from the parent
+                           report, which dropped any unsaved drill-down state. *@
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.h5" Style="font-weight: 600;">@_title</MudText>
+                            @if (!string.IsNullOrEmpty(_groupLabel) && !string.IsNullOrEmpty(GroupKey))
+                            {
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="mt-1">
+                                    <MudChip T="string" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small">
+                                        @_groupLabel
+                                    </MudChip>
+                                    <MudText Typo="Typo.body1" Style="font-weight: 500;">
+                                        @FormatGroupKeyForBanner(GroupKey)
+                                    </MudText>
+                                </MudStack>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1">All Records</MudText>
+                            }
+                        </MudStack>
                     </MudStack>
-                </MudStack>
-                <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                    @if (_detailData is not null)
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @_detailData.Rows.Count.ToString("N0") rows
-                        </MudText>
-                    }
-                    @* Debug affordance — same dialog the master dashboard
-                       tiles surface on right-click. Available to any user;
-                       the Code icon keeps it visually distinct from the
-                       user-facing Export menu. *@
-                    <MudTooltip Text="Show the SQL that produced this view">
-                        <MudIconButton Icon="@Icons.Material.Filled.Code" Size="Size.Small"
-                                       Color="Color.Default" OnClick="ShowDetailQuery"
-                                       Disabled="@(_detailData?.Sql is null)" />
-                    </MudTooltip>
-                    <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
-                                Disabled="@(_detailData is null || !_detailData.Rows.Any())" />
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                        @if (_detailData is not null)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @_detailData.Rows.Count.ToString("N0") rows
+                            </MudText>
+                        }
+                        @* Debug affordance — same dialog the master dashboard
+                           tiles surface on right-click. Available to any user.
+                           Labeled (not just an icon) so admins can discover it
+                           when diagnosing why a drill-down view returned the
+                           rows it did. *@
+                        <MudTooltip Text="Show the SQL that produced this view">
+                            <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                       Color="Color.Default"
+                                       StartIcon="@Icons.Material.Filled.Code"
+                                       OnClick="ShowDetailQuery"
+                                       Disabled="@(_detailData?.Sql is null)">
+                                Show SQL
+                            </MudButton>
+                        </MudTooltip>
+                        <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
+                                    Disabled="@(_detailData is null || !_detailData.Rows.Any())" />
+                    </MudStack>
                 </MudStack>
             </MudStack>
         </MudPaper>
@@ -185,7 +208,7 @@
                             @foreach (var group in BuildGroups())
                             {
                                 <tr class="group-header">
-                                    <td colspan="@GetVisibleColumns().Count">@group.Label</td>
+                                    <td colspan="@GetVisibleColumns().Count">@FormatGroupLabel(group)</td>
                                 </tr>
                                 @foreach (var row in group.Rows)
                                 {
@@ -256,6 +279,7 @@
                             DefaultSortField="@_tableSortField"
                             DefaultSortDirection="@_tableSortDirection"
                             InitialSort="@_initialSortTuples"
+                            CalcColumns="_tableCalcColumns"
                             DisableUserSort="true"
                             ReadOnly="true"
                             FillViewport="true"
@@ -286,6 +310,11 @@
 
     private string _title = "Detail";
     private string _companyName = string.Empty;
+    // Data-URI form of the active company's logo. Rendered statically
+    // (no link) below the page header so the user always sees which
+    // company's data they're drilled into. Null when the company has
+    // no logo uploaded.
+    private string? _logoDataUri;
     private Guid? _connectionId;
     private string? _primaryTable;
     private string? _groupLabel;
@@ -293,6 +322,10 @@
     private bool _isLoading;
     private QueryResponse? _detailData;
     private DashboardView.DashboardConfig? _dashConfig;
+    // Per-report SQL calc columns. Hydrated from ColumnState so the
+    // detail query SELECTs them and rows carry their values for the grid.
+    private List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? _tableCalcColumns;
+    private bool _distinct;
     private string? _tableSortField;
     private string? _tableSortDirection;
     // Multi-column sort read from the report's ColumnState. Same semantics as
@@ -366,7 +399,11 @@
             if (report is null) { _error = "Report not found."; return; }
 
             var isAdmin = AdminService.IsAdmin(userEmail);
-            if (!isAdmin)
+            // Admin-section roles (System Support et al.) bypass the per-
+            // company gate — they need cross-company visibility for support
+            // work, same model the picker / Report Library use.
+            var hasAdminAccess = isAdmin || await AdminAccess.HasAnyAdminAccessAsync(userEmail);
+            if (!hasAdminAccess)
             {
                 var access = await UserManagement.GetCompanyAccessAsync(userEmail);
                 if (!access.Any(a => a.CompanyId == report.CompanyId))
@@ -387,6 +424,11 @@
             {
                 var company = await CompanyRegistry.GetByIdAsync(report.CompanyId);
                 _companyName = company?.Name ?? string.Empty;
+                if (company?.Logo is { Length: > 0 } bytes)
+                {
+                    var mime = company.LogoContentType ?? "image/png";
+                    _logoDataUri = $"data:{mime};base64,{Convert.ToBase64String(bytes)}";
+                }
             }
             catch { _companyName = string.Empty; }
 
@@ -416,6 +458,16 @@
                         _detailSortDirection = dsdEl.GetString() ?? "asc";
                     if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
                         _customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
+                    // Per-report SQL calc columns. Hydrated so the detail
+                    // query SELECTs them as `<expr> AS <key>` and rows
+                    // carry the calc values; without this the drill-down
+                    // grid drops every calc column.
+                    if (doc.RootElement.TryGetProperty("TableCalculatedColumns", out var tcEl))
+                        _tableCalcColumns = System.Text.Json.JsonSerializer
+                            .Deserialize<List<TleReportingDashboard.Web.Models.TableCalcColumnDef>>(tcEl.GetRawText());
+                    if (doc.RootElement.TryGetProperty("Distinct", out var distEl)
+                        && distEl.ValueKind == System.Text.Json.JsonValueKind.True)
+                        _distinct = true;
 
                     // Advanced (ad-hoc) filters tree. Feature-flagged so a
                     // rollback in appsettings hides them consistently across
@@ -522,9 +574,17 @@
                     // Template-linked: template owns the column order and default sort so the
                     // detail grid stays in sync with the template. Per-report show/hide is
                     // preserved but trimmed to fields still in the template.
-                    _columnOrder = resolved.ColumnOrder is { Count: > 0 }
+                    // Calcs are NOT in templates (per-report derivation), so weave the
+                    // saved order's calc positions back in — otherwise the detail
+                    // grid drops calc placement on every load.
+                    var templateOrder = resolved.ColumnOrder is { Count: > 0 }
                         ? new List<string>(resolved.ColumnOrder)
                         : new List<string>(fieldIds);
+                    _columnOrder = TleReportingDashboard.Web.Services.GridTemplateService
+                        .WeaveCalcsIntoTemplateOrder(
+                            templateOrder,
+                            _columnOrder,
+                            _tableCalcColumns?.Where(c => !string.IsNullOrEmpty(c.Key)).Select(c => c.Key));
                     if (!string.IsNullOrEmpty(resolved.DefaultSortField))
                     {
                         _tableSortField = resolved.DefaultSortField;
@@ -610,6 +670,29 @@
                 primaryDir = _detailSortDirection == "desc" ? "desc" : "asc";
             }
 
+            // Pre-fetch primary-table PKs so QueryBuilder can append silent
+            // tiebreakers — same OFFSET-stability path the editor uses.
+            // Best-effort: failures fall through to the legacy fallback.
+            List<string>? pkColumns = null;
+            if (!string.IsNullOrWhiteSpace(_primaryTable))
+            {
+                try
+                {
+                    var bare = _primaryTable;
+                    var asIdx = bare.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+                    if (asIdx > 0) bare = bare[..asIdx].Trim();
+                    var dot = bare.IndexOf('.');
+                    string? schema = dot > 0 ? bare[..dot] : null;
+                    var table = dot > 0 ? bare[(dot + 1)..] : bare;
+                    // Effective lookup folds in admin-flagged IsUnique
+                    // fields so accounts that can't read information_schema
+                    // still get a stable OFFSET tiebreaker.
+                    var schemaFields = await SchemaService.GetFieldConfigsAsync(_connectionId);
+                    pkColumns = await SchemaBrowser.GetEffectivePrimaryKeyColumnsAsync(_connectionId, schema, table, schemaFields);
+                }
+                catch { pkColumns = null; }
+            }
+
             var request = new QueryRequest
             {
                 FieldIds = fieldIds,
@@ -623,7 +706,20 @@
                 SortField = primarySort,
                 SortDirection = primaryDir,
                 SecondarySortField = secondarySort,
-                SecondarySortDirection = secondaryDir
+                SecondarySortDirection = secondaryDir,
+                FallbackSortColumns = pkColumns is { Count: > 0 } ? pkColumns : null,
+                Distinct = _distinct,
+                // SQL-mode calc columns must be in the SELECT for the
+                // drill-down grid to render them.
+                TableCalcSqlColumns = _tableCalcColumns?
+                    .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression) && !string.IsNullOrEmpty(c.Key))
+                    .Select(c => new TleReportingDashboard.Web.Models.TableCalcSqlSelector
+                    {
+                        Key = c.Key,
+                        SqlExpression = c.SqlExpression!,
+                        JoinIds = c.JoinIds
+                    })
+                    .ToList()
             };
             request.Scoping = await ScopeResolver.ResolveAsync(userEmail, _connectionId, _primaryTable);
             var fullData = await QueryService.ExecuteQueryAsync(request);
@@ -698,7 +794,15 @@
         !string.IsNullOrEmpty(_detailGroupByFieldId)
         && _detailData is not null
         && _detailData.Rows.Count > 0
-        && _detailData.Columns.Any(c => string.Equals(c.FieldId, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase));
+        && (_detailData.Columns.Any(c => string.Equals(c.FieldId, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase))
+            // SQL-mode calc keys aren't in Data.Columns (which only carries
+            // real FieldConfig metadata), but their values ARE in every row
+            // dict via the SELECT alias. Detect calc-key group-bys by
+            // matching against the per-report calc list so the grouped
+            // header / subtotal render kicks in.
+            || (_tableCalcColumns?.Any(c =>
+                    !string.IsNullOrWhiteSpace(c.SqlExpression)
+                    && string.Equals(c.Key, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase)) ?? false));
 
     // Columns visible in the grouped render, honoring saved column order
     // and hidden-column settings. Mirrors the ReportGrid's visibility rules
@@ -711,6 +815,21 @@
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>(_hiddenColumns, StringComparer.OrdinalIgnoreCase);
 
+        // SQL-mode calc columns aren't in Data.Columns (which only carries
+        // FieldConfig metadata) but their values are in every row dict via
+        // the SELECT alias. Project them as synthetic ColumnMeta so the
+        // grouped render iterates and displays them in the same slot the
+        // saved combined order specifies.
+        var calcsByKey = (_tableCalcColumns ?? new())
+            .Where(c => !string.IsNullOrEmpty(c.Key) && !string.IsNullOrWhiteSpace(c.SqlExpression))
+            .ToDictionary(c => c.Key, c => new ColumnMeta
+            {
+                FieldId = c.Key,
+                Label = string.IsNullOrEmpty(c.Label) ? c.Key : c.Label,
+                DataType = string.IsNullOrWhiteSpace(c.DataType) ? "text" : c.DataType,
+                Format = c.Format
+            }, StringComparer.OrdinalIgnoreCase);
+
         IEnumerable<ColumnMeta> ordered;
         if (_columnOrder is { Count: > 0 })
         {
@@ -719,16 +838,21 @@
             foreach (var id in _columnOrder)
             {
                 if (byId.TryGetValue(id, out var c) && seen.Add(id)) result.Add(c);
+                else if (calcsByKey.TryGetValue(id, out var calcCol) && seen.Add(id)) result.Add(calcCol);
             }
             // Append any data columns missing from the saved order so nothing
             // silently disappears (e.g. a new field was added post-save).
             foreach (var c in _detailData.Columns)
                 if (seen.Add(c.FieldId)) result.Add(c);
+            // Append any calcs not yet placed (defensive — newly-added calc
+            // not yet in saved order lands at the end).
+            foreach (var calcCol in calcsByKey.Values)
+                if (seen.Add(calcCol.FieldId)) result.Add(calcCol);
             ordered = result;
         }
         else
         {
-            ordered = _detailData.Columns;
+            ordered = _detailData.Columns.Concat(calcsByKey.Values);
         }
 
         return ordered.Where(c => !hidden.Contains(c.FieldId)).ToList();
@@ -805,11 +929,15 @@
     {
         var totals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
         if (_detailData is null) return totals;
+        // Materialize once so we can iterate twice (currency fields + calcs)
+        // without re-enumerating the source. Detail rowsets are small (one
+        // tile's drill-down), so this is cheap.
+        var rowList = rows as IList<Dictionary<string, object?>> ?? rows.ToList();
         foreach (var col in _detailData.Columns)
         {
             if (!IsCurrencyColumn(col)) continue;
             decimal sum = 0m;
-            foreach (var row in rows)
+            foreach (var row in rowList)
             {
                 if (row.TryGetValue(col.FieldId, out var v) && v is not null && v is not DBNull)
                 {
@@ -817,6 +945,24 @@
                 }
             }
             totals[col.FieldId] = sum;
+        }
+        // Currency-typed SQL calcs participate in subtotals too — their
+        // values land in the row dict under the calc Key just like real
+        // currency columns. Match the same shape so the grouped render's
+        // total row picks them up by FieldId (= calc Key).
+        foreach (var calc in _tableCalcColumns ?? new())
+        {
+            if (string.IsNullOrEmpty(calc.Key)) continue;
+            if (!string.Equals(calc.DataType, "currency", StringComparison.OrdinalIgnoreCase)) continue;
+            decimal sum = 0m;
+            foreach (var row in rowList)
+            {
+                if (row.TryGetValue(calc.Key, out var v) && v is not null && v is not DBNull)
+                {
+                    try { sum += Convert.ToDecimal(v); } catch { /* skip non-numeric */ }
+                }
+            }
+            totals[calc.Key] = sum;
         }
         return totals;
     }
@@ -844,6 +990,53 @@
     }
 
     private static string FormatCurrency(decimal value) => value.ToString("C0");
+
+    // The bucket's Label is the raw value's ToString — used as a stable
+    // group key and as the sort key against ValueSortOrder, so we can't
+    // change it. Re-derive the *display* by pulling the typed value out of
+    // any row in the bucket and running it through the same FormatCell path
+    // the data rows use. Without this, a date-typed group field renders as
+    // "1/15/2024 12:00:00 AM" in the header even though the rows below it
+    // honor the column's "MM/dd/yyyy" Format. "(empty)" is preserved so
+    // null/blank groups read the same as before.
+    private string FormatGroupLabel(GroupBucket group)
+    {
+        if (group.Label == "(empty)") return "(empty)";
+        if (_detailData is null || string.IsNullOrEmpty(_detailGroupByFieldId)) return group.Label;
+        var col = _detailData.Columns.FirstOrDefault(c =>
+            string.Equals(c.FieldId, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase));
+        if (col is null || group.Rows.Count == 0) return group.Label;
+        return FormatCell(group.Rows[0], col);
+    }
+
+    // Drill-down banner at the top of DetailViewer renders @GroupKey
+    // (the route-supplied raw value). Without formatting, a phone-typed
+    // group field shows "5551234567" in the banner while the grouped
+    // table below it shows "(555) 123-4567" — inconsistent and ugly.
+    // Formats GroupKey with the group-by field's Format + DataType so
+    // the banner matches the table cells. Falls back to the raw value
+    // when the column meta isn't available (data not loaded yet, group
+    // field not in the SELECT, etc.).
+    private string FormatGroupKeyForBanner(string? groupKey)
+    {
+        if (string.IsNullOrEmpty(groupKey)) return string.Empty;
+        if (groupKey == "(empty)") return "(empty)";
+        var groupFieldId = _dashConfig?.GroupByFieldId;
+        if (string.IsNullOrEmpty(groupFieldId) || _detailData is null) return groupKey;
+        var col = _detailData.Columns.FirstOrDefault(c =>
+            string.Equals(c.FieldId, groupFieldId, StringComparison.OrdinalIgnoreCase));
+        if (col is null) return groupKey;
+        if (string.IsNullOrWhiteSpace(col.Format)
+            && !string.Equals(col.DataType, "phone", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(col.DataType, "date", StringComparison.OrdinalIgnoreCase))
+        {
+            // Nothing the formatter would do — return raw to avoid a
+            // round-trip through ToString that could shift the casing
+            // / culture for plain text.
+            return groupKey;
+        }
+        return FieldFormatter.Format(groupKey, col.Format, col.DataType);
+    }
 
     private sealed record GroupBucket(string Label, List<Dictionary<string, object?>> Rows, Dictionary<string, decimal> Totals);
 

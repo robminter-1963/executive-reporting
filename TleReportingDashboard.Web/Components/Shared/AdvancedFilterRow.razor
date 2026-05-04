@@ -15,14 +15,19 @@
 <MudPaper Elevation="0" Class="pa-3"
           Style="border: 1px solid #E8EAED; border-radius: 4px;">
     <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
-        @* Field picker — sorts alphabetically by label. *@
+        @* Field picker — sorts alphabetically by label. Item content appends
+           the field's source (table.column or truncated SqlExpression) so two
+           fields with the same Label can be told apart both in the dropdown
+           list AND in the selected-item display after picking. *@
         <MudSelect T="string" Value="Clause.FieldId"
                    ValueChanged="@(v => OnFieldChanged(v))"
                    Label="Field" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
-                   Style="min-width: 220px;">
+                   Style="min-width: 260px;">
             @foreach (var f in AvailableFields.OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase))
             {
-                <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                <MudSelectItem T="string" Value="@f.Id">
+                    @f.Label <span style="color:#5F6368; font-family: monospace; font-size: 0.7rem; margin-left: 8px;">@FieldSource(f)</span>
+                </MudSelectItem>
             }
         </MudSelect>
 
@@ -390,5 +395,23 @@
     {
         while (Clause.Values.Count <= idx) Clause.Values.Add(string.Empty);
         Clause.Values[idx] = v ?? string.Empty;
+    }
+
+    // Disambiguation hint shown next to each field's label in the picker.
+    // Plain-column fields show "table.column"; inline-SQL fields show a
+    // short prefix of the expression so the admin can still tell two
+    // same-labeled fields apart. Empty for fields with neither (e.g.
+    // legacy rows missing both) — falls back to label-only.
+    private static string FieldSource(FieldConfig f)
+    {
+        if (!string.IsNullOrWhiteSpace(f.SqlExpression))
+        {
+            var expr = f.SqlExpression.Trim();
+            const int max = 32;
+            return expr.Length <= max ? $"<{expr}>" : $"<{expr[..max]}…>";
+        }
+        if (!string.IsNullOrWhiteSpace(f.SourceTable) && !string.IsNullOrWhiteSpace(f.SourceColumn))
+            return $"{f.SourceTable}.{f.SourceColumn}";
+        return string.Empty;
     }
 }

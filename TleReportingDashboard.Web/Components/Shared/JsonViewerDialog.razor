@@ -1,0 +1,50 @@
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+@* Read-only JSON viewer dialog. Used by Report Builder's "View report
+   JSON" menu item to display the report's serialized state for diagnosis
+   (column-order drift, dashboard-config inspection, calc-column audit). *@
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.DataObject" />
+            <MudText Typo="Typo.h6">@Title</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 700px;">
+            @if (!string.IsNullOrEmpty(Subtitle))
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@Subtitle</MudText>
+            }
+            <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; max-height: 600px; overflow: auto; background: #1E1E1E;">
+                <pre style="padding: 16px; margin: 0; color: #D4D4D4; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85rem; white-space: pre-wrap; word-wrap: break-word;">@Json</pre>
+            </MudPaper>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="CopyToClipboard">
+            Copy JSON
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public string Json { get; set; } = string.Empty;
+    [Parameter] public string Title { get; set; } = "JSON";
+    [Parameter] public string? Subtitle { get; set; }
+
+    private void Close() => MudDialog?.Close();
+
+    private async Task CopyToClipboard()
+    {
+        var ok = await JS.InvokeAsync<bool>("copyToClipboard", Json);
+        Snackbar.Add(
+            ok ? "JSON copied to clipboard." : "Couldn't copy — your browser blocked clipboard access.",
+            ok ? Severity.Success : Severity.Warning);
+    }
+}

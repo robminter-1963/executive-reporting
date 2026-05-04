@@ -9,46 +9,60 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
 {
     private readonly string _connStr;
     private readonly ICompanyConnectionResolver _resolver;
+    private readonly ConfigDbCache _cache;
+    private readonly EditorModeState _editorMode;
     private readonly ILogger<CompanyConnectionAdminService> _logger;
 
     public CompanyConnectionAdminService(
         IConfiguration configuration,
         ICompanyConnectionResolver resolver,
+        ConfigDbCache cache,
+        EditorModeState editorMode,
         ILogger<CompanyConnectionAdminService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required.");
         _resolver = resolver;
+        _cache = cache;
+        _editorMode = editorMode;
         _logger = logger;
     }
 
-    public async Task<List<CompanyConnectionRecord>> GetByCompanyAsync(Guid companyId, CancellationToken ct = default)
-    {
-        var rows = new List<CompanyConnectionRecord>();
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(SelectAllColumns +
-            "FROM EMPOWER.RPT_company_connections WHERE company_id = @c ORDER BY is_default DESC, name;", conn);
-        cmd.Parameters.Add(new SqlParameter("@c", companyId));
+    public Task<List<CompanyConnectionRecord>> GetByCompanyAsync(Guid companyId, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("CompanyConnectionAdminService", "ByCompany", companyId),
+            async () =>
+            {
+                var rows = new List<CompanyConnectionRecord>();
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(SelectAllColumns +
+                    "FROM EMPOWER.RPT_company_connections WHERE company_id = @c ORDER BY is_default DESC, name;", conn);
+                cmd.Parameters.Add(new SqlParameter("@c", companyId));
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            rows.Add(ReadRecord(reader));
-        }
-        return rows;
-    }
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    rows.Add(ReadRecord(reader));
+                }
+                return rows;
+            },
+            bypass: _editorMode.IsActive);
 
-    public async Task<CompanyConnectionRecord?> GetByIdAsync(Guid id, CancellationToken ct = default)
-    {
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(SelectAllColumns +
-            "FROM EMPOWER.RPT_company_connections WHERE id = @id;", conn);
-        cmd.Parameters.Add(new SqlParameter("@id", id));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        return await reader.ReadAsync(ct) ? ReadRecord(reader) : null;
-    }
+    public Task<CompanyConnectionRecord?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("CompanyConnectionAdminService", "ById", id),
+            async () =>
+            {
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(SelectAllColumns +
+                    "FROM EMPOWER.RPT_company_connections WHERE id = @id;", conn);
+                cmd.Parameters.Add(new SqlParameter("@id", id));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                return await reader.ReadAsync(ct) ? ReadRecord(reader) : null;
+            },
+            bypass: _editorMode.IsActive);
 
     // Single source of truth for the column order, used by both GET paths
     // and the ReadRecord mapper below.
@@ -131,6 +145,8 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
 
         await tx.CommitAsync(ct);
         _resolver.Invalidate(r.CompanyId);
+        _cache.Invalidate("CompanyConnectionAdminService:");
+        _cache.Invalidate("SchemaService:");
         _logger.LogInformation("Connection created: company={CompanyId} name={Name} type={Type}", r.CompanyId, r.Name, r.ConnectionType);
         return r;
     }
@@ -152,6 +168,8 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
 
         await tx.CommitAsync(ct);
         _resolver.Invalidate(r.CompanyId);
+        _cache.Invalidate("CompanyConnectionAdminService:");
+        _cache.Invalidate("SchemaService:");
         _logger.LogInformation("Connection updated: {Id} ({Name})", r.Id, r.Name);
     }
 
@@ -178,6 +196,8 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         }
 
         if (companyId is Guid c) _resolver.Invalidate(c);
+        _cache.Invalidate("CompanyConnectionAdminService:");
+        _cache.Invalidate("SchemaService:");
         _logger.LogInformation("Connection deleted: {Id}", id);
     }
 
@@ -228,6 +248,103 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         }
     }
 
+    public async Task<int> CopyConnectionsAsync(
+        IReadOnlyList<Guid> sourceConnectionIds, Guid targetCompanyId, string namePrefix,
+        CancellationToken ct = default)
+    {
+        if (sourceConnectionIds is null || sourceConnectionIds.Count == 0)
+            throw new ArgumentException("At least one source connection id is required.");
+        if (namePrefix is null) namePrefix = string.Empty;
+        if (namePrefix.Length > 50)
+            throw new ArgumentException("Name prefix must be 50 characters or fewer.");
+
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync(ct);
+
+        // Discover the live column list from INFORMATION_SCHEMA so the copy
+        // doesn't depend on a hand-maintained allowlist that would drift
+        // every time a migration adds a column. Excludes columns the
+        // INSERT shouldn't carry forward:
+        //   id          → identity / default, fresh per row
+        //   company_id  → overridden with @target
+        //   name        → overridden with @prefix + name
+        //   is_default  → forced to 0 so the (company_id) WHERE is_default=1
+        //                 filtered unique index can't conflict with the
+        //                 target's existing default; admin promotes one
+        //                 explicitly afterwards
+        //   created_at  → reset to SYSUTCDATETIME()
+        //   updated_at  → reset to SYSUTCDATETIME()
+        var columns = new List<string>();
+        await using (var colCmd = new SqlCommand(@"
+            SELECT COLUMN_NAME
+              FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = 'EMPOWER'
+               AND TABLE_NAME   = 'RPT_company_connections'
+             ORDER BY ORDINAL_POSITION;", conn, tx))
+        await using (var reader = await colCmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                columns.Add(reader.GetString(0));
+        }
+
+        // Carry-over columns: everything NOT in the override list above.
+        var overrideCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "id", "company_id", "name", "is_default", "created_at", "updated_at"
+        };
+        var carryCols = columns.Where(c => !overrideCols.Contains(c)).ToList();
+
+        // INSERT column list = overrides (in fixed order) + carry-over.
+        // Same order on both sides so the projection lines up by position.
+        var insertCols = new List<string> { "company_id", "name", "is_default", "created_at", "updated_at" };
+        insertCols.AddRange(carryCols);
+        var selectExprs = new List<string>
+        {
+            "@target",
+            "@prefix + c.name",
+            "0",
+            "SYSUTCDATETIME()",
+            "SYSUTCDATETIME()"
+        };
+        selectExprs.AddRange(carryCols.Select(c => $"c.[{c}]"));
+
+        // STRING_SPLIT on a CSV of the ids — works on every supported SQL
+        // Server version without requiring a TVP type. TRY_CAST + the
+        // company_id <> @target guard are belt-and-suspenders against
+        // stray ids; the call is fully parameterized.
+        var idsCsv = string.Join(",", sourceConnectionIds);
+
+        var sql = $@"
+            INSERT INTO EMPOWER.RPT_company_connections (
+                {string.Join(", ", insertCols.Select(c => $"[{c}]"))}
+            )
+            SELECT
+                {string.Join(", ", selectExprs)}
+              FROM EMPOWER.RPT_company_connections c
+              JOIN STRING_SPLIT(@ids, ',') s
+                ON c.id = TRY_CAST(s.value AS UNIQUEIDENTIFIER)
+             WHERE c.company_id <> @target;";
+
+        int rows;
+        await using (var cmd = new SqlCommand(sql, conn, tx))
+        {
+            cmd.Parameters.Add(new SqlParameter("@target", targetCompanyId));
+            cmd.Parameters.Add(new SqlParameter("@prefix", namePrefix));
+            cmd.Parameters.Add(new SqlParameter("@ids", idsCsv));
+            rows = await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+        _resolver.Invalidate(targetCompanyId);
+        _cache.Invalidate("CompanyConnectionAdminService:");
+        _cache.Invalidate("SchemaService:");
+        _logger.LogInformation(
+            "Connections copied: {Rows} rows ({SourceCount} requested) → {Target} (prefix='{Prefix}')",
+            rows, sourceConnectionIds.Count, targetCompanyId, namePrefix);
+        return rows;
+    }
+
     public async Task SetDefaultAsync(Guid companyId, Guid connectionId, CancellationToken ct = default)
     {
         await using var conn = new SqlConnection(_connStr);
@@ -246,6 +363,7 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
 
         await tx.CommitAsync(ct);
         _resolver.Invalidate(companyId);
+        _cache.Invalidate("CompanyConnectionAdminService:");
         _logger.LogInformation("Connection default set: company={CompanyId} connection={ConnectionId}", companyId, connectionId);
     }
 

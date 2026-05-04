@@ -35,4 +35,22 @@ public sealed class JoinDefinition
     /// the joined table.
     /// </summary>
     public string? TargetAlias { get; init; }
+
+    /// <summary>
+    /// Optional. Schema-qualified primary table this join is scoped to.
+    /// When set, the resolver only considers this join for reports whose
+    /// primary table matches (via name OR alias). When null/empty, the
+    /// join is GENERIC and eligible for any report — preserves the
+    /// pre-feature behavior for joins authored before primary scoping
+    /// existed.
+    /// </summary>
+    public string? PrimaryTable { get; init; }
+
+    /// <summary>
+    /// Optional. Alias of <see cref="PrimaryTable"/>. Used by the resolver
+    /// alongside <see cref="PrimaryTable"/> so a report whose primary is
+    /// authored as "salesforce.lead AS l" matches a join scoped to either
+    /// "salesforce.lead" or "l".
+    /// </summary>
+    public string? PrimaryAlias { get; init; }
 }

@@ -2,6 +2,7 @@ using System.Data;
 using System.Data.Common;
 using Microsoft.Data.SqlClient;
 using Npgsql;
+using TleReportingDashboard.Web.Models;
 
 namespace TleReportingDashboard.Web.Services;
 
@@ -151,6 +152,195 @@ public class SchemaBuilderService
             ));
         }
         return columns;
+    }
+
+    /// <summary>
+    /// Returns the set of column names that are uniquely keyed on a single
+    /// column (primary key or single-column UNIQUE constraint). Used to
+    /// flag eligible "Then By" tiebreaker picks in the Report Builder so
+    /// admins can see which columns make OFFSET pagination deterministic.
+    /// Composite (multi-column) unique constraints aren't included — none
+    /// of their member columns are unique on their own.
+    /// Both Postgres and SQL Server expose this via information_schema.
+    /// SQL Server's UNIQUE INDEXES (not constraints) won't appear; for
+    /// most reporting use cases the constraint coverage is sufficient.
+    /// </summary>
+    public async Task<HashSet<string>> GetUniqueColumnNamesAsync(
+        Guid? connectionId, string? schemaName, string tableName)
+    {
+        var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var (type, connStr, _, _) = await ResolveContextAsync(connectionId);
+
+        await using var conn = CreateConnection(type, connStr);
+        await conn.OpenAsync();
+
+        var hasSchema = !string.IsNullOrWhiteSpace(schemaName);
+        // CTE picks single-column constraints, then joins back to surface
+        // the column name. Schema-optional so callers that store bare
+        // table names (legacy aliases) still get a result.
+        var sql = hasSchema
+            ? @"WITH single_col AS (
+                    SELECT constraint_name, table_schema, table_name
+                    FROM information_schema.key_column_usage
+                    WHERE table_schema = @Schema AND table_name = @Table
+                    GROUP BY constraint_name, table_schema, table_name
+                    HAVING COUNT(*) = 1
+                )
+                SELECT DISTINCT kcu.column_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                    AND tc.table_name = kcu.table_name
+                JOIN single_col sc
+                    ON sc.constraint_name = tc.constraint_name
+                    AND sc.table_schema = tc.table_schema
+                    AND sc.table_name = tc.table_name
+                WHERE tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+                    AND tc.table_schema = @Schema
+                    AND tc.table_name = @Table"
+            : @"WITH single_col AS (
+                    SELECT constraint_name, table_schema, table_name
+                    FROM information_schema.key_column_usage
+                    WHERE table_name = @Table
+                    GROUP BY constraint_name, table_schema, table_name
+                    HAVING COUNT(*) = 1
+                )
+                SELECT DISTINCT kcu.column_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                    AND tc.table_name = kcu.table_name
+                JOIN single_col sc
+                    ON sc.constraint_name = tc.constraint_name
+                    AND sc.table_schema = tc.table_schema
+                    AND sc.table_name = tc.table_name
+                WHERE tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+                    AND tc.table_name = @Table";
+
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            if (hasSchema) AddParam(cmd, "@Schema", schemaName!);
+            AddParam(cmd, "@Table", tableName);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                unique.Add(reader.GetString(0));
+            }
+        }
+        catch
+        {
+            // Non-fatal — if information_schema isn't accessible (rare but
+            // possible on locked-down accounts) the marker just won't show.
+        }
+        return unique;
+    }
+
+    /// <summary>
+    /// Returns the primary-key columns of a target-DB table in PK ordinal
+    /// order. Composite PKs are returned in their declared order. Used by
+    /// the Report Builder to inject a stable ORDER BY behind the scenes
+    /// when no user sort is configured — keeps OFFSET pagination
+    /// deterministic even on Postgres without forcing the admin to pick
+    /// a tiebreaker manually.
+    /// </summary>
+    public async Task<List<string>> GetPrimaryKeyColumnsAsync(
+        Guid? connectionId, string? schemaName, string tableName)
+    {
+        var pks = new List<string>();
+        var (type, connStr, _, _) = await ResolveContextAsync(connectionId);
+
+        await using var conn = CreateConnection(type, connStr);
+        await conn.OpenAsync();
+
+        var hasSchema = !string.IsNullOrWhiteSpace(schemaName);
+        var sql = hasSchema
+            ? @"SELECT kcu.column_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                    AND tc.table_name = kcu.table_name
+                WHERE tc.constraint_type = 'PRIMARY KEY'
+                    AND tc.table_schema = @Schema
+                    AND tc.table_name = @Table
+                ORDER BY kcu.ordinal_position"
+            : @"SELECT kcu.column_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                    AND tc.table_name = kcu.table_name
+                WHERE tc.constraint_type = 'PRIMARY KEY'
+                    AND tc.table_name = @Table
+                ORDER BY kcu.ordinal_position";
+
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            if (hasSchema) AddParam(cmd, "@Schema", schemaName!);
+            AddParam(cmd, "@Table", tableName);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                pks.Add(reader.GetString(0));
+            }
+        }
+        catch
+        {
+            // Non-fatal — table may have no PK or information_schema may
+            // be locked down. Caller treats empty as "no auto-fallback".
+        }
+        return pks;
+    }
+
+    /// <summary>
+    /// Same as <see cref="GetPrimaryKeyColumnsAsync"/>, but also folds in
+    /// admin-asserted IsUnique fields whose SourceColumn lives on the same
+    /// table. Designed for the OFFSET pagination tiebreaker path: when the
+    /// connection's account can't read information_schema constraints, the
+    /// live lookup returns empty and the admin's manual flag carries the
+    /// fallback. When the lookup succeeds, IsUnique fields supplement it
+    /// (e.g. UNIQUE INDEXES that don't surface as constraints) without
+    /// duplicating columns. Composite PKs still depend on the live lookup
+    /// since the admin flag is single-column. Caller supplies the schema's
+    /// FieldConfigs so this stays free of an ISchemaService dependency
+    /// (avoids a circular service graph).
+    /// </summary>
+    public async Task<List<string>> GetEffectivePrimaryKeyColumnsAsync(
+        Guid? connectionId, string? schemaName, string tableName,
+        IEnumerable<FieldConfig> schemaFields)
+    {
+        var pks = await GetPrimaryKeyColumnsAsync(connectionId, schemaName, tableName);
+        if (schemaFields is null) return pks;
+
+        foreach (var f in schemaFields)
+        {
+            if (!f.IsUnique) continue;
+            if (!string.IsNullOrWhiteSpace(f.SqlExpression)) continue;
+            if (string.IsNullOrWhiteSpace(f.SourceColumn)) continue;
+            // Match the field's SourceTable against the (schema, table)
+            // pair we were called with. Admins write SourceTable as either
+            // "schema.table" or bare "table" — accept both, plus a suffix
+            // match so "EMPOWER.LOANS" matches a callsite that resolved
+            // schema=EMPOWER and table=LOANS.
+            var src = f.SourceTable ?? string.Empty;
+            var qualified = string.IsNullOrWhiteSpace(schemaName)
+                ? tableName
+                : $"{schemaName}.{tableName}";
+            var matches =
+                string.Equals(src, qualified, StringComparison.OrdinalIgnoreCase) ||
+                src.EndsWith("." + tableName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(src, tableName, StringComparison.OrdinalIgnoreCase);
+            if (!matches) continue;
+            if (!pks.Any(c => string.Equals(c, f.SourceColumn, StringComparison.OrdinalIgnoreCase)))
+                pks.Add(f.SourceColumn);
+        }
+        return pks;
     }
 
     public async Task<List<DbCodeSet>> GetCodeSetsAsync(Guid? connectionId)

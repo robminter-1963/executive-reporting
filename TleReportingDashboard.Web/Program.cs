@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
+using Microsoft.Identity.Web.UI;
 using MudBlazor.Services;
 using Serilog;
 using TleReportingDashboard.Web.Components;
@@ -16,13 +19,19 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
-    // Serilog
+    // Serilog. The relative path "Logs/log-.txt" resolves against the
+    // process working directory, which under IIS isn't the publish folder
+    // — so the file logs vanished after deploy. Anchor on
+    // AppContext.BaseDirectory (the publish folder) so the Logs folder
+    // lands next to the DLLs regardless of how the host launches the app.
+    var logDir = Path.Combine(AppContext.BaseDirectory, "Logs");
+    Directory.CreateDirectory(logDir);
     builder.Host.UseSerilog((context, services, configuration) => configuration
         .ReadFrom.Configuration(context.Configuration)
         .ReadFrom.Services(services)
         .Enrich.FromLogContext()
         .WriteTo.Console()
-        .WriteTo.File("Logs/log-.txt", rollingInterval: RollingInterval.Day));
+        .WriteTo.File(Path.Combine(logDir, "log-.txt"), rollingInterval: RollingInterval.Day));
 
     // Aspire service defaults (OpenTelemetry, health checks, service discovery)
     builder.AddServiceDefaults();
@@ -43,6 +52,14 @@ try
 
     // Memory cache
     builder.Services.AddMemoryCache();
+
+    // Per-circuit editor-mode flag + the ConfigDB cache wrapper. Both are
+    // scoped so a single user's editor session bypasses cache without
+    // affecting other users (cache content is shared via the singleton
+    // IMemoryCache underneath). Editor pages flip the state with
+    // `using var _ = EditorMode.Enter();` in OnInitializedAsync.
+    builder.Services.AddScoped<EditorModeState>();
+    builder.Services.AddSingleton<ConfigDbCache>();
 
     // Startup guard: Production/Staging must have Entra ID configured
     if (!builder.Environment.IsDevelopment())
@@ -76,6 +93,9 @@ try
     builder.Services.AddScoped<ICompanyConnectionAdminService, CompanyConnectionAdminService>();
     builder.Services.AddScoped<IRoleService, RoleService>();
     builder.Services.AddScoped<IUserManagementService, UserManagementService>();
+    builder.Services.AddScoped<IAdminAccessService, AdminAccessService>();
+    builder.Services.AddScoped<TleReportingDashboard.Web.Services.Promotion.IPromotionPackageService,
+                                TleReportingDashboard.Web.Services.Promotion.PromotionPackageService>();
     builder.Services.AddScoped<IQueryScopeResolver, QueryScopeResolver>();
     builder.Services.AddScoped<ITeamSourceService, TeamSourceService>();
 
@@ -162,13 +182,32 @@ try
 
     // Auth auto-detect: Entra ID or stub
     var azureAdClientId = builder.Configuration["AzureAd:ClientId"];
-    if (!string.IsNullOrEmpty(azureAdClientId))
+    var entraIdEnabled = !string.IsNullOrEmpty(azureAdClientId);
+    if (entraIdEnabled)
     {
         // Production: Entra ID SSO
         Log.Information("AzureAd configuration found — using Entra ID authentication");
         builder.Services.AddAuthentication(Microsoft.Identity.Web.Constants.AzureAd)
             .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"));
-        builder.Services.AddAuthorization();
+
+        // Microsoft.Identity.Web.UI ships the controller endpoints
+        // /MicrosoftIdentity/Account/SignIn + /SignOut + the OIDC
+        // callback. Without these registered there's no logout target
+        // and no interactive challenge surface — challenges would
+        // 404 or stall.
+        builder.Services
+            .AddControllersWithViews()
+            .AddMicrosoftIdentityUI();
+
+        // Global authentication gate: every request must be authenticated.
+        // Combined with RequireAuthorization() on MapRazorComponents below,
+        // this turns first-hit traffic on a logged-out browser into an
+        // OIDC challenge → Entra sign-in flow. Anonymous visitors never
+        // reach a Razor component.
+        builder.Services.AddAuthorization(options =>
+        {
+            options.FallbackPolicy = options.DefaultPolicy;
+        });
     }
     else
     {
@@ -178,6 +217,24 @@ try
             .AddScheme<AuthenticationSchemeOptions, StubAuthenticationHandler>("Stub", null);
         builder.Services.AddAuthorization();
     }
+
+    // Forwarded headers: when the app runs behind IIS (or any reverse
+    // proxy), the inbound request's true scheme/host arrives in
+    // X-Forwarded-* headers — Kestrel sees the proxy address. Without
+    // this, the OIDC redirect URI would be built from the internal
+    // host and Entra would reject the callback. KnownNetworks/Proxies
+    // are deliberately empty: in IIS in-process hosting the loopback
+    // forwarder is already trusted; if you front Kestrel with a
+    // separate proxy, list its IP/CIDR here.
+    builder.Services.Configure<ForwardedHeadersOptions>(opts =>
+    {
+        opts.ForwardedHeaders =
+              ForwardedHeaders.XForwardedFor
+            | ForwardedHeaders.XForwardedProto
+            | ForwardedHeaders.XForwardedHost;
+        opts.KnownIPNetworks.Clear();
+        opts.KnownProxies.Clear();
+    });
 
     builder.Services.AddCascadingAuthenticationState();
 
@@ -211,6 +268,15 @@ try
         throw;
     }
 
+    // Forwarded headers must run BEFORE UsePathBase / UseAuthentication so
+    // every downstream component sees the externally-visible scheme/host.
+    // Skipped in Development (Kestrel directly serves the browser, no
+    // proxy hops, no headers to honor).
+    if (!app.Environment.IsDevelopment())
+    {
+        app.UseForwardedHeaders();
+    }
+
     // When hosted as an IIS sub-application (e.g. localhost/ReportingDashboard),
     // UsePathBase strips the prefix so routing and static files resolve correctly.
     // Only activate when the PATH_BASE env var / config key is set — in local dev
@@ -230,8 +296,26 @@ try
     app.UseStaticFiles();
     app.MapStaticAssets();
 
-    app.MapRazorComponents<App>()
+    // Microsoft.Identity.Web.UI controllers (SignIn / SignOut / OIDC
+    // callback) are registered only when Entra is configured. In stub-
+    // auth mode there's nothing for them to call into and routing would
+    // shadow real endpoints with 404s, so we skip the mapping entirely.
+    if (entraIdEnabled)
+    {
+        app.MapControllers();
+    }
+
+    var razorEndpoints = app.MapRazorComponents<App>()
         .AddInteractiveServerRenderMode();
+    if (entraIdEnabled)
+    {
+        // FallbackPolicy already gates everything; the explicit
+        // RequireAuthorization on the components endpoint nails the
+        // belt to the suspenders so an unauthenticated request to a
+        // Blazor route triggers a challenge instead of falling through
+        // to a 401 page.
+        razorEndpoints.RequireAuthorization();
+    }
 
     // Dev-only user impersonation endpoints. Dropped in Production — the
     // stub auth scheme doesn't activate there (refuses to authenticate), so

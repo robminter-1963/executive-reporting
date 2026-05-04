@@ -1,5 +1,7 @@
 @page "/admin/schema-builder"
 @rendermode InteractiveServer
+@implements IDisposable
+@inject EditorModeState EditorMode
 @inject SchemaBuilderService DbService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
@@ -13,6 +15,7 @@
 @inject NavigationManager Navigation
 @inject IUserPreferenceService PreferenceService
 @inject AuthenticationStateProvider AuthStateProvider
+@inject IAdminAccessService AdminAccess
 
 <PageTitle>Schema Config Builder</PageTitle>
 
@@ -96,15 +99,32 @@
     }
 </style>
 
+@if (_accessDenied)
+{
+    <MudStack Spacing="3" Class="pa-4">
+        <MudAlert Severity="Severity.Error">
+            Your role doesn't grant access to Schema Builder. Contact a global admin if you need access.
+        </MudAlert>
+        <div>
+            <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                       StartIcon="@Icons.Material.Filled.ArrowBack"
+                       OnClick="@(() => Navigation.NavigateTo("/admin"))">
+                Back to Admin
+            </MudButton>
+        </div>
+    </MudStack>
+    return;
+}
+
 @* Constrain to viewport so the page scrolls instead of clipping when a
    tab's contents (Joins, Fields, etc.) overflow. Using a flex column
    here + CSS below on .mud-tabs / .mud-tab-panel so the tab strip stays
    pinned while only the active panel's body scrolls — the outer-scroll
    approach (a single overflow-y on the whole page) doesn't work with
    MudTabs because its internal container intercepts the overflow and
-   clips silently. Match the 48px MudAppBar offset used elsewhere. *@
+   clips silently. Match the 64px MudAppBar offset used elsewhere. *@
 <MudStack Spacing="3" Class="pa-4 schema-builder-page"
-          Style="height: calc(100vh - 48px); overflow: hidden;">
+          Style="height: calc(100vh - 64px); overflow: hidden;">
     <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
         <MudTooltip Text="Back to Admin">
             <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
@@ -188,7 +208,8 @@
            setting up a new connection. *@
         <MudTabPanel Text="Table Aliases" Icon="@Icons.Material.Filled.TableRows">
             <AdminTableAliasesTab ConnectionId="_selectedConnectionId"
-                                  OnEntriesChanged="LoadTableAliasesAsync" />
+                                  OnEntriesChanged="LoadTableAliasesAsync"
+                                  OnAliasRenamed="HandleAliasRenamed" />
         </MudTabPanel>
 
         @* ── Tab 2: Fields ── *@
@@ -490,6 +511,28 @@
                                         }
                                     </CellTemplate>
                                 </TemplateColumn>
+                                @* PR-5. Primary scope. Em-dash for generic
+                                   joins (eligible for any report) so the
+                                   table+alias column reads as a deliberate
+                                   "scoped to" rather than missing data. *@
+                                <TemplateColumn T="JoinEntry" title="Primary" HeaderStyle="width: 12%;" CellStyle="width: 12%;">
+                                    <CellTemplate>
+                                        @if (string.IsNullOrWhiteSpace(context.Item.PrimaryTable))
+                                        {
+                                            <MudTooltip Text="Generic — eligible for any report's primary table.">
+                                                <MudText Typo="Typo.body2" Color="Color.Secondary">—</MudText>
+                                            </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.body2">@context.Item.PrimaryTable</MudText>
+                                            @if (!string.IsNullOrWhiteSpace(context.Item.PrimaryAlias))
+                                            {
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">AS @context.Item.PrimaryAlias</MudText>
+                                            }
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
                                 <TemplateColumn T="JoinEntry" title="SQL Preview">
                                     <CellTemplate>
                                         <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px;"
@@ -626,7 +669,24 @@
                                         <MudText Typo="Typo.body2">@context.Item.Label</MudText>
                                     </CellTemplate>
                                 </TemplateColumn>
-                                <TemplateColumn T="CustomFilterEntry" title="Description" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
+                                @* GroupName surfaces in the Report Builder as the
+                                   bucket header these presets cluster under —
+                                   typically a Domain like "Loan" / "Borrower".
+                                   Em-dash for blank so admins can spot uncategorized
+                                   filters at a glance. *@
+                                <TemplateColumn T="CustomFilterEntry" title="Domain" HeaderStyle="width: 10%;" CellStyle="width: 10%;">
+                                    <CellTemplate>
+                                        @if (string.IsNullOrWhiteSpace(context.Item.GroupName))
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.body2">@context.Item.GroupName</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title="Description" HeaderStyle="width: 18%;" CellStyle="width: 18%;">
                                     <CellTemplate>
                                         <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.Description</MudText>
                                     </CellTemplate>
@@ -881,13 +941,38 @@
     private Severity _savedSeverity;
 
     private string _userId = "anonymous";
+    // Set when the user's role doesn't grant the schema_builder admin
+    // section. Page returns early on render with an "access denied" alert.
+    private bool _accessDenied;
+
+    // Held for the lifetime of the page so ConfigDbCache bypasses for this
+    // circuit while the admin is editing schema. Disposed in IDisposable
+    // below so the cache resumes serving cached reads after navigation.
+    private IDisposable? _editorScope;
 
     protected override async Task OnInitializedAsync()
     {
+        _editorScope = EditorMode.Enter();
+
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         _userId = authState.User.FindFirst("oid")?.Value
                   ?? authState.User.Identity?.Name
                   ?? "anonymous";
+
+        // Gate the page on the schema_builder admin section. Global admins
+        // pass through (AdminAccessService short-circuits); otherwise the
+        // user's role must include the schema_builder key in its
+        // admin_sections list. Non-admin users without the key bounce to
+        // /admin (which itself denies if they have no admin access at all).
+        var email = authState.User.FindFirst("preferred_username")?.Value
+                    ?? authState.User.FindFirst("email")?.Value
+                    ?? authState.User.Identity?.Name
+                    ?? string.Empty;
+        if (!await AdminAccess.CanAccessAsync(AdminSections.SchemaBuilder, email))
+        {
+            _accessDenied = true;
+            return;
+        }
 
         _companies = await CompanyRegistry.GetActiveAsync();
 
@@ -1169,6 +1254,36 @@
         }
     }
 
+    // Fired by AdminTableAliasesTab after a true alias rename (old + new
+    // both non-empty, case-different). Rewrites every in-memory field whose
+    // SourceTable matches the old alias to the new one. Operates on the
+    // editor's _fields list — the change isn't persisted until the admin
+    // hits Save, matching how every other Schema Builder edit works.
+    // Snackbar reports the count so the admin sees the side effect they
+    // just triggered.
+    private void HandleAliasRenamed((string OldAlias, string NewAlias) rename)
+    {
+        var (oldAlias, newAlias) = rename;
+        if (string.IsNullOrWhiteSpace(oldAlias) || string.IsNullOrWhiteSpace(newAlias)) return;
+
+        var count = 0;
+        foreach (var f in _fields)
+        {
+            if (string.Equals(f.SourceTable, oldAlias, StringComparison.OrdinalIgnoreCase))
+            {
+                f.SourceTable = newAlias;
+                count++;
+            }
+        }
+
+        if (count > 0)
+        {
+            Snackbar.Add(
+                $"Renamed alias \"{oldAlias}\" → \"{newAlias}\" on {count} field{(count == 1 ? "" : "s")}. Save the schema to persist.",
+                Severity.Info);
+        }
+    }
+
     private void LoadCurrentConfig()
     {
         try
@@ -1260,7 +1375,8 @@
                         ? new Dictionary<string, int>(field.ValueSortOrder)
                         : null,
                     Format = field.Format,
-                    ApplyTimezoneConversion = field.ApplyTimezoneConversion
+                    ApplyTimezoneConversion = field.ApplyTimezoneConversion,
+                    IsUnique = field.IsUnique
                 });
             }
 
@@ -1308,6 +1424,8 @@
         // fields. Explicit values always win when set.
         entry.SourceTable = join.SourceTable ?? string.Empty;
         entry.SourceAlias = join.SourceAlias ?? string.Empty;
+        entry.PrimaryTable = join.PrimaryTable ?? string.Empty;
+        entry.PrimaryAlias = join.PrimaryAlias ?? string.Empty;
 
         // Detect nested/complex joins (multiple JOINs in one definition) — use raw SQL mode
         var joinCount = System.Text.RegularExpressions.Regex.Matches(sql, @"\bJOIN\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
@@ -1645,6 +1763,7 @@
             field.RolesRequired = edited.RolesRequired;
             field.Format = edited.Format;
             field.ApplyTimezoneConversion = edited.ApplyTimezoneConversion;
+            field.IsUnique = edited.IsUnique;
             // ValueSortOrder is managed via the separate Sort dialog — preserve the original
         }
 
@@ -1852,7 +1971,10 @@
             // target ("lead → account") on another, so filtering primaries
             // out of Target was hiding legitimate options from admins.
             { "AvailableAliases", _tableAliases },
-            { "AvailableSourceAliases", _tableAliases }
+            { "AvailableSourceAliases", _tableAliases },
+            // PR-3. Primary-scope picker pulls from primary-flagged Table
+            // Aliases only — they're the ones that can be a report root.
+            { "AvailablePrimaryAliases", _tableAliases.Where(t => t.IsPrimary).ToList() }
         };
         var dialog = await DialogService.ShowAsync<JoinEditDialog>(
             isNew ? "Add Join" : "Edit Join", parameters,
@@ -1880,16 +2002,13 @@
             join.RawSql = edited.RawSql;
             join.SourceTable = edited.SourceTable;
             join.SourceAlias = edited.SourceAlias;
+            join.PrimaryTable = edited.PrimaryTable;
+            join.PrimaryAlias = edited.PrimaryAlias;
 
-            // If the alias/target reference changed, update any fields that pointed at the old reference
-            if (!string.IsNullOrWhiteSpace(res.OriginalRef) &&
-                !string.Equals(res.OriginalRef, res.NewRef, StringComparison.OrdinalIgnoreCase))
-            {
-                foreach (var f in _fields.Where(f => f.SourceTable.Equals(res.OriginalRef, StringComparison.OrdinalIgnoreCase)))
-                {
-                    f.SourceTable = res.NewRef;
-                }
-            }
+            // Field-rewrite on join edit removed — alias renames now flow
+            // exclusively from the Table Aliases editor so cross-join
+            // collisions (two joins sharing an alias scoped to different
+            // primaries) can't accidentally rewrite each other's fields.
         }
 
         SortJoins();
@@ -1956,7 +2075,12 @@
                 SourceTable = string.IsNullOrWhiteSpace(j.SourceTable) ? null : j.SourceTable,
                 SourceAlias = string.IsNullOrWhiteSpace(j.SourceAlias) ? null : j.SourceAlias,
                 TargetTable = string.IsNullOrWhiteSpace(j.TargetTable) ? null : j.TargetTable,
-                TargetAlias = string.IsNullOrWhiteSpace(j.Alias) ? null : j.Alias
+                TargetAlias = string.IsNullOrWhiteSpace(j.Alias) ? null : j.Alias,
+                // PR-4. Primary scope. Nulled when blank so generic joins
+                // stay tidy in the JSON; QueryBuilder treats null/empty as
+                // "any primary" (legacy behavior).
+                PrimaryTable = string.IsNullOrWhiteSpace(j.PrimaryTable) ? null : j.PrimaryTable,
+                PrimaryAlias = string.IsNullOrWhiteSpace(j.PrimaryAlias) ? null : j.PrimaryAlias
             }),
             Fields = _fields.Select(f => BuildFieldOutput(f)),
             Lookups = _lookups.Select(lu =>
@@ -2140,6 +2264,9 @@
         if (f.ApplyTimezoneConversion)
             result["ApplyTimezoneConversion"] = true;
 
+        if (f.IsUnique)
+            result["IsUnique"] = true;
+
         return result;
     }
 
@@ -2154,8 +2281,10 @@
     private async Task CopyToClipboard()
     {
         if (string.IsNullOrEmpty(_jsonPreview)) return;
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", _jsonPreview);
-        Snackbar.Add("Copied to clipboard", Severity.Success);
+        var ok = await JS.InvokeAsync<bool>("copyToClipboard", _jsonPreview);
+        Snackbar.Add(
+            ok ? "Copied to clipboard" : "Couldn't copy — your browser blocked clipboard access.",
+            ok ? Severity.Success : Severity.Warning);
     }
 
     private async Task Save()
@@ -2276,6 +2405,12 @@
         // `AT TIME ZONE '<tz>'`. Persisted to schema_config.json alongside
         // the rest of the field shape.
         public bool ApplyTimezoneConversion { get; set; }
+        // Admin-asserted single-column uniqueness — bypasses the
+        // information_schema constraint check, which can fail on locked-
+        // down accounts. Drives the Sort By "(-)" marker and the OFFSET
+        // pagination fallback when the live constraint lookup returns
+        // nothing.
+        public bool IsUnique { get; set; }
     }
 
     public class JoinEntry
@@ -2293,6 +2428,13 @@
         // the same table whenever the report's primary table matches.
         public string SourceTable { get; set; } = string.Empty;
         public string SourceAlias { get; set; } = string.Empty;
+        // Optional. Restricts this join to reports whose primary table
+        // matches. Empty = generic (eligible for any primary), preserving
+        // legacy behavior. When set, QueryBuilder filters out this join
+        // for non-matching reports (PR-2) so a "lead → account" composite
+        // doesn't collide with a generic "anything → account".
+        public string PrimaryTable { get; set; } = string.Empty;
+        public string PrimaryAlias { get; set; } = string.Empty;
 
         public string BuildSql()
         {
@@ -2441,5 +2583,11 @@
         // Group label used by the Report Builder to bucket presets in the UI.
         // Typically matches a Domain. Blank = "Misc".
         public string GroupName { get; set; } = string.Empty;
+    }
+
+    public void Dispose()
+    {
+        _editorScope?.Dispose();
+        _editorScope = null;
     }
 }

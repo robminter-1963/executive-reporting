@@ -8,10 +8,28 @@
 @inject TleReportingDashboard.Web.Services.IUserManagementService UserManagement
 @inject TleReportingDashboard.Web.Services.ICompanyRegistry CompanyRegistry
 @inject TleReportingDashboard.Web.Services.IAdminService AdminService
+@inject TleReportingDashboard.Web.Services.IAdminAccessService AdminAccess
 @inject IWebHostEnvironment HostEnv
 @inject IConfiguration Configuration
 @inject ILogger<MainLayout> Logger
 @implements IDisposable
+
+@* MudButton's `.mud-button-label` ships with `overflow: hidden; text-overflow:
+   ellipsis; max-width: 100%` so its content never escapes the button's bounds.
+   That's the right default for a dense action bar but it clips long emails on
+   the user-menu activator after a company switch. Override the clipper rules
+   for this one button so the per-company email always renders in full,
+   regardless of which email was rendered before. *@
+<style>
+    .user-badge-button .mud-button-label {
+        overflow: visible !important;
+        text-overflow: clip !important;
+        max-width: none !important;
+        white-space: nowrap !important;
+        display: inline-flex !important;
+        width: max-content !important;
+    }
+</style>
 
 <MudThemeProvider Theme="_theme" IsDarkMode="@PreferenceState.Current.IsDarkMode" />
 <MudPopoverProvider />
@@ -19,7 +37,12 @@
 <MudSnackbarProvider />
 
 <MudLayout>
-    <MudAppBar Elevation="1" Dense Fixed Style="z-index: 1300; background-color: #3C4043; color: #E8EAED;">
+    @* Removed `Dense` so the bar uses the standard ~64px toolbar height.
+       The user badge stacks three lines (name / email / role) and the
+       Dense (48px) variant clipped them against the bar's borders. With
+       full height the breadcrumb row still fits — Dense was a holdover
+       from when the badge was a single line. *@
+    <MudAppBar Elevation="1" Fixed Style="z-index: 1300; background-color: #3C4043; color: #E8EAED;">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Style="width: 100%;">
             @* Kiosk mode (detail view opened from a Master Dashboard tile): render
                the logo as a static element and hide the Help button so the only
@@ -33,13 +56,40 @@
             }
             else
             {
-                @* Ralis logo always goes to the picker (?all=1 suppresses the
-                   auto-redirect to last-visited), so users can explicitly
-                   switch companies regardless of where they are in the app. *@
-                <div style="cursor: pointer; display: flex; align-items: center; gap: 8px;" @onclick="@(() => Navigation.NavigateTo("/?all=1"))">
-                    <img src="ralis.webp" alt="Ralis" style="height: 32px;" />
-                    <span style="font-weight: 600; font-size: 1rem; color: #E8EAED;">Executive Reporting Suite</span>
-                </div>
+                @* Ralis logo navigates to the picker for users with access
+                   to more than one company. Single-company users have
+                   nowhere else to pick, so the logo is a static decoration
+                   for them — clicking does nothing rather than redirecting
+                   to the same dashboard they're already on. Admins and
+                   admin-section roles always see every company so they
+                   land in the multi-company branch. *@
+                @if (_accessibleCompanyCount > 1)
+                {
+                    <div style="cursor: pointer; display: flex; align-items: center; gap: 8px;" @onclick="@(() => Navigation.NavigateTo("/?all=1"))">
+                        <img src="ralis.webp" alt="Ralis" style="height: 32px;" />
+                        <span style="font-weight: 600; font-size: 1rem; color: #E8EAED;">Executive Reporting Suite</span>
+                    </div>
+                }
+                else
+                {
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <img src="ralis.webp" alt="Ralis" style="height: 32px;" />
+                        <span style="font-weight: 600; font-size: 1rem; color: #E8EAED;">Executive Reporting Suite</span>
+                    </div>
+                }
+            }
+            @* Environment badge — visible when Environment:Label is
+               configured (Staging / Production / custom). Read once on
+               render from IConfiguration; the host process's environment
+               is fixed at startup, so no need to refresh. The color comes
+               from Environment:BannerColor; falls back to a neutral gray
+               so a misconfigured env doesn't render as transparent. *@
+            @if (!string.IsNullOrEmpty(_envLabel))
+            {
+                <span title="Current environment"
+                      style="@($"display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 3px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.5px; background: {_envBannerColor}; color: #1A1A1A;")">
+                    @_envLabel
+                </span>
             }
             @foreach (var crumb in _crumbs)
             {
@@ -71,17 +121,41 @@
                 <MudMenu @ref="_userMenu" AnchorOrigin="Origin.BottomRight"
                          TransformOrigin="Origin.TopRight" Dense>
                     <ActivatorContent>
-                        <MudButton Variant="Variant.Text" DisableElevation
-                                   Style="text-transform: none; color: #E8EAED; padding: 2px 8px; min-width: 0;"
+                        @{
+                            // Compute the email up-front so we can key the
+                            // button on it. Switching companies changes the
+                            // displayed email; re-keying forces Blazor to
+                            // recreate the MudButton's DOM, which kicks the
+                            // browser into a fresh layout pass — without
+                            // that, the button caches its previous (shorter)
+                            // content width and clips the longer string.
+                            var displayedEmail = !string.IsNullOrWhiteSpace(CurrentCompany.ActiveEmail)
+                                ? CurrentCompany.ActiveEmail
+                                : _userEmail;
+                        }
+                        <MudButton @key="@($"user-badge-{displayedEmail}")"
+                                   Variant="Variant.Text" DisableElevation
+                                   Class="user-badge-button"
+                                   Style="text-transform: none; color: #E8EAED; padding: 6px 8px; min-width: 0; max-width: none; width: max-content; flex-shrink: 0;"
                                    EndIcon="@Icons.Material.Filled.ArrowDropDown"
                                    OnClick="ToggleUserMenu">
-                            <MudStack Spacing="0" Style="text-align: right; line-height: 1.1;">
+                            <MudStack Spacing="0" Style="text-align: right; line-height: 1.25; min-width: max-content; width: max-content; padding: 2px 0;">
                                 <MudText Typo="Typo.body2" Style="font-weight: 500; color: #E8EAED;">
                                     @_userName
                                 </MudText>
-                                @if (!string.IsNullOrEmpty(_userEmail))
+                                @if (!string.IsNullOrEmpty(displayedEmail))
                                 {
-                                    <MudText Typo="Typo.caption" Style="color: #BDC1C6;">@_userEmail</MudText>
+                                    @* Prefer the per-company email override
+                                       (set on the active company's
+                                       RPT_user_companies row) so the badge
+                                       reflects how the user appears INSIDE
+                                       that tenant. Falls back to the auth /
+                                       login email when no override is set
+                                       or no company is currently active. *@
+                                    <MudText Typo="Typo.caption"
+                                             Style="color: #BDC1C6; white-space: nowrap; overflow: visible; text-overflow: clip; max-width: none; width: max-content; align-self: end;">
+                                        @displayedEmail
+                                    </MudText>
                                 }
                                 @* TEMP: role + per-company access. Amber tint
                                    marks this as transient debug surface — see
@@ -102,11 +176,15 @@
                                      OnClick="@(() => Navigation.NavigateTo("/preferences"))">
                             User Preferences
                         </MudMenuItem>
-                        @if (_isAdmin)
+                        @if (_hasAdminAccess)
                         {
                             @* Admin entry moved off the Report Library's top
                                bar (where it was oddly scoped to that page)
-                               into the user menu — reachable from every page. *@
+                               into the user menu — reachable from every page.
+                               Visible whenever the user has access to ANY
+                               admin section (global admins always do; the
+                               System Support role gets it via
+                               RPT_roles.admin_sections). *@
                             <MudMenuItem Icon="@Icons.Material.Filled.AdminPanelSettings"
                                          OnClick="@(() => Navigation.NavigateTo("/admin"))">
                                 Admin
@@ -153,6 +231,21 @@
                                 Reset to default
                             </MudMenuItem>
                         }
+                        @* Sign out — visible whenever Entra ID is wired
+                           (i.e., not in stub-auth dev mode). forceLoad:true
+                           because /MicrosoftIdentity/Account/SignOut is an
+                           MVC controller endpoint outside the Blazor router,
+                           not a Blazor route. The endpoint clears the auth
+                           cookie and redirects through Entra's logout flow,
+                           landing back on /signout-callback-oidc. *@
+                        @if (!_isDevMode)
+                        {
+                            <MudDivider />
+                            <MudMenuItem Icon="@Icons.Material.Filled.Logout"
+                                         OnClick="@(() => Navigation.NavigateTo("/MicrosoftIdentity/Account/SignOut", forceLoad: true))">
+                                Sign out
+                            </MudMenuItem>
+                        }
                     </ChildContent>
                 </MudMenu>
             }
@@ -166,8 +259,38 @@
         </MudStack>
     </MudAppBar>
 
-    <MudMainContent Style="padding-top: 48px;">
-        @Body
+    @* App bar offset = 64px (MudBlazor's canonical non-Dense AppBar
+       height). All page-internal `calc(100vh - 64px)` expressions use
+       the same value so available heights line up exactly with the
+       content area below the bar. The earlier 53px was a half-fix; it
+       worked everywhere except pages that stacked their own AppBar
+       (ReportLibrary), which is now fixed by replacing those with plain
+       toolbars instead of trying to compensate at the layout level. *@
+    <MudMainContent Style="padding-top: 64px;">
+        @if (_envAccessDenied)
+        {
+            @* Environment-level access gate. Staging (and any other env
+               that sets Environment:AllowedRoles) restricts use to a
+               named subset of roles. Global admins always pass. The
+               gate is layout-level rather than per-page so a user can't
+               sidestep it by navigating directly to a route — every
+               page renders through MainLayout. *@
+            <div style="max-width: 640px; margin: 64px auto; padding: 24px;">
+                <MudAlert Severity="Severity.Error" Variant="Variant.Outlined">
+                    <MudText Typo="Typo.h6" Style="font-weight: 600; margin-bottom: 8px;">
+                        Not authorized for this environment
+                    </MudText>
+                    <MudText Typo="Typo.body2">
+                        Your role doesn't have access to the <strong>@_envLabel</strong> environment.
+                        Contact a global administrator if you need access here.
+                    </MudText>
+                </MudAlert>
+            </div>
+        }
+        else
+        {
+            @Body
+        }
     </MudMainContent>
 </MudLayout>
 
@@ -183,6 +306,11 @@
     // is only useful when there's actually another company to switch to.
     private int _accessibleCompanyCount;
     private bool _isAdmin;
+    // True when the user has access to ANY admin section (global admin or
+    // a role with a non-empty RPT_roles.admin_sections list). Drives the
+    // Admin entry in the user menu — limited-access users like System
+    // Support need it visible without being elevated to global admin.
+    private bool _hasAdminAccess;
     // TEMP: surface the user's job-function role + per-company access type
     // under their name in the app bar so admins can sanity-check what role
     // they're running as while the role/scope features bake. Refreshed when
@@ -195,6 +323,23 @@
     // stays empty and the menu section doesn't render.
     private bool _isDevMode;
     private List<UserRecord> _simUsers = new();
+
+    // Environment badge — driven by Environment:Label / Environment:BannerColor
+    // in appsettings.{env}.json. The label is rendered inline next to the
+    // logo so admins can tell at a glance whether they're on Staging or
+    // Production (and any custom envs in the future). Production's
+    // appsettings.Production.json leaves BannerColor empty by default
+    // → falls back to a neutral gray so the badge still renders without
+    // shouting at users on the canonical environment.
+    private string? _envLabel;
+    private string _envBannerColor = "#BDC1C6";
+    // Set true when the active environment configures Environment:AllowedRoles
+    // and the signed-in user's role is not in the list (and they're not a
+    // global admin). Renders the lockout pane in place of @Body. Resolved
+    // once during OnInitializedAsync so navigation-time changes don't
+    // ricochet between allowed/denied; admins changing the user's role
+    // mid-session need them to refresh the browser to take effect.
+    private bool _envAccessDenied;
 
     // Ghost user — not in RPT_users. Used by the dev switcher to exercise
     // the no-access code path (picker empty state, dashboard redirect, etc).
@@ -231,6 +376,20 @@
         Navigation.LocationChanged += OnLocationChanged;
         UpdateCurrentPage();
 
+        // Resolve env label once — appsettings.{env}.json is loaded at host
+        // startup and won't change during the process lifetime. Fall back to
+        // HostEnv.EnvironmentName when Environment:Label isn't configured so
+        // the badge always shows something useful for non-prod envs.
+        var configuredLabel = Configuration["Environment:Label"];
+        var configuredColor = Configuration["Environment:BannerColor"];
+        if (string.IsNullOrWhiteSpace(configuredLabel) && !HostEnv.IsProduction())
+        {
+            configuredLabel = HostEnv.EnvironmentName?.ToUpperInvariant();
+        }
+        _envLabel = configuredLabel;
+        if (!string.IsNullOrWhiteSpace(configuredColor))
+            _envBannerColor = configuredColor!;
+
         // Pull the signed-in user from the current auth state so the app bar
         // can show "Name / email" on every page without each page having to
         // resolve it. Safe under stub auth too — the claims are populated
@@ -242,6 +401,36 @@
             _userEmail = user.FindFirst("preferred_username")?.Value ?? string.Empty;
             _userName = user.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
                         ?? (string.IsNullOrEmpty(_userEmail) ? "User" : _userEmail);
+
+            // Multi-AD identity stitching: when the user signs in with one
+            // company's AD address (e.g. paul.bae@cashcall.com) and that
+            // address is registered as a per-company contact email on
+            // someone's RPT_user_companies row, route them to the canonical
+            // RPT_users row so their full set of company grants applies.
+            // No-op for single-AD users — the resolver returns the same
+            // string back. Caller-side, _userEmail becomes the canonical
+            // form everywhere downstream; the login address is preserved
+            // separately in case any UI wants to show "signed in as X."
+            if (!string.IsNullOrEmpty(_userEmail))
+            {
+                try
+                {
+                    var canonical = await UserManagement.ResolveCanonicalUserEmailAsync(_userEmail);
+                    if (!string.IsNullOrEmpty(canonical) &&
+                        !string.Equals(canonical, _userEmail, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Logger.LogInformation(
+                            "Identity stitched: login {LoginEmail} → canonical {CanonicalEmail}",
+                            _userEmail, canonical);
+                        _userEmail = canonical;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "ResolveCanonicalUserEmailAsync failed for {Email} — falling back to login email",
+                        _userEmail);
+                }
+            }
 
             // First-sign-in binding: upsert RPT_users with the Entra OID and
             // rebind any email-keyed pre-provisioned access rows. Idempotent,
@@ -269,6 +458,30 @@
             try
             {
                 _isAdmin = AdminService.IsAdmin(_userEmail);
+                // Section-scoped admin access (e.g. System Support role).
+                // True for global admins too — they always see Admin.
+                _hasAdminAccess = await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
+
+                // Environment-level role gate. Staging restricts the app to
+                // a configured subset of roles (Admin + QA by default); other
+                // envs leave Environment:AllowedRoles empty and skip this
+                // check entirely. Global admins always pass — Staging needs
+                // a way for the admin to recover from a bad config without
+                // SSH'ing into the box.
+                var allowedRolesCsv = Configuration["Environment:AllowedRoles"];
+                if (!_isAdmin && !string.IsNullOrWhiteSpace(allowedRolesCsv))
+                {
+                    var allowed = allowedRolesCsv
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Where(s => s.Length > 0)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var userRow = await UserManagement.GetByEmailAsync(_userEmail);
+                    var roleName = userRow?.RoleName;
+                    if (string.IsNullOrEmpty(roleName) || !allowed.Contains(roleName))
+                    {
+                        _envAccessDenied = true;
+                    }
+                }
                 if (_isAdmin)
                 {
                     _accessibleCompanyCount = (await CompanyRegistry.GetActiveAsync()).Count;

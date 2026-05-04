@@ -8,8 +8,11 @@
 @inject IUserPreferenceService PreferenceService
 @inject IUserManagementService UserManagement
 @inject IQueryScopeResolver ScopeResolver
+@inject SchemaBuilderService SchemaBrowser
+@inject ISchemaService SchemaService
 @inject ICompanyRegistry CompanyRegistry
 @inject IAdminService AdminService
+@inject IAdminAccessService AdminAccess
 @inject CurrentCompanyState CurrentCompany
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
@@ -34,18 +37,22 @@
     return;
 }
 
-<MudMainContent Style="padding: 16px 16px 32px 16px; overflow-x: hidden; overflow-y: auto; height: calc(100vh - 48px);">
+<MudMainContent Style="padding: 16px 16px 32px 16px; overflow-x: hidden; overflow-y: auto; height: calc(100vh - 64px);">
     <MudStack Spacing="3">
         @* ── Header ── *@
         <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                @* Back arrow goes to the company picker — everyone can return
-                   to the picker since they got here by choosing a company.
+                @* Back arrow goes to the company picker. Hidden for
+                   single-company users — the picker auto-redirects them
+                   right back here, so the arrow would do nothing useful.
                    ?all=1 bypasses the picker's auto-redirect to the user's
                    last-visited company so they actually see the list. *@
-                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
-                               OnClick="@(() => Navigation.NavigateTo("/?all=1"))"
-                               title="All companies" />
+                @if (_accessibleCompanyCount > 1)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                                   OnClick="@(() => Navigation.NavigateTo("/?all=1"))"
+                                   title="All companies" />
+                }
                 @if (_logoDataUri is not null)
                 {
                     @* Gray letterbox background so light-on-transparent
@@ -241,8 +248,14 @@
                                 </MudPaper>
                             }
 
-                            @* ── Tile grid ── *@
-                            @if (_tiles.Any())
+                            @* ── Tile grid (and section strip when applicable) ──
+                               Gate is `_tiles.Any() || _sections.Count > 0` so the section
+                               strip renders even on a tab with zero tiles loaded — otherwise
+                               re-adding sections to an empty tab would write to the DB but
+                               render nothing, since the strip used to live entirely inside
+                               the tiles-present branch. The truly-empty pad below stays
+                               gated on both being empty. *@
+                            @if (_tiles.Any() || _sections.Count > 0)
                             {
                                 @* ── Section tab strip ──
                                    Renders only when this tab has at least one section. Each tab is
@@ -277,7 +290,7 @@
                                             var tabBaseStyle = isActiveSec
                                                 ? "background: #FFFFFF; border: 1px solid #DADCE0; border-bottom-color: #FFFFFF; position: relative; top: 1px;"
                                                 : "background: #F1F3F4; border: 1px solid transparent;";
-                                            var tabStyle = $"display: flex; align-items: center; gap: 4px; padding: 6px 12px; cursor: pointer; border-radius: 4px 4px 0 0; {tabBaseStyle} "
+                                            var tabStyle = $"display: flex; align-items: center; gap: 4px; padding: 3px 12px; cursor: pointer; border-radius: 4px 4px 0 0; {tabBaseStyle} "
                                                          + (isSecDropTarget ? $"outline: 2px dashed {dropOutline}; background: {dropBg};" : string.Empty);
 
                                             <div style="@tabStyle"
@@ -349,34 +362,30 @@
                                     }
                                 }
 
-                                @* Active section's tile indices. When _sections is empty, the active
-                                   selection is irrelevant and every tile renders (matches the pre-
-                                   sections layout exactly). When sections exist, only the active
-                                   one's tiles render — that's the tab-like behavior the admin asked
-                                   for. *@
-                                List<int> activeIndices;
-                                if (_sections.Count == 0)
+                                @* All tiles in the tab render, with non-active-section tiles hidden
+                                   via display:none. This keeps DashboardView components mounted
+                                   across section switches — without this, switching sections
+                                   unmounts the active section's tiles + remounts the new section's
+                                   tiles, and remounting a DashboardView re-renders the entire grid
+                                   (7-10s on a 30k-row tile). The previous filter-on-activeIndices
+                                   approach was correct for "tab-like" semantics but leaked the
+                                   first-render cost on every section switch.
+                                   The "(no section)" pseudo-section uses sectionId == null.
+                                   When _sections is empty, every tile is visible (matches pre-
+                                   sections layout exactly). *@
+                                bool TileVisible(MasterDashboardTile t)
                                 {
-                                    activeIndices = Enumerable.Range(0, _tiles.Count).ToList();
-                                }
-                                else if (_activeSectionId == 0)
-                                {
-                                    activeIndices = new List<int>();
-                                    for (var i = 0; i < _tiles.Count; i++)
-                                        if (_tiles[i].SectionId is null) activeIndices.Add(i);
-                                }
-                                else
-                                {
-                                    activeIndices = new List<int>();
-                                    for (var i = 0; i < _tiles.Count; i++)
-                                        if (_tiles[i].SectionId == _activeSectionId) activeIndices.Add(i);
+                                    if (_sections.Count == 0) return true;
+                                    if (_activeSectionId == 0) return t.SectionId is null;
+                                    return t.SectionId == _activeSectionId;
                                 }
 
                                 <div class="mt-2" style="display: flex; flex-wrap: wrap; gap: 16px; padding-bottom: 12px;">
-                                    @foreach (var ti in activeIndices)
+                                    @for (var ti = 0; ti < _tiles.Count; ti++)
                                     {
                                         var idx = ti;
                                         var tl = _tiles[ti];
+                                        var visible = TileVisible(tl);
                                         var isDragging = _editMode && _dragSource == idx;
                                         var isDropTarget = _editMode && _dropTarget == idx && _dragSource >= 0 && _dragSource != idx;
                                         var tileClass = "master-tile"
@@ -392,7 +401,7 @@
                                            width, which then propagated down to the table. *@
                                         <div @key="tl.Id" id="@($"master-tile-{tl.Id}")"
                                              class="@tileClass"
-                                             style="width: @(tl.ColSpan * 60)px; height: @(tl.Height)px; position: relative; min-width: 0; flex-shrink: 1;"
+                                             style="@(visible ? string.Empty : "display: none; ")width: @(tl.ColSpan * 60)px; height: @(tl.Height)px; position: relative; min-width: 0; flex-shrink: 1;"
                                              @ondragover:preventDefault
                                              @ondragover="@(() => { if (_editMode && _dragSource >= 0 && idx != _dragSource) { _dropTarget = idx; } })"
                                              @ondrop="@(async () => await OnTileDrop(idx))"
@@ -494,6 +503,7 @@
                                                     {
                                                         <DashboardView Data="td.Data" InitialConfig="td.Config"
                                                                        InitialHiddenColumns="td.HiddenColumns"
+                                                                       TableCalcColumns="td.TableCalcColumns"
                                                                        ReadOnly="true" DetailFromDashboard="true" ReportId="tl.ReportId"
                                                                        GridHeight="@($"{Math.Max(150, tl.Height - 120)}px")"
                                                                        Compact="true"
@@ -578,6 +588,21 @@
     }
     .mud-tabs .mud-tab {
         text-transform: none !important;
+        /* Tighten the tab strip — MudBlazor's default min-height is 48px,
+           which feels tall on a dashboard where every pixel above the
+           tiles is overhead. 36px keeps text + the active-tab underline
+           comfortably visible without crowding the content below. */
+        min-height: 36px !important;
+        padding: 4px 12px !important;
+    }
+    .mud-tabs .mud-tabs-toolbar {
+        min-height: 36px !important;
+    }
+    /* Don't constrain the inner bar — let it follow its content (the
+       individual .mud-tab buttons sized above) instead of carrying its
+       own default 48px floor that'd add unwanted vertical space. */
+    .mud-tabs .mud-tabs-tabbar-inner {
+        min-height: 0 !important;
     }
     /* Responsive: tiles can't exceed viewport width and shrink freely down
        to whatever their content's natural min-width is. The inline width
@@ -617,8 +642,7 @@
     .master-tile thead th,
     .master-tile .mud-table-head th,
     .master-tile .mud-table-cell-header {
-        background: dodgerblue !important;
-        color: #FFFFFF !important;
+        font-weight: bold !important;
         white-space: nowrap !important;
     }
     .master-tile thead th .mud-button-root,
@@ -696,6 +720,10 @@
     // Drives per-role UI gating — e.g. hiding the Report Library shortcut
     // from Viewers, who aren't meant to leave the dashboard.
     private string _userRoleForCompany = string.Empty;
+    // Drives the back-arrow visibility: single-company users have no picker
+    // to return to (CompanyPicker auto-redirects them straight here), so
+    // showing the arrow would just dead-end them on a redirect loop.
+    private int _accessibleCompanyCount;
     private bool _loading = true;
     private bool _initialized;
     private bool _editMode;
@@ -816,30 +844,65 @@
         }
 
         var isAdmin = AdminService.IsAdmin(_userEmail);
+        // Roles with any admin-section access (Administrator, System
+        // Support, etc.) bypass the per-company grant check too — they
+        // need to navigate into any company to do administrative work.
+        // Same model as the picker; keeps the two surfaces consistent.
+        var hasAdminAccess = isAdmin
+            || await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
         if (isAdmin)
         {
             // Sentinel role — admins bypass per-company grants entirely.
             // Used by UI gating to show every affordance regardless of role.
             _userRoleForCompany = UserRoles.Admin;
         }
-        else if (!string.IsNullOrEmpty(_userEmail))
+        else if (hasAdminAccess)
+        {
+            // Section-scoped admin (System Support et al.). The user's
+            // own role drives feature gating elsewhere; we don't elevate
+            // them to UserRoles.Admin here. UI affordances that need
+            // admin behavior should check AdminAccessService.CanAccess
+            // for the specific section they care about.
+            _userRoleForCompany = UserRoles.Editor;
+        }
+        // Per-company email override (RPT_user_companies.email). Falls back
+        // to the auth/login email when the admin hasn't set an override.
+        // Resolved in the same access-fetch the role check just did so we
+        // don't burn a second round-trip; admins / admin-section users
+        // skip the lookup if no grant exists and render under their login
+        // email.
+        string? activeEmail = _userEmail;
+        if (!string.IsNullOrEmpty(_userEmail))
         {
             var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
             var grant = access.FirstOrDefault(a => a.CompanyId == company.Id);
-            if (grant is null)
+            if (!hasAdminAccess)
             {
-                // Route exists but the user has no grant — treat it the same
-                // as an unknown code: back to the picker. The picker's empty
-                // state handles the "no access anywhere" case.
-                Navigation.NavigateTo("/?all=1", replace: true);
-                return;
+                if (grant is null)
+                {
+                    // Route exists but the user has no grant — treat it the same
+                    // as an unknown code: back to the picker. The picker's empty
+                    // state handles the "no access anywhere" case.
+                    Navigation.NavigateTo("/?all=1", replace: true);
+                    return;
+                }
+                _userRoleForCompany = grant.Role;
+                _accessibleCompanyCount = access.Count;
             }
-            _userRoleForCompany = grant.Role;
+            if (grant is not null && !string.IsNullOrWhiteSpace(grant.CompanyEmail))
+                activeEmail = grant.CompanyEmail;
+        }
+        if (hasAdminAccess)
+        {
+            // Admins / admin-section users see every active company in the
+            // picker; mirror that here so the back arrow stays available
+            // unless there's literally only one company in the system.
+            _accessibleCompanyCount = (await CompanyRegistry.GetActiveAsync()).Count;
         }
 
         _companyId = company.Id;
         _companyWebsiteUrl = company.WebsiteUrl;
-        CurrentCompany.Set(company.Id, company.Code, company.Name);
+        CurrentCompany.Set(company.Id, company.Code, company.Name, activeEmail);
 
         // Remember this as the user's last-visited company so /  auto-routes
         // them back here next time. Fire-and-forget: non-critical for render.
@@ -941,12 +1004,31 @@
             _pendingRemovals = _pendingRemovalsByTab.TryGetValue(tab.Id, out var cachedRemovals)
                 ? cachedRemovals
                 : new List<MasterDashboardTile>();
-            await LoadAllTileData();
+
+            await LoadActiveSectionTiles();
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Failed to load tiles: {ex.Message}", Severity.Error);
         }
+    }
+
+    // Fires queries for the tiles in the currently-active section. Lazy at
+    // the section level — sections the admin doesn't visit don't pay any
+    // cost. Always re-fetches on every entry rather than caching, so the
+    // dashboard always shows live data; section switches re-run the
+    // section's queries (cheap when each query is sub-second).
+    private async Task LoadActiveSectionTiles()
+    {
+        var tab = ActiveTab;
+        if (tab is null) return;
+
+        var targetTiles = _sections.Count == 0
+            ? _tiles.ToList()
+            : _tiles.Where(t => (t.SectionId ?? 0) == _activeSectionId).ToList();
+        if (targetTiles.Count == 0) return;
+
+        await LoadTileDataFor(targetTiles);
     }
 
     private async Task OnTabChanged(int index)
@@ -965,21 +1047,29 @@
         await LoadTilesForActiveTab();
     }
 
-    private async Task LoadAllTileData()
+    // Loads tile data for a specific subset of tiles. Does NOT clear
+    // _tileData — preserves entries for tiles outside the target subset
+    // (e.g. tiles in another tab still in memory). Existing entries
+    // for tiles in the target subset are overwritten as their fresh
+    // results land.
+    private async Task LoadTileDataFor(IList<MasterDashboardTile> targetTiles)
     {
-        _tileData.Clear();
-        _tileErrors.Clear();
-        _tileFailedQuery.Clear();
-        _tileLoading.Clear();
+        if (targetTiles.Count == 0) return;
 
-        // Mark all tiles as loading up-front (single-threaded) then fire the fetches.
-        foreach (var tile in _tiles) _tileLoading.Add(tile.ReportId);
+        // Drop any prior loading/error/failure markers for these specific
+        // tiles so a stale spinner from an earlier eviction doesn't stick.
+        foreach (var tile in targetTiles)
+        {
+            _tileErrors.Remove(tile.ReportId);
+            _tileFailedQuery.Remove(tile.ReportId);
+            _tileLoading.Add(tile.ReportId);
+        }
         StateHasChanged();
 
         // Collect results from parallel tasks, then merge into _tileData on the
         // main thread. Dictionary/HashSet are not thread-safe; direct concurrent
         // mutation was a race condition.
-        var results = await Task.WhenAll(_tiles.Select(async tile =>
+        var results = await Task.WhenAll(targetTiles.Select(async tile =>
         {
             try
             {
@@ -1058,6 +1148,24 @@
         var advancedFiltersEnabled = Config.GetValue<bool>("Features:AdvancedFilters", false);
 
         List<string>? reportHiddenColumns = null;
+        List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? tableCalcColumns = null;
+        // Saved sort state — tile execution must mirror the editor so
+        // dashboards reflect the admin's chosen ORDER BY. The editor's
+        // priority is: TableSort (multi, header-clicks) > Group By dropdown
+        // > Sort By dropdown > legacy TableSortField. The Sort By + Group
+        // By dropdowns persist as DetailSortFieldId / DetailGroupByFieldId
+        // even though they drive BOTH table-view and detail-view sort —
+        // the "detail" prefix is just historical naming.
+        List<TleReportingDashboard.Web.Models.TableSortSpec>? savedTableSort = null;
+        string? savedDetailGroupByFieldId = null;
+        string? savedDetailGroupByDirection = null;
+        string? savedDetailSortFieldId = null;
+        string? savedDetailSortDirection = null;
+        string? savedDetailSortThenByFieldId = null;
+        string? savedDetailSortThenByDirection = null;
+        string? savedLegacyTableSortField = null;
+        string? savedLegacyTableSortDirection = null;
+        bool savedDistinct = false;
         if (!string.IsNullOrWhiteSpace(report.ColumnState))
         {
             try
@@ -1069,6 +1177,47 @@
                     customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
                 if (doc.RootElement.TryGetProperty("HiddenColumns", out var hcEl))
                     reportHiddenColumns = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcEl.GetRawText());
+                // Read every sort-relevant key the editor writes. Resolution
+                // happens further down so the priority chain stays in one
+                // place (see the editor's ResolveEffectiveSortField).
+                if (doc.RootElement.TryGetProperty("TableSortField", out var tsfEl))
+                    savedLegacyTableSortField = tsfEl.GetString();
+                if (doc.RootElement.TryGetProperty("TableSortDirection", out var tsdEl))
+                    savedLegacyTableSortDirection = tsdEl.GetString();
+                if (doc.RootElement.TryGetProperty("TableSort", out var tsEl)
+                    && tsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    try
+                    {
+                        savedTableSort = System.Text.Json.JsonSerializer
+                            .Deserialize<List<TleReportingDashboard.Web.Models.TableSortSpec>>(tsEl.GetRawText());
+                    }
+                    catch { /* fall through to single-sort */ }
+                }
+                if (doc.RootElement.TryGetProperty("DetailGroupByFieldId", out var dgfEl))
+                    savedDetailGroupByFieldId = dgfEl.GetString();
+                if (doc.RootElement.TryGetProperty("DetailGroupByDirection", out var dgdEl))
+                    savedDetailGroupByDirection = dgdEl.GetString();
+                if (doc.RootElement.TryGetProperty("DetailSortFieldId", out var dsfEl))
+                    savedDetailSortFieldId = dsfEl.GetString();
+                if (doc.RootElement.TryGetProperty("DetailSortDirection", out var dsdEl))
+                    savedDetailSortDirection = dsdEl.GetString();
+                if (doc.RootElement.TryGetProperty("DetailSortThenByFieldId", out var dstfEl))
+                    savedDetailSortThenByFieldId = dstfEl.GetString();
+                if (doc.RootElement.TryGetProperty("DetailSortThenByDirection", out var dstdEl))
+                    savedDetailSortThenByDirection = dstdEl.GetString();
+                // Per-report SELECT DISTINCT toggle. Off when absent.
+                if (doc.RootElement.TryGetProperty("Distinct", out var distEl)
+                    && distEl.ValueKind == System.Text.Json.JsonValueKind.True)
+                    savedDistinct = true;
+                // Per-report SQL calc columns. Their values land in every
+                // row dict via the SELECT alias; the dashboard tile uses
+                // them as group-by candidates and the column header label.
+                if (doc.RootElement.TryGetProperty("TableCalculatedColumns", out var tcEl))
+                {
+                    tableCalcColumns = System.Text.Json.JsonSerializer
+                        .Deserialize<List<TleReportingDashboard.Web.Models.TableCalcColumnDef>>(tcEl.GetRawText());
+                }
 
                 // Advanced (ad-hoc) filters tree. Same back-compat shape
                 // handling as the Report Builder: new saves emit an
@@ -1114,18 +1263,112 @@
         AddExtraIds(config?.ExtraGroupByFieldIds);
         AddExtraIds(config?.ExtraDimensionFieldIds);
 
+        // Resolve effective primary + secondary sort using the SAME priority
+        // chain the editor's ResolveEffectiveSortField applies, otherwise
+        // tile SQL drifts from what the admin sees in the editor:
+        //   1. TableSort (multi-sort, header-clicks)
+        //   2. DetailGroupByFieldId — Group By dropdown drives primary
+        //      with Sort By dropdown sliding into secondary.
+        //   3. DetailSortFieldId — Sort By dropdown alone.
+        //   4. Legacy TableSortField/Direction (older saves).
+        // Then By tiebreaker (DetailSortThenBy*) becomes secondary when
+        // there's a primary Sort By and no Group By in front of it.
+        string? sortField = null, sortDirection = null;
+        string? secondarySort = null, secondaryDirection = null;
+
+        if (savedTableSort is { Count: > 0 })
+        {
+            sortField = savedTableSort[0].Field;
+            sortDirection = savedTableSort[0].Direction;
+            secondarySort = savedTableSort.Count > 1 ? savedTableSort[1].Field : null;
+            secondaryDirection = savedTableSort.Count > 1 ? savedTableSort[1].Direction : null;
+        }
+        else if (!string.IsNullOrWhiteSpace(savedDetailGroupByFieldId)
+                 && !string.Equals(savedDetailGroupByDirection, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            sortField = savedDetailGroupByFieldId;
+            sortDirection = string.Equals(savedDetailGroupByDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
+            // Sort By slides into secondary when distinct from the group field.
+            if (!string.IsNullOrWhiteSpace(savedDetailSortFieldId)
+                && !string.Equals(savedDetailSortFieldId, savedDetailGroupByFieldId, StringComparison.OrdinalIgnoreCase))
+            {
+                secondarySort = savedDetailSortFieldId;
+                secondaryDirection = string.Equals(savedDetailSortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(savedDetailSortFieldId))
+        {
+            sortField = savedDetailSortFieldId;
+            sortDirection = string.Equals(savedDetailSortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
+            // Then By tiebreaker (when distinct from primary).
+            if (!string.IsNullOrWhiteSpace(savedDetailSortThenByFieldId)
+                && !string.Equals(savedDetailSortThenByFieldId, savedDetailSortFieldId, StringComparison.OrdinalIgnoreCase))
+            {
+                secondarySort = savedDetailSortThenByFieldId;
+                secondaryDirection = string.Equals(savedDetailSortThenByDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
+            }
+        }
+        else
+        {
+            // Legacy fallback for pre-multi-sort saves.
+            sortField = savedLegacyTableSortField;
+            sortDirection = savedLegacyTableSortDirection;
+        }
+
+        // Pre-fetch PK columns of the report's primary table so QueryBuilder
+        // can append them as silent tiebreakers for OFFSET stability — same
+        // mechanism the editor uses. Best-effort: if the lookup fails (no
+        // PK, locked-down account, parse failure) we ship null and fall
+        // through to the legacy "first selected field" anchor.
+        List<string>? pkColumns = null;
+        if (!string.IsNullOrWhiteSpace(report.PrimaryTable))
+        {
+            try
+            {
+                var bare = report.PrimaryTable;
+                var asIdx = bare.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+                if (asIdx > 0) bare = bare[..asIdx].Trim();
+                var dot = bare.IndexOf('.');
+                string? schema = dot > 0 ? bare[..dot] : null;
+                var table = dot > 0 ? bare[(dot + 1)..] : bare;
+                // Effective lookup folds in admin-flagged IsUnique fields,
+                // so accounts that can't read information_schema still get
+                // a stable OFFSET tiebreaker.
+                var schemaFields = await SchemaService.GetFieldConfigsAsync(report.ConnectionId);
+                pkColumns = await SchemaBrowser.GetEffectivePrimaryKeyColumnsAsync(report.ConnectionId, schema, table, schemaFields);
+            }
+            catch { pkColumns = null; }
+        }
+
         var request = new QueryRequest
         {
             FieldIds = fieldIds,
             Filters = filters,
             CustomFilterIds = customFilterIds,
             AdvancedFilters = advancedFilters,
+            SortField = sortField,
+            SortDirection = sortDirection,
+            SecondarySortField = secondarySort,
+            SecondarySortDirection = secondaryDirection,
+            FallbackSortColumns = pkColumns is { Count: > 0 } ? pkColumns : null,
+            Distinct = savedDistinct,
             Page = 1,
             PageSize = 50000,
             // Tile inherits the connection and primary table from the report it
             // points at — keeps viewer + detail + dashboard in sync automatically.
             ConnectionId = report.ConnectionId,
-            PrimaryTable = report.PrimaryTable
+            PrimaryTable = report.PrimaryTable,
+            // SQL-mode calc columns must reach the SELECT so the row dict
+            // carries their values for the tile's group-by / dimensions.
+            TableCalcSqlColumns = tableCalcColumns?
+                .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression) && !string.IsNullOrEmpty(c.Key))
+                .Select(c => new TleReportingDashboard.Web.Models.TableCalcSqlSelector
+                {
+                    Key = c.Key,
+                    SqlExpression = c.SqlExpression!,
+                    JoinIds = c.JoinIds
+                })
+                .ToList()
         };
         request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, report.ConnectionId, report.PrimaryTable);
 
@@ -1140,7 +1383,7 @@
         try
         {
             var data = await QueryService.ExecuteQueryAsync(request);
-            return (new TileLoadResult(data, config, mergedHidden.Count > 0 ? mergedHidden : null), null);
+            return (new TileLoadResult(data, config, mergedHidden.Count > 0 ? mergedHidden : null, tableCalcColumns), null);
         }
         catch (Exception ex)
         {
@@ -1179,18 +1422,30 @@
         try
         {
             // Snapshot the outgoing tab's in-memory edits before switching focus.
+            // Mirror OnTabChanged exactly — sections must be snapshotted too,
+            // otherwise the new (empty) tab inherits the previous tab's
+            // section bar visually until something forces a reload.
             var outgoing = ActiveTab;
             if (outgoing is not null)
             {
                 _tilesByTab[outgoing.Id] = _tiles;
+                _sectionsByTab[outgoing.Id] = _sections;
                 _pendingRemovalsByTab[outgoing.Id] = _pendingRemovals;
             }
             var tab = await MasterService.AddTabAsync(_companyId, $"Tab {_tabs.Count + 1}", _userEmail);
             _tabs.Add(tab);
             _activeTabIndex = _tabs.Count - 1;
             _editMode = true;
+            // Reset every per-tab collection for the brand-new tab —
+            // tiles, sections, pending removals, active section. Without
+            // resetting sections, the new tab still renders the previous
+            // tab's section strip and the active-section pointer (stale
+            // section id from the outgoing tab) makes the tile visibility
+            // filter hide everything.
             _tiles = new List<MasterDashboardTile>();
+            _sections = new List<MasterDashboardSection>();
             _pendingRemovals = new List<MasterDashboardTile>();
+            _activeSectionId = ResolveDefaultActiveSectionId();
             StateHasChanged();
             await RenameTab(tab);
         }
@@ -1241,11 +1496,17 @@
     // Setter used by the section-tab click handlers — keeps the underlying
     // field private so future hooks (per-section preference persistence,
     // animation, etc.) have a single point to plug into.
-    private void SetActiveSection(int sectionKey)
+    private async Task SetActiveSection(int sectionKey)
     {
         if (_activeSectionId == sectionKey) return;
         _activeSectionId = sectionKey;
         StateHasChanged();
+
+        // Re-fetch the new section's tiles every time. Sections the admin
+        // doesn't visit don't pay any cost (lazy); sections they do visit
+        // always show live data (no caching across switches).
+        if (ActiveTab is not null)
+            await LoadActiveSectionTiles();
     }
 
     // Unified drop-target index for section headers. -1 = none.
@@ -1770,7 +2031,11 @@
         }
     }
 
-    private record TileLoadResult(QueryResponse Data, DashboardView.DashboardConfig? Config, List<string>? HiddenColumns);
+    private record TileLoadResult(
+        QueryResponse Data,
+        DashboardView.DashboardConfig? Config,
+        List<string>? HiddenColumns,
+        List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? TableCalcColumns);
 
     private record FailedTileQuery(
         string Sql,

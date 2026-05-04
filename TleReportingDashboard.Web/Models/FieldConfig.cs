@@ -43,6 +43,16 @@ public class FieldConfig
     /// connections that have a non-empty display timezone configured.
     /// </summary>
     public bool ApplyTimezoneConversion { get; set; }
+
+    /// <summary>
+    /// Admin-asserted "this column is single-column unique" flag. Used when
+    /// the connection's account can't read information_schema constraints —
+    /// the schema introspection can't see the PK / UNIQUE so the admin
+    /// states it manually. Surfaces wherever the system would otherwise
+    /// rely on constraint introspection: the (-) marker on Sort By picks
+    /// and the OFFSET-pagination tiebreaker fallback.
+    /// </summary>
+    public bool IsUnique { get; set; }
     /// <summary>
     /// Runtime-only: the display timezone copied off the connection so the
     /// field's expression getters can consult it without re-reading the

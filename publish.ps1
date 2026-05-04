@@ -139,4 +139,8 @@ if (-not $publishFailed) {
 
     Write-Step "Done."
     Write-Host ("Published to " + $PublishPath) -ForegroundColor Green
+    # Wall-clock stamp so a leftover console window tells you at a
+    # glance when the last successful publish ran. 12-hour format
+    # with AM/PM matches the rest of the team's notes.
+    Write-Host ("Completed: " + (Get-Date).ToString("yyyy-MM-dd hh:mm:ss tt")) -ForegroundColor Green
 }

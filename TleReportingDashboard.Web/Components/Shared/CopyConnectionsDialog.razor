@@ -1,0 +1,178 @@
+@using MudBlazor
+@using TleReportingDashboard.Web.Services
+@inject ICompanyConnectionAdminService ConnectionSvc
+
+@*
+    Pick-and-choose copy of connections from another company into the
+    currently-selected one. Source picker on top loads the source's
+    connection list inline; admin checks the rows to copy and types a
+    name prefix. Submit returns the selected ids + prefix; the parent
+    delegates to ConnectionSvc.CopyConnectionsAsync.
+
+    Each copy gets a new id and prefixed name to dodge the
+    (company_id, name) unique index. is_default is cleared on copies so
+    the (company_id) WHERE is_default=1 filtered unique index doesn't
+    collide with the target's existing default — admin promotes one
+    explicitly afterwards.
+*@
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width: 520px;">
+            <MudText Typo="Typo.body2">
+                Copy hand-picked connections from another company into
+                <strong>@TargetCompanyLabel</strong>. Each copy gets the prefix below
+                so existing names aren't clobbered. <code>is_default</code> is cleared
+                on the copies — promote one to default after the copy.
+            </MudText>
+
+            <MudSelect T="Guid?" Value="_sourceCompanyId" ValueChanged="OnSourceCompanyChanged"
+                       Label="Copy from" Variant="Variant.Outlined" Margin="Margin.Dense">
+                @foreach (var c in OtherCompanies.OrderBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase))
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_loadingSource)
+            {
+                <MudProgressLinear Indeterminate Color="Color.Primary" />
+            }
+            else if (_sourceCompanyId is not null)
+            {
+                @if (_sourceConnections.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+                        No active connections on this company to copy.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #DADCE0; border-radius: 4px; max-height: 280px; overflow-y: auto;">
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                            <MudButton Size="Size.Small" Variant="Variant.Text"
+                                       OnClick="SelectAll">Select all</MudButton>
+                            <MudButton Size="Size.Small" Variant="Variant.Text"
+                                       OnClick="SelectNone">Select none</MudButton>
+                            <MudSpacer />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @_selectedIds.Count selected
+                            </MudText>
+                        </MudStack>
+                        @foreach (var conn in _sourceConnections)
+                        {
+                            var connLocal = conn;
+                            var isChecked = _selectedIds.Contains(conn.Id);
+                            <div style="display: flex; align-items: center; gap: 8px; padding: 2px 4px;">
+                                <MudCheckBox T="bool" Value="@isChecked"
+                                             ValueChanged="@((bool v) => ToggleSelection(connLocal.Id, v))"
+                                             Color="Color.Primary" Dense />
+                                <div style="flex: 1; min-width: 0;">
+                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                        @conn.Name
+                                        @if (conn.IsDefault)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Primary"
+                                                     Variant="Variant.Outlined" Style="margin-left: 6px; height: 18px; font-size: 0.65rem;">
+                                                default
+                                            </MudChip>
+                                        }
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @conn.ConnectionType.ToUpperInvariant()
+                                    </MudText>
+                                </div>
+                            </div>
+                        }
+                    </MudPaper>
+                }
+            }
+
+            <MudTextField @bind-Value="_namePrefix" Label="Name prefix"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          MaxLength="50"
+                          HelperText="Prefix prepended to each copied connection's name. Required to dodge (company_id, name) collisions when the target already has a connection with the same name. Max 50 chars." />
+
+            <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+                Copies start as non-default — promote one explicitly afterwards.
+            </MudAlert>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="!CanSubmit()" OnClick="Submit">
+            Copy @(_selectedIds.Count > 0 ? $"({_selectedIds.Count})" : "")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string TargetCompanyLabel { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<CompanyOption> OtherCompanies { get; set; } = Array.Empty<CompanyOption>();
+
+    private Guid? _sourceCompanyId;
+    private string _namePrefix = string.Empty;
+    private bool _loadingSource;
+    private List<CompanyConnectionRecord> _sourceConnections = new();
+    private HashSet<Guid> _selectedIds = new();
+
+    public sealed record CompanyOption(Guid Id, string DisplayName);
+    public sealed record Result(IReadOnlyList<Guid> SourceConnectionIds, string NamePrefix);
+
+    private bool CanSubmit() =>
+        _selectedIds.Count > 0
+        && !string.IsNullOrWhiteSpace(_namePrefix)
+        && _namePrefix.Length <= 50
+        && !_loadingSource;
+
+    private async Task OnSourceCompanyChanged(Guid? newId)
+    {
+        _sourceCompanyId = newId;
+        _selectedIds = new HashSet<Guid>();
+        _sourceConnections = new();
+        if (newId is not Guid id) return;
+
+        _loadingSource = true;
+        try
+        {
+            // Pull the source company's full connection list. Filter to
+            // active rows here rather than at the service so the dialog
+            // doesn't show greyed-out disabled rows the admin can't pick.
+            var rows = await ConnectionSvc.GetByCompanyAsync(id);
+            _sourceConnections = rows.Where(r => r.IsActive)
+                                     .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+                                     .ToList();
+        }
+        finally
+        {
+            _loadingSource = false;
+        }
+    }
+
+    private void ToggleSelection(Guid id, bool isChecked)
+    {
+        if (isChecked) _selectedIds.Add(id);
+        else _selectedIds.Remove(id);
+    }
+
+    private void SelectAll()
+    {
+        _selectedIds = _sourceConnections.Select(c => c.Id).ToHashSet();
+    }
+
+    private void SelectNone()
+    {
+        _selectedIds = new HashSet<Guid>();
+    }
+
+    private void Submit()
+    {
+        if (!CanSubmit()) return;
+        MudDialog.Close(DialogResult.Ok(new Result(_selectedIds.ToList(), _namePrefix.Trim())));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

@@ -60,6 +60,22 @@
                                 </MudTooltip>
                             </MudStack>
 
+                            @* Per-company email override. Empty falls back to
+                               the user's login email (shown as the placeholder)
+                               so admins can tell at a glance which row uses an
+                               override and which inherits. Debounced commit so
+                               typing doesn't fire a write on every keystroke. *@
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                                <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small"
+                                         Color="@(string.IsNullOrEmpty(grant.CompanyEmail) ? Color.Default : Color.Primary)" />
+                                <MudText Typo="Typo.body2" Style="min-width: 160px;">Company email</MudText>
+                                <MudTextField T="string" Value="@grant.CompanyEmail"
+                                              Placeholder="@($"Defaults to {Email}")"
+                                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                                              DebounceInterval="500"
+                                              OnDebounceIntervalElapsed="@(v => ChangeCompanyEmail(grant, v))" />
+                            </MudStack>
+
                             @* Connections under this company — per-connection
                                LOS/CRM login, debounced-commit text field. *@
                             @if (_connLoginsByCompany.TryGetValue(grant.CompanyId, out var conns) && conns.Count > 0)
@@ -120,6 +136,14 @@
                             <MudSelectItem T="string" Value="@r">@r</MudSelectItem>
                         }
                     </MudSelect>
+                    @* Optional company-specific email at grant time. Blank
+                       falls back to the user's login email; admins can
+                       still set / change it on the granted row afterward. *@
+                    <MudTextField T="string" @bind-Value="_grantCompanyEmail"
+                                  Label="Company email (optional)"
+                                  Placeholder="@($"Defaults to {Email}")"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Style="min-width: 240px;" />
                     <MudButton Variant="Variant.Filled" Color="Color.Primary"
                                StartIcon="@Icons.Material.Filled.Add"
                                Disabled="@(_grantCompanyId is null)"
@@ -153,6 +177,7 @@
     private readonly Dictionary<Guid, List<UserConnectionLogin>> _connLoginsByCompany = new();
     private Guid? _grantCompanyId;
     private string _grantRole = UserRoles.Viewer;
+    private string _grantCompanyEmail = string.Empty;
 
     protected override async Task OnInitializedAsync()
     {
@@ -192,9 +217,15 @@
         if (_grantCompanyId is null) return;
         try
         {
-            await UserManagement.UpsertCompanyAccessAsync(Email, _grantCompanyId.Value, _grantRole);
+            // Pass the email even when blank — empty string explicitly
+            // clears any preexisting override, which is the right starting
+            // state when the admin is granting fresh access.
+            await UserManagement.UpsertCompanyAccessAsync(
+                Email, _grantCompanyId.Value, _grantRole,
+                companyEmail: _grantCompanyEmail);
             _grantCompanyId = null;
             _grantRole = UserRoles.Viewer;
+            _grantCompanyEmail = string.Empty;
             await ReloadAccessAsync();
         }
         catch (Exception ex)
@@ -208,12 +239,36 @@
         if (string.Equals(row.Role, newRole, StringComparison.Ordinal)) return;
         try
         {
+            // Don't pass companyEmail — leave the existing override alone.
             await UserManagement.UpsertCompanyAccessAsync(row.Email, row.CompanyId, newRole);
             await ReloadAccessAsync();
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Failed to change role: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ChangeCompanyEmail(UserCompanyAccess row, string? newValue)
+    {
+        // Trim + normalize. Whitespace-only and empty strings both clear
+        // the override — admins shouldn't have to remember which form
+        // means "no value." No-op when unchanged so a debounce tick from
+        // an unrelated edit doesn't trigger a write.
+        var newTrimmed = string.IsNullOrWhiteSpace(newValue) ? string.Empty : newValue.Trim();
+        var oldTrimmed = string.IsNullOrWhiteSpace(row.CompanyEmail) ? string.Empty : row.CompanyEmail.Trim();
+        if (string.Equals(newTrimmed, oldTrimmed, StringComparison.OrdinalIgnoreCase)) return;
+
+        try
+        {
+            await UserManagement.UpsertCompanyAccessAsync(
+                row.Email, row.CompanyId, row.Role,
+                companyEmail: newTrimmed);
+            await ReloadAccessAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to save company email: {ex.Message}", Severity.Error);
         }
     }
 

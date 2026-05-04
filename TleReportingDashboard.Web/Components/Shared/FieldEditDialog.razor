@@ -105,6 +105,22 @@
                 </MudItem>
             }
 
+            @* Manual unique flag — admin opts in when the connection's
+               account can't query information_schema constraints (the
+               auto-detect path silently returns nothing in that case).
+               Drives the (-) marker in Sort By and the OFFSET pagination
+               tiebreaker fallback, both of which would otherwise depend
+               on a constraint lookup. *@
+            <MudItem xs="12">
+                <MudCheckBox T="bool" @bind-Value="_edited.IsUnique"
+                             Color="Color.Primary" Dense
+                             Label="Mark as unique (bypass constraint check)" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 32px; margin-top: -4px; display: block;">
+                    Use when the connection's account can't read schema constraints. The system treats this column as a single-column unique key without an information_schema lookup.
+                </MudText>
+            </MudItem>
+
+
             <MudItem xs="12">
                 <MudSwitch T="bool" @bind-Value="_useSqlExpression"
                            Label="Use inline SQL expression instead of Source Table/Column"
@@ -128,22 +144,43 @@
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    @* Source Column is a DB-backed picker; columns come from
-                       INFORMATION_SCHEMA via the parent's LoadColumnsAsync
-                       callback (cached per-table on the page). MudSelect
-                       highlights the current value on open so re-picking
-                       is a single click — no search-as-you-type friction. *@
-                    <MudSelect T="string" Value="_edited.SourceColumn"
-                               ValueChanged="OnSourceColumnChanged"
-                               Label="Source Column"
-                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense
-                               Disabled="@(_columns.Count == 0)"
-                               HelperText="@ColumnHelperText">
-                        @foreach (var col in _columns.OrderBy(c => c.ColumnName, StringComparer.OrdinalIgnoreCase))
-                        {
-                            <MudSelectItem T="string" Value="@col.ColumnName">@col.ColumnName</MudSelectItem>
-                        }
-                    </MudSelect>
+                    @* Source Column picker. When the source resolves to a
+                       table the live DB returns columns for, use a strict
+                       autocomplete (DOM-stable, type-aware default for
+                       DataType). When the picked source is virtual — a
+                       CTE/Lookup-backed alias whose table doesn't exist in
+                       INFORMATION_SCHEMA — fall back to free-form text so
+                       admins can type the column name the CTE projects.
+                       Same identifier validation runs on save. *@
+                    @if (UseFreeFormColumn)
+                    {
+                        <MudTextField T="string" Value="_edited.SourceColumn"
+                                      ValueChanged="OnSourceColumnChanged"
+                                      Label="Source Column"
+                                      Placeholder="dnis"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                                      HelperText="@FreeFormColumnHelperText" />
+                    }
+                    else
+                    {
+                        @* Switched from MudSelect to MudAutocomplete because
+                           MudSelect emitted the wrong Value when items got
+                           replaced across a Source Table change (internal
+                           item registry confusion). Autocomplete's SearchFunc
+                           returns a fresh projection on each keystroke/open
+                           so there's no cache to go stale. Strict=true +
+                           CoerceValue=false rejects freeform commits. *@
+                        <MudAutocomplete T="string" Value="_edited.SourceColumn"
+                                         ValueChanged="OnSourceColumnChanged"
+                                         @key="@($"col-{_edited.SourceTable}-{_columnLoadGeneration}")"
+                                         Label="Source Column"
+                                         SearchFunc="SearchColumns"
+                                         Strict="true" CoerceValue="false"
+                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                         Dense Immediate MaxItems="null"
+                                         Disabled="@(_columns.Count == 0)"
+                                         HelperText="@ColumnHelperText" />
+                    }
                 </MudItem>
             }
             else
@@ -270,6 +307,12 @@
     private ColumnLoadStatus _columnLoadStatus = ColumnLoadStatus.NotAttempted;
     private string? _columnLoadError;
     private string? _columnLoadAttemptedTable;
+    // Generation counter — incremented on every LoadColumnsForCurrentSourceAsync
+    // call. After the await, we discard results from any load whose generation
+    // no longer matches. Without this, rapid Source Table changes could let an
+    // older load complete second and overwrite the newer load's columns,
+    // leaving the dropdown out of sync with the picked table.
+    private int _columnLoadGeneration;
 
     private enum ColumnLoadStatus
     {
@@ -303,6 +346,21 @@
         }
     }
 
+    // Switch the column input to free-form when the live DB enumeration
+    // came back empty or didn't resolve — typically a CTE/Lookup-backed
+    // virtual primary table (e.g. ranked_calls). Admin types the column
+    // the CTE projects; same identifier rules apply on save.
+    private bool UseFreeFormColumn =>
+        !_columnsLoading
+        && _columns.Count == 0
+        && (_columnLoadStatus == ColumnLoadStatus.SucceededEmpty
+            || _columnLoadStatus == ColumnLoadStatus.NoResolvableTable);
+
+    private string FreeFormColumnHelperText =>
+        _columnLoadStatus == ColumnLoadStatus.NoResolvableTable
+            ? "Source alias doesn't map to a DB table — type the column name the CTE / Lookup projects."
+            : $"\"{_columnLoadAttemptedTable}\" returned no DB columns (virtual / CTE table?). Type the column name the CTE projects.";
+
     protected override void OnInitialized()
     {
         // Clone so cancelling discards changes
@@ -329,7 +387,8 @@
                 RolesRequired = Field.RolesRequired,
                 ValueSortOrder = Field.ValueSortOrder,
                 Format = Field.Format,
-                ApplyTimezoneConversion = Field.ApplyTimezoneConversion
+                ApplyTimezoneConversion = Field.ApplyTimezoneConversion,
+                IsUnique = Field.IsUnique
             };
         }
 
@@ -359,10 +418,16 @@
 
     // Source Table changed: reset the SourceColumn (so stale values don't
     // leak between tables) and reload the column list from the parent.
+    // Clear _columns synchronously before the await so the dropdown doesn't
+    // briefly render the previous table's columns — a user clicking quickly
+    // could otherwise pick a column from the old list, save, and end up with
+    // a (Source Table, Source Column) pair that doesn't actually exist.
     private async Task OnSourceTableChanged(string? newSource)
     {
         _edited.SourceTable = newSource ?? string.Empty;
         _edited.SourceColumn = string.Empty;
+        _columns = new();
+        _columnLoadStatus = ColumnLoadStatus.Loading;
         await LoadColumnsForCurrentSourceAsync();
     }
 
@@ -370,8 +435,15 @@
     // the parent's LoadColumnsAsync callback for its columns. Tracks the
     // outcome (no-resolvable-table / empty / failed / success) so the
     // helper text can explain exactly what happened.
+    //
+    // Generation guard: every call increments _columnLoadGeneration; after
+    // the async DB call, we bail out if a newer call has started. Without
+    // this, rapid Source Table changes can race — slower load completes last
+    // and overwrites the faster newer one, so the dropdown ends up showing
+    // the wrong table's columns.
     private async Task LoadColumnsForCurrentSourceAsync()
     {
+        var generation = ++_columnLoadGeneration;
         _columnLoadError = null;
         _columnLoadAttemptedTable = null;
 
@@ -402,26 +474,36 @@
         _columnLoadAttemptedTable = tableName;
         _columnsLoading = true;
         _columnLoadStatus = ColumnLoadStatus.Loading;
+
+        List<DbColumnInfo> loaded;
         try
         {
             // Defensive copy — LoadColumnsAsync may return a cached reference
             // from the parent. Mutating it here (legacy-value injection)
             // would poison subsequent loads of the same table.
-            _columns = (await LoadColumnsAsync(tableName)).ToList();
-            _columnLoadStatus = _columns.Count > 0
-                ? ColumnLoadStatus.SucceededWithRows
-                : ColumnLoadStatus.SucceededEmpty;
+            loaded = (await LoadColumnsAsync(tableName)).ToList();
         }
         catch (Exception ex)
         {
+            // Discard if a newer load superseded us — its own catch/return
+            // path will set the right status for the user-visible state.
+            if (generation != _columnLoadGeneration) return;
             _columns = new();
             _columnLoadStatus = ColumnLoadStatus.Failed;
             _columnLoadError = ex.Message;
-        }
-        finally
-        {
             _columnsLoading = false;
+            return;
         }
+
+        // Stale generation — a newer load has started. Drop these results so
+        // the dropdown reflects whichever table is currently picked.
+        if (generation != _columnLoadGeneration) return;
+
+        _columns = loaded;
+        _columnLoadStatus = _columns.Count > 0
+            ? ColumnLoadStatus.SucceededWithRows
+            : ColumnLoadStatus.SucceededEmpty;
+        _columnsLoading = false;
 
         // Legacy value preservation — if the stored SourceColumn isn't in
         // the fresh list, synthesize a stub entry (name only, no type info)
@@ -449,6 +531,21 @@
         {
             _edited.DataType = SchemaBuilderService.MapDbTypeToFieldDataType(col.DataType);
         }
+    }
+
+    // SearchFunc for the Source Column autocomplete. Sorts A-Z and substring-
+    // matches case-insensitively. Returns the full list when the search box is
+    // empty so admins can browse just by clicking. Computed fresh on every
+    // call — no cached projection to go stale when _columns gets replaced.
+    private Task<IEnumerable<string>> SearchColumns(string? value, CancellationToken ct)
+    {
+        var sorted = _columns
+            .OrderBy(c => c.ColumnName, StringComparer.OrdinalIgnoreCase)
+            .Select(c => c.ColumnName);
+        IEnumerable<string> matches = string.IsNullOrWhiteSpace(value)
+            ? sorted
+            : sorted.Where(n => n.Contains(value, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(matches);
     }
 
 

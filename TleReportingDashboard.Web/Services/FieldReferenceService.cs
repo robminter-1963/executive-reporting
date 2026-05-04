@@ -6,12 +6,17 @@ namespace TleReportingDashboard.Web.Services;
 public class FieldReferenceService : IFieldReferenceService
 {
     private readonly string _connectionString;
+    private readonly ConfigDbCache _cache;
     private readonly ILogger<FieldReferenceService> _logger;
 
-    public FieldReferenceService(IConfiguration configuration, ILogger<FieldReferenceService> logger)
+    public FieldReferenceService(
+        IConfiguration configuration,
+        ConfigDbCache cache,
+        ILogger<FieldReferenceService> logger)
     {
         _connectionString = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required.");
+        _cache = cache;
         _logger = logger;
     }
 
@@ -25,6 +30,14 @@ public class FieldReferenceService : IFieldReferenceService
         var updated = 0;
         updated += await RenameInSavedReportsAsync(oldFieldId, newFieldId);
         updated += await RenameInGridTemplatesAsync(oldFieldId, newFieldId);
+        if (updated > 0)
+        {
+            // Stored JSON in saved_reports + grid_templates was rewritten —
+            // anything cached off those tables must drop.
+            _cache.Invalidate("ReportDbService:Reports:");
+            _cache.Invalidate("GridTemplateService:");
+            _cache.Invalidate("MasterDashboardService:");
+        }
         _logger.LogInformation("Renamed field '{Old}' → '{New}' across {Count} stored rows", oldFieldId, newFieldId, updated);
         return updated;
     }

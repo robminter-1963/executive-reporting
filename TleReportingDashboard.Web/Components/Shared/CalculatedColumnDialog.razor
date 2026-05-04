@@ -1,9 +1,12 @@
 @using TleReportingDashboard.Web.Services
 
-@* Add / edit a calculated dashboard column. Formula references OTHER
-   columns by [bracketed identifier] — autocompleted from AvailableColumns
-   so admins don't have to remember exact names. Live syntax check below
-   the formula input flips green/red as the user types. *@
+@* Add / edit a calculated column. Two editor modes:
+     * Formula: tiny client-side expression language (+ - * /, parens,
+       [bracketed identifiers]). Used by both dashboard and table view.
+     * SQL: raw server-side SQL expression appended to the query's SELECT.
+       Only the table view enables this (AllowSqlMode = true).
+   When SQL mode is active, the formula textbox + insert chips are hidden
+   and a SQL textarea + JOINs picker appear instead. *@
 
 <MudDialog>
     <TitleContent>
@@ -18,50 +21,102 @@
                           Variant="Variant.Outlined" Margin="Margin.Dense"
                           Placeholder="e.g. % Abandoned" />
 
-            <MudTextField @bind-Value="_formula" @bind-Value:after="ValidateFormula"
-                          Label="Formula" Immediate
-                          Variant="Variant.Outlined" Margin="Margin.Dense"
-                          Style="font-family: monospace;"
-                          Placeholder="[Abandoned] / [Calls] * 100"
-                          HelperText="Operators: + - * /  Parens: ( )  Identifiers: [Column Name]" />
-
-            @if (_formulaError is not null)
+            @* Mode toggle. Hidden in dashboard usage where AllowSqlMode is
+               false — that path always uses the formula language. *@
+            @if (AllowSqlMode)
             {
-                <MudAlert Severity="Severity.Error" Dense Variant="Variant.Outlined">
-                    @_formulaError
-                </MudAlert>
-            }
-            else if (!string.IsNullOrWhiteSpace(_formula))
-            {
-                <MudAlert Severity="Severity.Success" Dense Variant="Variant.Outlined">
-                    Formula parses cleanly.
-                </MudAlert>
+                <MudSwitch T="bool" @bind-Value="_useSql"
+                           Label="Use SQL Expression (server-side)" Color="Color.Primary" />
             }
 
-            @if (AvailableColumns is { Count: > 0 })
+            @if (!_useSql)
             {
-                <MudText Typo="Typo.caption" Color="Color.Secondary">Click to insert:</MudText>
-                <MudStack Row Wrap="Wrap.Wrap" Spacing="1">
-                    @foreach (var col in AvailableColumns)
-                    {
-                        var label = col.Label;
-                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
-                                 OnClick="@(() => InsertColumn(label))">
-                            @label
-                        </MudChip>
-                    }
-                </MudStack>
+                <MudTextField @bind-Value="_formula" @bind-Value:after="ValidateFormula"
+                              Label="Formula" Immediate
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="font-family: monospace;"
+                              Placeholder="[Abandoned] / [Calls] * 100"
+                              HelperText="Operators: + - * /  Parens: ( )  Identifiers: [Column Name]" />
+
+                @if (_formulaError is not null)
+                {
+                    <MudAlert Severity="Severity.Error" Dense Variant="Variant.Outlined">
+                        @_formulaError
+                    </MudAlert>
+                }
+                else if (!string.IsNullOrWhiteSpace(_formula))
+                {
+                    <MudAlert Severity="Severity.Success" Dense Variant="Variant.Outlined">
+                        Formula parses cleanly.
+                    </MudAlert>
+                }
+
+                @if (AvailableColumns is { Count: > 0 })
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Click to insert:</MudText>
+                    <MudStack Row Wrap="Wrap.Wrap" Spacing="1">
+                        @foreach (var col in AvailableColumns)
+                        {
+                            var label = col.Label;
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                     OnClick="@(() => InsertColumn(label))">
+                                @label
+                            </MudChip>
+                        }
+                    </MudStack>
+                }
+            }
+            else
+            {
+                <MudTextField @bind-Value="_sqlExpression" Label="SQL Expression"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="6" Style="font-family: monospace; font-size: 0.85rem;"
+                              Placeholder="(CASE WHEN C.NAME IS NULL THEN L.CAMPAIGN__C ELSE C.NAME END)"
+                              HelperText="Raw SQL. Appended to the SELECT as &quot;<expr> AS &lt;key&gt;&quot;. Reference any alias that's in the FROM chain (pick the joins below)." />
+
+                @* JOINs picker — pull additional joins into the FROM chain
+                   so aliases referenced by the SQL resolve. Hidden when no
+                   joins are available on this connection. *@
+                @if (AvailableJoins is { Count: > 0 })
+                {
+                    <MudSelect T="string" Label="JOINs (referenced)" MultiSelection
+                               SelectedValues="_selectedJoinIds"
+                               SelectedValuesChanged="@(v => _selectedJoinIds = v.ToHashSet())"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                               HelperText="Pick the joins your SQL references. The query builder pulls them into the FROM/JOIN chain.">
+                        @foreach (var j in AvailableJoins)
+                        {
+                            <MudSelectItem T="string" Value="@j.Id">@j.Label</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+                        No joins are defined on this connection. Aliases referenced in the SQL must already
+                        be in scope from the report's selected fields.
+                    </MudAlert>
+                }
             }
 
             <MudGrid Spacing="2">
                 <MudItem xs="6">
+                    @* Drives column width, default alignment, and the
+                       fallback format. SQL-mode calc columns often return
+                       non-numeric values (CASE expressions producing text,
+                       date-typed columns, booleans), so the full set of
+                       field data types is offered here. *@
                     <MudSelect T="string" @bind-Value="_dataType" Label="Data Type"
                                Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                                HelperText="Drives column width and default alignment.">
+                        <MudSelectItem T="string" Value="@("text")">text</MudSelectItem>
                         <MudSelectItem T="string" Value="@("decimal")">decimal</MudSelectItem>
                         <MudSelectItem T="string" Value="@("integer")">integer</MudSelectItem>
                         <MudSelectItem T="string" Value="@("percent")">percent</MudSelectItem>
                         <MudSelectItem T="string" Value="@("currency")">currency</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("date")">date</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("datetime")">datetime</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("boolean")">boolean</MudSelectItem>
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="6">
@@ -110,16 +165,33 @@
     // against either key or label.
     [Parameter] public List<ColumnPick> AvailableColumns { get; set; } = new();
 
+    // Per-report SQL mode. When the host enables it (table view's calc
+    // dialog), a toggle appears that switches the editor from the formula
+    // language to a raw SQL textarea + JOINs picker. Dashboard usage leaves
+    // it false so its existing formula-only flow is unchanged.
+    [Parameter] public bool AllowSqlMode { get; set; }
+    [Parameter] public string? InitialSqlExpression { get; set; }
+    [Parameter] public List<string>? InitialJoinIds { get; set; }
+    // Joins the user can pick from when SQL mode is active. Each entry is
+    // (Id, Label). Label is the human-readable join description shown in
+    // the multi-select; Id is the JoinDefinition.Id stored on the result.
+    [Parameter] public List<JoinPick> AvailableJoins { get; set; } = new();
+
     private string _label = string.Empty;
     private string _formula = string.Empty;
     private string _format = string.Empty;
     private string _dataType = "decimal";
     private string? _formulaError;
 
+    private bool _useSql;
+    private string _sqlExpression = string.Empty;
+    private HashSet<string> _selectedJoinIds = new();
+
     private bool IsValid =>
         !string.IsNullOrWhiteSpace(_label) &&
-        !string.IsNullOrWhiteSpace(_formula) &&
-        _formulaError is null;
+        (_useSql
+            ? !string.IsNullOrWhiteSpace(_sqlExpression)
+            : !string.IsNullOrWhiteSpace(_formula) && _formulaError is null);
 
     protected override void OnInitialized()
     {
@@ -127,6 +199,12 @@
         _formula = InitialFormula;
         _format = InitialFormat ?? string.Empty;
         _dataType = string.IsNullOrEmpty(InitialDataType) ? "decimal" : InitialDataType;
+        _sqlExpression = InitialSqlExpression ?? string.Empty;
+        _selectedJoinIds = InitialJoinIds is null
+            ? new HashSet<string>()
+            : new HashSet<string>(InitialJoinIds);
+        // Pre-flip into SQL mode when editing an existing SQL-mode calc.
+        _useSql = AllowSqlMode && !string.IsNullOrWhiteSpace(_sqlExpression);
         ValidateFormula();
     }
 
@@ -150,11 +228,16 @@
 
     private void Ok()
     {
+        // SQL mode wins when toggled on: clear the formula so a residual
+        // value doesn't get persisted alongside the SQL. Likewise, formula
+        // mode clears any saved SQL so an old SQL value can't leak back in.
         var result = new CalcDialogResult
         {
             Key = InitialKey ?? $"calc_{Guid.NewGuid():N}".Substring(0, 12),
             Label = _label.Trim(),
-            Formula = _formula.Trim(),
+            Formula = _useSql ? string.Empty : _formula.Trim(),
+            SqlExpression = _useSql ? _sqlExpression.Trim() : null,
+            JoinIds = _useSql && _selectedJoinIds.Count > 0 ? _selectedJoinIds.ToList() : null,
             Format = string.IsNullOrWhiteSpace(_format) ? null : _format,
             DataType = string.IsNullOrWhiteSpace(_dataType) ? null : _dataType
         };
@@ -162,12 +245,15 @@
     }
 
     public sealed record ColumnPick(string Key, string Label);
+    public sealed record JoinPick(string Id, string Label);
 
     public sealed class CalcDialogResult
     {
         public string Key { get; set; } = string.Empty;
         public string Label { get; set; } = string.Empty;
         public string Formula { get; set; } = string.Empty;
+        public string? SqlExpression { get; set; }
+        public List<string>? JoinIds { get; set; }
         public string? Format { get; set; }
         public string? DataType { get; set; }
     }

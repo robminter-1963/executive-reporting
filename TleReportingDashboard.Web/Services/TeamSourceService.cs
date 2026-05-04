@@ -20,39 +20,49 @@ public sealed class TeamSourceService : ITeamSourceService
     private readonly string _configConnStr;
     private readonly ICompanyConnectionAdminService _connections;
     private readonly ICompanyConnectionResolver _resolver;
+    private readonly ConfigDbCache _cache;
+    private readonly EditorModeState _editorMode;
     private readonly ILogger<TeamSourceService> _logger;
 
     public TeamSourceService(
         IConfiguration configuration,
         ICompanyConnectionAdminService connections,
         ICompanyConnectionResolver resolver,
+        ConfigDbCache cache,
+        EditorModeState editorMode,
         ILogger<TeamSourceService> logger)
     {
         _configConnStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required for TeamSourceService.");
         _connections = connections;
         _resolver = resolver;
+        _cache = cache;
+        _editorMode = editorMode;
         _logger = logger;
     }
 
-    public async Task<TeamSourceConfig?> GetConfigAsync(Guid connectionId, CancellationToken ct = default)
-    {
-        await using var conn = new SqlConnection(_configConnStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(@"
-            SELECT connection_id, teams_sql, members_sql, updated_at, updated_by
-              FROM EMPOWER.RPT_team_sources
-             WHERE connection_id = @c;", conn);
-        cmd.Parameters.Add(new SqlParameter("@c", connectionId));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct)) return null;
-        return new TeamSourceConfig(
-            reader.GetGuid(0),
-            reader.GetString(1),
-            reader.IsDBNull(2) ? null : reader.GetString(2),
-            reader.GetDateTime(3),
-            reader.IsDBNull(4) ? null : reader.GetString(4));
-    }
+    public Task<TeamSourceConfig?> GetConfigAsync(Guid connectionId, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("TeamSourceService", "Config", connectionId),
+            async () =>
+            {
+                await using var conn = new SqlConnection(_configConnStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(@"
+                    SELECT connection_id, teams_sql, members_sql, updated_at, updated_by
+                      FROM EMPOWER.RPT_team_sources
+                     WHERE connection_id = @c;", conn);
+                cmd.Parameters.Add(new SqlParameter("@c", connectionId));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                if (!await reader.ReadAsync(ct)) return null;
+                return new TeamSourceConfig(
+                    reader.GetGuid(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.GetDateTime(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4));
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task SaveConfigAsync(Guid connectionId, string teamsSql, string? membersSql,
                                       string? updatedBy, CancellationToken ct = default)
@@ -81,28 +91,33 @@ public sealed class TeamSourceService : ITeamSourceService
         cmd.Parameters.Add(new SqlParameter("@members", (object?)trimmedMembers ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@by", (object?)updatedBy ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate("TeamSourceService:");
 
         _logger.LogInformation("Team source SQL saved for connection {ConnectionId} by {By} (members_sql={MembersSet})",
             connectionId, updatedBy ?? "unknown", trimmedMembers is null ? "unset" : "set");
     }
 
-    public async Task<Dictionary<string, string>> GetTypeColumnsAsync(Guid connectionId, CancellationToken ct = default)
-    {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        await using var conn = new SqlConnection(_configConnStr);
-        await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(@"
-            SELECT team_type, owner_column
-              FROM EMPOWER.RPT_team_type_columns
-             WHERE connection_id = @c;", conn);
-        cmd.Parameters.Add(new SqlParameter("@c", connectionId));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            map[reader.GetString(0)] = reader.GetString(1);
-        }
-        return map;
-    }
+    public Task<Dictionary<string, string>> GetTypeColumnsAsync(Guid connectionId, CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("TeamSourceService", "TypeColumns", connectionId),
+            async () =>
+            {
+                var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                await using var conn = new SqlConnection(_configConnStr);
+                await conn.OpenAsync(ct);
+                await using var cmd = new SqlCommand(@"
+                    SELECT team_type, owner_column
+                      FROM EMPOWER.RPT_team_type_columns
+                     WHERE connection_id = @c;", conn);
+                cmd.Parameters.Add(new SqlParameter("@c", connectionId));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    map[reader.GetString(0)] = reader.GetString(1);
+                }
+                return map;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task SaveTypeColumnsAsync(Guid connectionId,
                                            IReadOnlyDictionary<string, string> typeColumns,
@@ -136,6 +151,7 @@ public sealed class TeamSourceService : ITeamSourceService
                 await ins.ExecuteNonQueryAsync(ct);
             }
             await tx.CommitAsync(ct);
+            _cache.Invalidate("TeamSourceService:TypeColumns:");
             _logger.LogInformation("Team-type columns saved for connection {ConnectionId}: {Count} mapping(s).",
                 connectionId, typeColumns.Count);
         }

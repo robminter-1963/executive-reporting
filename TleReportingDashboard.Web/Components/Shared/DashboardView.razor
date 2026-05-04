@@ -21,13 +21,22 @@
                     <MudSelectItem T="string" Value="@("")">-- None --</MudSelectItem>
                     @foreach (var col in DimensionColumns)
                     {
-                        <MudSelectItem T="string" Value="@col.FieldId">@col.Label</MudSelectItem>
+                        @* Append (*) to calc-bound entries so admins can
+                           distinguish them from real fields at a glance. *@
+                        var label = IsTableCalcKey(col.FieldId) ? $"{col.Label} (*)" : col.Label;
+                        <MudSelectItem T="string" Value="@col.FieldId">@label</MudSelectItem>
                     }
                 </MudSelect>
 
                 <MudSelect T="string" @bind-Value="_aggregation" @bind-Value:after="OnAggregationChanged"
                            Label="Aggregation" Variant="Variant.Outlined" Margin="Margin.Dense"
                            Dense Style="max-width: 140px;">
+                    @* NONE = passthrough — show the first non-null measure
+                       value per group instead of summing/averaging. Useful
+                       when each group has one row (e.g. one row per lead)
+                       so SUM is meaningless and the raw value is what the
+                       admin wants to display. *@
+                    <MudSelectItem T="string" Value="@("NONE")">None</MudSelectItem>
                     <MudSelectItem T="string" Value="@("SUM")">Sum</MudSelectItem>
                     <MudSelectItem T="string" Value="@("AVG")">Average</MudSelectItem>
                     <MudSelectItem T="string" Value="@("COUNT")">Count</MudSelectItem>
@@ -76,6 +85,9 @@
                     <MudSelectItem T="string" Value="@("Line")">Line</MudSelectItem>
                 </MudSelect>
 
+                <MudSwitch T="bool" @bind-Value="_showCountColumn" @bind-Value:after="OnCountToggled"
+                           Label="Count" Color="Color.Primary" Size="Size.Small"
+                           Style="margin: 0 4px;" />
                 <MudSwitch T="bool" @bind-Value="_showPercentColumn" @bind-Value:after="OnPercentToggled"
                            Label="% of Total" Color="Color.Primary" Size="Size.Small"
                            Style="margin: 0 4px;" />
@@ -92,13 +104,13 @@
                    the current value every render, so the closed display
                    tracks _defaultSortColumn through dimension adds/removes. *@
                 <MudSelect T="string" @bind-Value="_defaultSortColumn" @bind-Value:after="BuildSummary"
-                           ToStringFunc="@(k => string.IsNullOrEmpty(k) ? "-- None --" : GetDashColumnLabel(k))"
+                           ToStringFunc="@(k => string.IsNullOrEmpty(k) ? "-- None --" : GetSortDisplayLabel(k))"
                            Label="Default Sort" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                            Style="max-width: 180px;">
                     <MudSelectItem T="string" Value="@("")">-- None --</MudSelectItem>
-                    @foreach (var col in _dashColumnOrder)
+                    @foreach (var col in _dashColumnOrder.Where(IsSortKeyVisible))
                     {
-                        <MudSelectItem T="string" Value="@col">@GetDashColumnLabel(col)</MudSelectItem>
+                        <MudSelectItem T="string" Value="@col">@GetSortDisplayLabel(col)</MudSelectItem>
                     }
                 </MudSelect>
 
@@ -127,6 +139,12 @@
                                            ValueChanged="@(v => ChangeExtraAggregation(ecRef, v))"
                                            Variant="Variant.Text" Margin="Margin.Dense" Dense
                                            Style="min-width: 90px; max-width: 110px; font-size: 0.75rem; margin: -4px 0;">
+                                    @* NONE = passthrough first-value per
+                                       group, matching the primary measure's
+                                       NONE option. Same caveat: only
+                                       meaningful when each group has one row
+                                       or all rows share the value. *@
+                                    <MudSelectItem T="string" Value="@("NONE")">None</MudSelectItem>
                                     <MudSelectItem T="string" Value="@("SUM")">Sum</MudSelectItem>
                                     <MudSelectItem T="string" Value="@("AVG")">Avg</MudSelectItem>
                                     <MudSelectItem T="string" Value="@("COUNT")">Count</MudSelectItem>
@@ -167,13 +185,19 @@
             @if (_showKpiCards)
             {
             <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
-                <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #E8EAED; border-radius: 4px; min-width: 110px;">
-                    <MudStack Spacing="0">
-                        <KpiLabel Key="kpi_total" DefaultLabel="@($"Total {_aggregation}")"
-                                  CustomLabels="_customLabels" ReadOnly="ReadOnly" OnChanged="StateHasChanged" />
-                        <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@FormatNumber(_grandTotal)</MudText>
-                    </MudStack>
-                </MudPaper>
+                @* Total KPI only meaningful when there's an aggregation.
+                   NONE means "don't aggregate, don't show this on the
+                   dashboard" — so the Total card is suppressed too. *@
+                @if (_aggregation != "NONE")
+                {
+                    <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #E8EAED; border-radius: 4px; min-width: 110px;">
+                        <MudStack Spacing="0">
+                            <KpiLabel Key="kpi_total" DefaultLabel="@($"Total {_aggregation}")"
+                                      CustomLabels="_customLabels" ReadOnly="ReadOnly" OnChanged="StateHasChanged" />
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@FormatNumber(_grandTotal)</MudText>
+                        </MudStack>
+                    </MudPaper>
+                }
                 <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #E8EAED; border-radius: 4px; min-width: 110px;">
                     <MudStack Spacing="0">
                         <KpiLabel Key="kpi_rowcount" DefaultLabel="Row Count"
@@ -316,7 +340,7 @@
                                                     if (measureWidth == 0) measureWidth = 110;
                                                     <th class="@SortHeaderClass(ck)" style="width: @(measureWidth)px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
                                                         <span class="dash-th-inner">
-                                                            <EditableHeader Label="@GetLabel("measure", $"{_aggregation} of {GetMeasureLabel()}")"
+                                                            <EditableHeader Label="@GetLabel("measure", _aggregation == "NONE" ? GetMeasureLabel() : $"{_aggregation} of {GetMeasureLabel()}")"
                                                                             OnLabelChanged="@(v => SetLabel("measure", v))"
                                                                             Align="@a"
                                                                             OnAlignChanged="@(v => SetAlign("measure", v))"
@@ -371,7 +395,7 @@
                                                         if (ecWidth == 0) ecWidth = 110;
                                                         <th class="@SortHeaderClass(ck)" style="width: @(ecWidth)px; @AlignToCss(a)" @onclick="@(() => ToggleGridSort(ck))">
                                                             <span class="dash-th-inner">
-                                                                <EditableHeader Label="@GetLabel($"extra_{ecRef.Key}", $"{ecRef.Aggregation} of {GetFieldLabel(ecRef.FieldId)}")"
+                                                                <EditableHeader Label="@GetLabel($"extra_{ecRef.Key}", ecRef.Aggregation == "NONE" ? GetFieldLabel(ecRef.FieldId) : $"{ecRef.Aggregation} of {GetFieldLabel(ecRef.FieldId)}")"
                                                                                 OnLabelChanged="@(v => SetLabel($"extra_{ecRef.Key}", v))"
                                                                                 Align="@a"
                                                                                 OnAlignChanged="@(v => SetAlign($"extra_{ecRef.Key}", v))"
@@ -714,7 +738,7 @@
         position: sticky;
         top: 0;
         z-index: 2;
-        background: #FAFAFA;
+        background: lightblue;
         border-bottom: 1px solid #DADCE0;
         padding: 4px 8px;
         font-weight: 600;
@@ -731,7 +755,7 @@
         cursor: pointer;
     }
     .dash-summary-table thead th.sortable:hover {
-        background: #F1F3F4;
+        background: #9FCDE0;
     }
     .dash-th-inner {
         display: inline-flex;
@@ -783,12 +807,12 @@
         border: none;
     }
     .dash-footer-row {
-        background: #F1F3F4;
+        background: cornsilk;
         border-top: 2px solid #DADCE0;
         cursor: pointer;
     }
     .dash-footer-row:hover td {
-        background: #E8EAED;
+        background: #F2EAC0;
     }
     .dash-footer-cell {
         padding: 4px 8px;
@@ -796,7 +820,7 @@
         white-space: nowrap;
         position: sticky;
         bottom: 0;
-        background: #F1F3F4;
+        background: cornsilk;
         border-top: 2px solid #DADCE0;
     }
     .dash-footer-cell .totals-menu-anchor {
@@ -836,6 +860,13 @@
     // detail, fallback table). Merged template + report hidden lists,
     // computed upstream. Null means "no hides" — same as empty list.
     [Parameter] public List<string>? InitialHiddenColumns { get; set; }
+    // Per-report calc columns from the table view. Only SQL-mode entries
+    // are surfaced here — they're real server-side SELECT columns whose
+    // values land on every row, so they're valid group-by / dimension
+    // candidates. Formula-mode calcs aren't included: they evaluate
+    // client-side per-row from numeric inputs and don't make sense as
+    // dimensions.
+    [Parameter] public List<TableCalcColumnDef>? TableCalcColumns { get; set; }
 
     private string _groupByField = string.Empty;
     private string _measureField = string.Empty;
@@ -885,6 +916,11 @@
     // saved column order ("pct" presence at line ~892) so this only affects
     // brand-new reports that have no InitialConfig yet.
     private bool _showPercentColumn = false;
+    // Count column toggle. Defaults to true so existing reports continue to
+    // show the count column unchanged; admins can flip off when count is
+    // redundant (e.g. dashboards displaying a single measure where group
+    // count isn't useful information).
+    private bool _showCountColumn = true;
     // Default off for new reports. Legacy reports load their saved value
     // via InitialConfig.ShowKpiCards (line ~897), so this only affects
     // brand-new reports.
@@ -911,18 +947,44 @@
     {
         get
         {
+            var hidden = InitialHiddenColumns is { Count: > 0 }
+                ? new HashSet<string>(InitialHiddenColumns, StringComparer.OrdinalIgnoreCase)
+                : null;
+
             var fromData = (Data?.Columns ?? []).Where(c =>
-                c.DataType.Equals("text", StringComparison.OrdinalIgnoreCase) ||
-                c.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
-                c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase));
+                (c.DataType.Equals("text", StringComparison.OrdinalIgnoreCase) ||
+                 c.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
+                 c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase))
+                && (hidden is null || !hidden.Contains(c.FieldId)));
+
+            var existingIds = new HashSet<string>(fromData.Select(c => c.FieldId), StringComparer.OrdinalIgnoreCase);
+
+            // SQL-mode calc columns surface as synthetic dimensions. Their
+            // value lives on each row at row[Key]; from the dashboard's
+            // perspective they're just extra columns with a Label and
+            // DataType. Calc Keys never collide with field ids (they're
+            // "calc_xxxx").
+            // Materialize before the existingIds.Add loop — otherwise the
+            // deferred Where re-evaluates on the Concat below with the
+            // now-populated existingIds set, filtering the calcs back out
+            // and leaving the dropdown empty of calc entries.
+            var calcDims = SqlCalcAsColumnMeta()
+                .Where(c => !existingIds.Contains(c.FieldId))
+                .ToList();
+            foreach (var c in calcDims) existingIds.Add(c.FieldId);
 
             if (AllDimensionFields is null || AllDimensionFields.Count == 0)
-                return fromData;
+                return fromData
+                    .Concat(calcDims)
+                    .OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase);
 
-            // Merge: schema fields not already in the query result
-            var existingIds = new HashSet<string>(fromData.Select(c => c.FieldId), StringComparer.OrdinalIgnoreCase);
-            var extra = AllDimensionFields.Where(c => !existingIds.Contains(c.FieldId));
-            return fromData.Concat(extra).OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase);
+            var extra = AllDimensionFields.Where(c =>
+                !existingIds.Contains(c.FieldId)
+                && (hidden is null || !hidden.Contains(c.FieldId)));
+            return fromData
+                .Concat(calcDims)
+                .Concat(extra)
+                .OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase);
         }
     }
 
@@ -950,17 +1012,61 @@
                 c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrEmpty(c.DataType);
 
+            var hidden = InitialHiddenColumns is { Count: > 0 }
+                ? new HashSet<string>(InitialHiddenColumns, StringComparer.OrdinalIgnoreCase)
+                : null;
+            bool NotHidden(ColumnMeta c) => hidden is null || !hidden.Contains(c.FieldId);
+
             var fromData = (Data?.Columns ?? Enumerable.Empty<ColumnMeta>())
                 .Where(c => IsDimensional(c)
                          && c.FieldId != _groupByField
-                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase));
+                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase)
+                         && NotHidden(c));
             var existingIds = fromData.Select(c => c.FieldId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // SQL-mode calc columns are eligible extra dimensions too — their
+            // values are on each row in the row dict so the same group-key
+            // path that handles regular dim fields works unchanged.
+            // Materialize so the second Concat enumeration doesn't re-run
+            // the Where with a now-populated existingIds (would empty out
+            // the calc-dim list — same bug as DimensionColumns above).
+            var calcDims = SqlCalcAsColumnMeta()
+                .Where(c => IsDimensional(c)
+                         && !existingIds.Contains(c.FieldId)
+                         && c.FieldId != _groupByField
+                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+            foreach (var c in calcDims) existingIds.Add(c.FieldId);
             var extra = (AllDimensionFields ?? Enumerable.Empty<ColumnMeta>())
                 .Where(c => !existingIds.Contains(c.FieldId)
                          && c.FieldId != _groupByField
-                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase));
-            return fromData.Concat(extra).OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase);
+                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase)
+                         && NotHidden(c));
+            return fromData
+                .Concat(calcDims)
+                .Concat(extra)
+                .OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase);
         }
+    }
+
+    // Projects SQL-mode TableCalcColumns into ColumnMeta entries the
+    // dashboard's dimension pickers can consume. Synthetic — not part of
+    // Data.Columns; the dashboard's row-dict lookups still work because the
+    // SQL calc value lands at row[Key] via the query's SELECT alias.
+    // DataType defaults to "text" when blank (most CASE expressions return
+    // strings) so the dimensional filter keeps them in.
+    private IEnumerable<ColumnMeta> SqlCalcAsColumnMeta()
+    {
+        if (TableCalcColumns is null || TableCalcColumns.Count == 0)
+            return Enumerable.Empty<ColumnMeta>();
+        return TableCalcColumns
+            .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression)
+                     && !string.IsNullOrEmpty(c.Key))
+            .Select(c => new ColumnMeta
+            {
+                FieldId = c.Key,
+                Label = string.IsNullOrEmpty(c.Label) ? c.Key : c.Label,
+                DataType = string.IsNullOrWhiteSpace(c.DataType) ? "text" : c.DataType
+            });
     }
 
     private IEnumerable<Dictionary<string, object?>> DetailRows
@@ -1035,6 +1141,17 @@
         return val;
     }
 
+    // Tracks the QueryResponse reference last fed to BuildSummary. Blazor
+    // calls OnParametersSet on every parent re-render even when no
+    // parameter actually changed — so without this gate, a section switch
+    // on the master dashboard re-aggregates the entire dataset (30k+ rows)
+    // for every visible tile, costing seconds per switch.
+    // Event handlers (group-by, measure, sort changes) call BuildSummary
+    // directly when their config state mutates, so OnParametersSet only
+    // needs to fire it on first arrival or when the underlying data
+    // reference actually changes.
+    private QueryResponse? _summaryDataRef;
+
     protected override void OnParametersSet()
     {
         // Apply saved config once when data first arrives
@@ -1072,6 +1189,12 @@
             // otherwise the rebuild sees the default `true` and re-adds "pct"
             // that the user just turned off.
             _showPercentColumn = _dashColumnOrder.Contains("pct");
+            // Count visibility derived from the saved column order. New
+            // reports default to true (set in the field initializer) so the
+            // existing "always show count" behavior is preserved when no
+            // saved order exists yet.
+            if (_dashColumnOrder.Count > 0)
+                _showCountColumn = _dashColumnOrder.Contains("count");
             // Run regardless of whether we loaded a saved order — strips the now-
             // redundant "measure" column from dashboards saved under the old
             // model where COUNT aggregation still rendered a duplicate column.
@@ -1089,22 +1212,133 @@
                 ?? Data.Columns.FirstOrDefault()?.FieldId
                 ?? string.Empty;
         }
-        BuildSummary();
+        // Short-circuit when the parent re-rendered without a real data
+        // change. Reference equality is the right test — QueryService
+        // returns a fresh QueryResponse on every run, so a new reference
+        // genuinely means "data changed."
+        if (!ReferenceEquals(Data, _summaryDataRef))
+        {
+            _summaryDataRef = Data;
+            BuildSummary();
+        }
     }
 
     private async Task OnGroupByChanged(string value)
     {
+        // Drop any custom column caption that was authored for the previous
+        // group-by — captions are keyed by SLOT ("groupBy"), not by column,
+        // so they leak across group-by changes. The user sees the new
+        // column showing the OLD column's custom caption, which often looks
+        // like a join id or a stale field name. Clearing on change forces
+        // the dropdown / header to fall back to the actual column label.
+        if (!string.Equals(_groupByField, value, StringComparison.OrdinalIgnoreCase))
+        {
+            _customLabels.Remove("groupBy");
+        }
+
         _groupByField = value;
         _selectedGroup = string.Empty;
 
-        // If the selected field isn't in the current query result, ask the parent to re-run with it
-        if (!string.IsNullOrEmpty(value) && Data?.Columns.All(c => !c.FieldId.Equals(value, StringComparison.OrdinalIgnoreCase)) == true)
+        // If the selected field isn't in the current query result, ask the
+        // parent to re-run with it. Skip when the picked id is a SQL-mode
+        // calc Key — calcs aren't field ids; their values are already in
+        // every row dict via the query's SELECT alias, so no re-run is
+        // needed (and the parent would otherwise try to validate the calc
+        // Key as a field id and reject it).
+        if (!string.IsNullOrEmpty(value)
+            && !IsTableCalcKey(value)
+            && Data?.Columns.All(c => !c.FieldId.Equals(value, StringComparison.OrdinalIgnoreCase)) == true)
         {
             if (OnExtraFieldRequired.HasDelegate)
                 await OnExtraFieldRequired.InvokeAsync(value);
         }
 
         BuildSummary();
+    }
+
+    private bool IsTableCalcKey(string id) =>
+        TableCalcColumns is not null
+        && TableCalcColumns.Any(c => string.Equals(c.Key, id, StringComparison.OrdinalIgnoreCase));
+
+    // True when the saved-sort entry references a hidden field id and
+    // should be filtered out of the Default Sort dropdown. Calc keys, the
+    // built-in ("count" / "pct" / "measure"), and dashboard-internal
+    // calculated columns are never hidden by the field-visibility list.
+    private bool IsSortKeyVisible(string sortKey)
+    {
+        if (InitialHiddenColumns is null || InitialHiddenColumns.Count == 0) return true;
+        var hidden = new HashSet<string>(InitialHiddenColumns, StringComparer.OrdinalIgnoreCase);
+
+        if (sortKey == "groupBy")
+        {
+            // The primary group-by could be a real field id (filter out
+            // when hidden) or a calc Key (never filtered).
+            return string.IsNullOrEmpty(_groupByField)
+                || IsTableCalcKey(_groupByField)
+                || !hidden.Contains(_groupByField);
+        }
+        if (sortKey.StartsWith("dim:"))
+        {
+            var fid = sortKey[4..];
+            return IsTableCalcKey(fid) || !hidden.Contains(fid);
+        }
+        if (sortKey.StartsWith("extra:"))
+        {
+            // Strip the trailing aggregation suffix to recover the field id
+            // (extra Key shape is "<fieldId>_<AGG>"). Rare for an extra to
+            // share a hidden id, but cover it for symmetry.
+            var key = sortKey[6..];
+            var lastUnderscore = key.LastIndexOf('_');
+            if (lastUnderscore <= 0) return true;
+            var fid = key[..lastUnderscore];
+            return !hidden.Contains(fid);
+        }
+        // count / pct / measure / calc:<key> — not field-bound, always shown.
+        return true;
+    }
+
+    // True when the sort key is bound to a calc — used to append (*) to its
+    // label in the Default Sort dropdown so admins can spot calc entries.
+    private bool IsCalcBoundSortKey(string sortKey)
+    {
+        if (sortKey.StartsWith("calc:")) return true;
+        if (sortKey == "groupBy" && !string.IsNullOrEmpty(_groupByField) && IsTableCalcKey(_groupByField)) return true;
+        if (sortKey.StartsWith("dim:") && IsTableCalcKey(sortKey[4..])) return true;
+        return false;
+    }
+
+    // Computes the label for a sort dropdown entry. For calc-bound entries
+    // we deliberately bypass _customLabels and read the calc's Label
+    // directly — the per-slot custom captions can stay set across
+    // group-by changes, so the dropdown otherwise shows a stale caption
+    // (e.g. a previous column's header customization that looked like a
+    // join id) instead of the calc's actual name. Non-calc entries keep
+    // the existing GetDashColumnLabel path so user customizations on
+    // count/pct/extras still apply.
+    private string GetSortDisplayLabel(string sortKey)
+    {
+        if (sortKey == "groupBy"
+            && !string.IsNullOrEmpty(_groupByField)
+            && TableCalcColumns?.FirstOrDefault(c =>
+                string.Equals(c.Key, _groupByField, StringComparison.OrdinalIgnoreCase)) is { } gbCalc
+            && !string.IsNullOrEmpty(gbCalc.Label))
+        {
+            return $"{gbCalc.Label} (*)";
+        }
+        if (sortKey.StartsWith("dim:")
+            && TableCalcColumns?.FirstOrDefault(c =>
+                string.Equals(c.Key, sortKey[4..], StringComparison.OrdinalIgnoreCase)) is { } dimCalc
+            && !string.IsNullOrEmpty(dimCalc.Label))
+        {
+            return $"{dimCalc.Label} (*)";
+        }
+        if (sortKey.StartsWith("calc:")
+            && _calcColumns.FirstOrDefault(c => c.Key == sortKey[5..]) is { } cc
+            && !string.IsNullOrEmpty(cc.Label))
+        {
+            return $"{cc.Label} (*)";
+        }
+        return GetDashColumnLabel(sortKey);
     }
 
     private void OnAggregationChanged()
@@ -1135,6 +1369,30 @@
             if (idx >= 0)
             {
                 _lastPctIndex = idx;
+                _dashColumnOrder.RemoveAt(idx);
+            }
+        }
+    }
+
+    // Mirror of OnPercentToggled for the count column. Remembers the last
+    // position so toggling off → on restores it to the same slot.
+    private int _lastCountIndex = -1;
+
+    private void OnCountToggled()
+    {
+        if (_showCountColumn && !_dashColumnOrder.Contains("count"))
+        {
+            var insertAt = _lastCountIndex >= 0 && _lastCountIndex <= _dashColumnOrder.Count
+                ? _lastCountIndex
+                : _dashColumnOrder.Count;
+            _dashColumnOrder.Insert(insertAt, "count");
+        }
+        else if (!_showCountColumn)
+        {
+            var idx = _dashColumnOrder.IndexOf("count");
+            if (idx >= 0)
+            {
+                _lastCountIndex = idx;
                 _dashColumnOrder.RemoveAt(idx);
             }
         }
@@ -1333,6 +1591,10 @@
             "AVG" => values.Average(),
             "MAX" => values.Max(),
             "MIN" => values.Min(),
+            // NONE = passthrough: show the first non-null measure value per
+            // group. Meaningful when each group has one row (or all rows
+            // share the value) — otherwise the admin sees only the first.
+            "NONE" => values.First(),
             _ => values.Sum()
         };
     }
@@ -1357,8 +1619,10 @@
 
         // Per-field Format wins. Only honor it if it looks like a .NET format
         // string — masks like "(999) 999-9999" are nonsensical on SUM/AVG/etc.
+        // DataType passed through so date / phone / etc. defaults still apply
+        // when the format string doesn't itself dictate the shape.
         if (!string.IsNullOrWhiteSpace(measureCol?.Format) && !IsMask(measureCol.Format))
-            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, measureCol.Format);
+            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, measureCol.Format, measureCol.DataType);
 
         return dataType switch
         {
@@ -1379,8 +1643,11 @@
             return string.Empty;
 
         // Per-field Format wins over the DataType default — matches the main grid.
+        // DataType is passed so phone fields take the dedicated phone branch
+        // (with the digit-count underflow guard), date fields get TryToDateTime,
+        // etc. — without it the formatter falls into the generic mask path.
         if (!string.IsNullOrWhiteSpace(col.Format))
-            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format);
+            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format, col.DataType);
 
         return col.DataType.ToLowerInvariant() switch
         {
@@ -1437,6 +1704,11 @@
             "MIN" => "MIN",
             "MAX" => "MAX",
             "MEDIAN" => "MEDIAN",
+            // NONE returns a passthrough first-value per group, so summing
+            // it across groups is meaningless. AVG of those values is the
+            // most useful default (e.g. "average lead income"). Admin can
+            // still override via the totals menu on each column.
+            "NONE" => "AVG",
             _ => "SUM"
         };
 
@@ -1620,28 +1892,42 @@
 
     // Applies the group-by field's Format to the raw group key string. Masks
     // (phone, SSN) walk the string's characters; .NET format strings parse the
-    // string as a DateTime or number first via FieldFormatter.
+    // string as a DateTime or number first via FieldFormatter. DataType is
+    // forwarded so phone fields hit the dedicated phone branch (with +1 strip
+    // and digit-count underflow guard) rather than the generic mask path.
     private string FormatGroupKey(string groupKey)
     {
         if (string.IsNullOrEmpty(groupKey)) return groupKey;
         var col = Data?.Columns.FirstOrDefault(c => c.FieldId == _groupByField);
         if (string.IsNullOrWhiteSpace(col?.Format)) return groupKey;
-        return TleReportingDashboard.Web.Services.FieldFormatter.Format(groupKey, col.Format);
+        return TleReportingDashboard.Web.Services.FieldFormatter.Format(groupKey, col.Format, col.DataType);
     }
 
     // Per-row dimension value, respecting the field's Format. Blank groups
     // render as "(empty)" (matches the GroupKey convention for nulls).
+    // DataType passes through for phone / date / etc. handling parity with
+    // the table grid.
     private string FormatDimensionValue(SummaryRow row, string fieldId)
     {
         if (!row.Dimensions.TryGetValue(fieldId, out var raw) || string.IsNullOrEmpty(raw))
             return string.Empty;
         var col = Data?.Columns.FirstOrDefault(c => c.FieldId.Equals(fieldId, StringComparison.OrdinalIgnoreCase));
         if (string.IsNullOrWhiteSpace(col?.Format)) return raw;
-        return TleReportingDashboard.Web.Services.FieldFormatter.Format(raw, col.Format);
+        return TleReportingDashboard.Web.Services.FieldFormatter.Format(raw, col.Format, col.DataType);
     }
 
-    private string GetGroupByLabel() =>
-        Data?.Columns.FirstOrDefault(c => c.FieldId == _groupByField)?.Label ?? _groupByField;
+    private string GetGroupByLabel()
+    {
+        var fromData = Data?.Columns.FirstOrDefault(c => c.FieldId == _groupByField)?.Label;
+        if (!string.IsNullOrEmpty(fromData)) return fromData;
+        // Group-by may be a SQL-mode calc Key — those aren't in Data.Columns
+        // so the regular lookup falls back to the ugly Key string. Fall back
+        // to the calc's friendly Label instead.
+        var calc = TableCalcColumns?.FirstOrDefault(c =>
+            string.Equals(c.Key, _groupByField, StringComparison.OrdinalIgnoreCase));
+        if (calc is not null && !string.IsNullOrEmpty(calc.Label)) return calc.Label;
+        return _groupByField;
+    }
 
     private string GetMeasureLabel() =>
         Data?.Columns.FirstOrDefault(c => c.FieldId == _measureField)?.Label ?? _measureField;
@@ -1652,11 +1938,19 @@
         // "pct" is gated on _showPercentColumn so the toggle stays authoritative.
         // "measure" is skipped when aggregation is COUNT — the dedicated "count"
         // column already shows that value, so a duplicate "COUNT of X" column
-        // isn't useful.
-        var validKeys = new HashSet<string> { "groupBy", "count" };
-        if (_aggregation != "COUNT") validKeys.Add("measure");
+        // isn't useful. NONE also suppresses the measure column: NONE means
+        // "don't aggregate, don't show on the dashboard."
+        var validKeys = new HashSet<string> { "groupBy" };
+        if (_showCountColumn) validKeys.Add("count");
+        if (_aggregation != "COUNT" && _aggregation != "NONE") validKeys.Add("measure");
         if (_showPercentColumn) validKeys.Add("pct");
-        foreach (var ec in _extraColumns) validKeys.Add($"extra:{ec.Key}");
+        // Extras with NONE follow the same rule — admin set "no aggregation",
+        // so the column doesn't appear on the dashboard.
+        foreach (var ec in _extraColumns)
+        {
+            if (string.Equals(ec.Aggregation, "NONE", StringComparison.OrdinalIgnoreCase)) continue;
+            validKeys.Add($"extra:{ec.Key}");
+        }
         foreach (var fid in _extraDimensions) validKeys.Add($"dim:{fid}");
         foreach (var cc in _calcColumns) validKeys.Add($"calc:{cc.Key}");
 
@@ -1686,7 +1980,7 @@
     private string GetDashColumnLabel(string key) => key switch
     {
         "groupBy" => GetLabel("groupBy", GetGroupByLabel()),
-        "measure" => GetLabel("measure", $"{_aggregation} {GetMeasureLabel()}"),
+        "measure" => GetLabel("measure", _aggregation == "NONE" ? GetMeasureLabel() : $"{_aggregation} {GetMeasureLabel()}"),
         "count" => GetLabel("count", "Count"),
         "pct" => GetLabel("pct", "% of Total"),
         _ when key.StartsWith("calc:") =>
@@ -1695,7 +1989,7 @@
                 : key,
         _ when key.StartsWith("extra:") =>
             _extraColumns.FirstOrDefault(ec => ec.Key == key[6..]) is { } ec
-                ? GetLabel($"extra_{ec.Key}", $"{ec.Aggregation} {GetFieldLabel(ec.FieldId)}")
+                ? GetLabel($"extra_{ec.Key}", ec.Aggregation == "NONE" ? GetFieldLabel(ec.FieldId) : $"{ec.Aggregation} {GetFieldLabel(ec.FieldId)}")
                 : key,
         _ when key.StartsWith("dim:") =>
             GetLabel($"dim_{key[4..]}", GetFieldLabel(key[4..])),
@@ -1725,7 +2019,10 @@
         // If the field isn't in the current result set, ask the parent to
         // re-run the query with it included — same pattern as the group-by
         // picker, so the dimension value actually shows up in each row.
-        if (Data is not null && Data.Columns.All(c => !c.FieldId.Equals(fieldId, StringComparison.OrdinalIgnoreCase)))
+        // Calc keys skip this: their values are already in every row dict.
+        if (!IsTableCalcKey(fieldId)
+            && Data is not null
+            && Data.Columns.All(c => !c.FieldId.Equals(fieldId, StringComparison.OrdinalIgnoreCase)))
         {
             if (OnExtraFieldRequired.HasDelegate)
                 await OnExtraFieldRequired.InvokeAsync(fieldId);
@@ -2018,6 +2315,7 @@
                     "COUNT" => values.Count,
                     "MAX" => values.Max(),
                     "MIN" => values.Min(),
+                    "NONE" => values.First(),
                     _ => values.Sum()
                 }
                 : 0;
@@ -2032,7 +2330,7 @@
         var dataType = col?.DataType?.ToLowerInvariant() ?? "";
         if (ec.Aggregation == "COUNT") return val.ToString("N0");
         if (!string.IsNullOrWhiteSpace(col?.Format) && !IsMask(col.Format))
-            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format);
+            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format, col.DataType);
         return dataType switch
         {
             "currency" or "money" => val.ToString("C0"),
@@ -2053,7 +2351,7 @@
         var dataType = col?.DataType?.ToLowerInvariant() ?? "";
         if (ec.Aggregation == "COUNT") return val.ToString("N0");
         if (!string.IsNullOrWhiteSpace(col?.Format) && !IsMask(col.Format))
-            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format);
+            return TleReportingDashboard.Web.Services.FieldFormatter.Format(val, col.Format, col.DataType);
         return dataType switch
         {
             "currency" or "money" => val.ToString("C0"),
@@ -2198,11 +2496,20 @@
     }
 
     // Data type of the current group-by field (looked up in the query columns metadata).
+    // Falls back to the calc column's DataType when the group-by is a SQL-mode
+    // calc Key (those don't appear in Data.Columns).
     private string GetGroupByDataType()
     {
-        if (string.IsNullOrEmpty(_groupByField) || Data?.Columns is null) return string.Empty;
-        return Data.Columns.FirstOrDefault(c =>
-            string.Equals(c.FieldId, _groupByField, StringComparison.OrdinalIgnoreCase))?.DataType ?? string.Empty;
+        if (string.IsNullOrEmpty(_groupByField)) return string.Empty;
+        if (Data?.Columns is not null)
+        {
+            var col = Data.Columns.FirstOrDefault(c =>
+                string.Equals(c.FieldId, _groupByField, StringComparison.OrdinalIgnoreCase));
+            if (col is not null) return col.DataType ?? string.Empty;
+        }
+        var calc = TableCalcColumns?.FirstOrDefault(c =>
+            string.Equals(c.Key, _groupByField, StringComparison.OrdinalIgnoreCase));
+        return calc?.DataType ?? string.Empty;
     }
 
     // Mirrors ReportGrid.IsNumeric — kept inline so both components can live independently.
@@ -2393,6 +2700,10 @@
         else
             RebuildDashColumnOrder();
         _showPercentColumn = _dashColumnOrder.Contains("pct");
+        // Mirror the count-visibility derivation from InitialConfig load so a
+        // mid-session config swap respects the saved toggle.
+        if (_dashColumnOrder.Count > 0)
+            _showCountColumn = _dashColumnOrder.Contains("count");
         _showKpiCards = config.ShowKpiCards;
         _showOnMaster = config.ShowOnMaster;
         _selectedGroup = string.Empty;

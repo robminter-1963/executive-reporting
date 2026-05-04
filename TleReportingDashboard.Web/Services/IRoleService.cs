@@ -13,7 +13,11 @@ public interface IRoleService
     Task<RoleRecord?> GetByNameAsync(string name, CancellationToken ct = default);
     Task<RoleRecord> CreateAsync(string name, string? description, string scopeRule,
                                   string? createdBy, CancellationToken ct = default);
+    // adminSections is the JSON-serialized list of admin-section keys this
+    // role can access (see AdminSections.cs). Null or empty → role has no
+    // admin access. Administrator role bypasses regardless of value.
     Task UpdateAsync(Guid id, string name, string? description, string scopeRule, bool isActive,
+                     IReadOnlyList<string>? adminSections,
                      CancellationToken ct = default);
     // Hard-delete. If any RPT_users row still points at the role, the FK
     // ON DELETE SET NULL clears their role_id — the users aren't orphaned.
@@ -46,6 +50,26 @@ public sealed record RoleRecord(
     // Renaming the seed row in the UI is allowed but stops the is_admin
     // auto-sync from firing; advise admins not to rename this one.
     public const string AdministratorName = "Administrator";
+
+    // Canonical name of the System Support role — a fixed name lets the
+    // app surface "this is a built-in role" semantics (no rename / no
+    // delete) without storing a separate is_builtin flag on the row.
+    public const string SystemSupportName = "System Support";
+
+    // True when the role is one of the two built-in roles (Administrator
+    // or System Support). Built-in roles can't be renamed or deleted —
+    // both UI and service-layer guards key off this so a rogue API call
+    // can't bypass the UI lock.
+    public static bool IsBuiltInName(string? name) =>
+        !string.IsNullOrWhiteSpace(name)
+        && (string.Equals(name, AdministratorName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, SystemSupportName, StringComparison.OrdinalIgnoreCase));
+
+    // Admin-section keys this role is allowed to access (see AdminSections.cs
+    // for the catalog). Null or empty list = no admin access. Administrator
+    // role bypasses this and always sees every section. Stored as a JSON
+    // array on RPT_roles.admin_sections; persisted via RoleService.UpdateAsync.
+    public IReadOnlyList<string>? AdminSections { get; init; }
 }
 
 // Allowed values for RPT_roles.scope_rule. Match the CHECK constraint in

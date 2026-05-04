@@ -10,10 +10,10 @@
    Server + Postgres + certs) that used to clip because no ancestor
    provides a scroll region — MudTabs' panel doesn't scroll by default,
    and MudMainContent's default overflow is visible. max-height subtracts
-   the app bar (48px), the Admin page header row (~60px), the tab bar
+   the app bar (64px), the Admin page header row (~60px), the tab bar
    (~50px), and a buffer. *@
 <MudStack Spacing="3" Class="pa-2"
-          Style="max-height: calc(100vh - 180px); overflow-y: auto;">
+          Style="max-height: calc(100vh - 196px); overflow-y: auto;">
     <MudText Typo="Typo.body2" Color="Color.Secondary">
         Each company can have one or more named data-source connections. Exactly one per company is the default; the <code>ICompanyConnectionResolver</code> picks that row unless a caller asks for a specific name.
     </MudText>
@@ -36,6 +36,18 @@
                            StartIcon="@Icons.Material.Filled.Add" OnClick="StartNew">
                     Add Connection
                 </MudButton>
+                @* Bulk copy from another company. Each copy lands with a
+                   name prefix so the (company_id, name) unique index doesn't
+                   conflict with existing rows. is_default is always cleared
+                   on copies — admin promotes one explicitly afterwards. *@
+                @if (_companies.Count > 1)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.ContentCopy"
+                               OnClick="OpenCopyFromCompanyDialog">
+                        Copy from another company
+                    </MudButton>
+                }
             }
             @* Indicator lives here (not inside the editor) so it survives
                the post-save collapse of the edit panel. *@
@@ -379,6 +391,69 @@
         };
         _testResult = null;
         _editing = true;
+    }
+
+    // Opens the "Copy from another company" picker. The dialog returns
+    // (sourceConnectionIds, namePrefix) once the admin has selected which
+    // rows to copy; we delegate to the service's bulk INSERT...SELECT,
+    // then reload the list. Failures surface inline so the admin sees
+    // what went wrong (most likely culprit: the prefix already collides
+    // with a partial copy from a previous attempt).
+    private async Task OpenCopyFromCompanyDialog()
+    {
+        if (_selectedCompanyId is not Guid targetId) return;
+        var target = _companies.FirstOrDefault(c => c.Id == targetId);
+        if (target is null) return;
+
+        var others = _companies
+            .Where(c => c.Id != targetId)
+            .Select(c => new CopyConnectionsDialog.CompanyOption(c.Id, $"{c.Name} ({c.Code})"))
+            .ToList();
+        if (others.Count == 0)
+        {
+            Snackbar.Add("No other companies to copy from.", Severity.Info);
+            return;
+        }
+
+        var dialogParams = new DialogParameters
+        {
+            { nameof(CopyConnectionsDialog.TargetCompanyLabel), $"{target.Name} ({target.Code})" },
+            { nameof(CopyConnectionsDialog.OtherCompanies), (IReadOnlyList<CopyConnectionsDialog.CompanyOption>)others }
+        };
+        var dialog = await DialogService.ShowAsync<CopyConnectionsDialog>(
+            "Copy connections from another company", dialogParams,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not CopyConnectionsDialog.Result picked)
+            return;
+
+        try
+        {
+            var copied = await ConnectionSvc.CopyConnectionsAsync(picked.SourceConnectionIds, targetId, picked.NamePrefix);
+            if (copied == 0)
+            {
+                Snackbar.Add("Nothing was copied — the selected ids didn't resolve to source rows.", Severity.Warning);
+            }
+            else
+            {
+                Snackbar.Add($"Copied {copied} connection(s).", Severity.Success);
+            }
+            // Reload the target's list so the new rows appear.
+            _connections = await ConnectionSvc.GetByCompanyAsync(targetId);
+        }
+        catch (SqlException sqlEx) when (sqlEx.Number == 2601 || sqlEx.Number == 2627)
+        {
+            // Unique-index violation — name prefix didn't make the copies unique.
+            // Tells the admin to pick a different prefix (or delete the prior batch).
+            Snackbar.Add(
+                "Copy failed: a connection with one of the prefixed names already exists on this company. " +
+                "Pick a different prefix or remove the prior copies first.",
+                Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Copy failed: {ex.Message}", Severity.Error);
+        }
     }
 
     private void StartEdit(CompanyConnectionRecord r)

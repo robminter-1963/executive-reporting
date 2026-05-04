@@ -114,6 +114,24 @@
                 </MudItem>
             }
 
+            @* PR-3. Restrict-to-Primary picker. Applies in BOTH structured
+               and Raw SQL modes — a primary scope is independent of how
+               the join's SQL was authored. Empty selection ("Any primary")
+               clears the scope and the join behaves as a generic. *@
+            <MudItem xs="12">
+                <MudSelect T="string" Value="_selectedPrimaryKey" ValueChanged="OnPrimaryPicked"
+                           Label="Restrict to Primary"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Clearable
+                           HelperText="Optional. When set, this join is only used by reports whose primary table matches. Blank = generic (any primary).">
+                    <MudSelectItem T="string" Value="@string.Empty">Any primary (generic)</MudSelectItem>
+                    @foreach (var entry in _effectivePrimaryAliases.OrderBy(BuildAliasLabel, StringComparer.OrdinalIgnoreCase))
+                    {
+                        var key = BuildAliasKey(entry);
+                        <MudSelectItem T="string" Value="@key">@BuildAliasLabel(entry)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
             <MudItem xs="12">
                 <MudPaper Elevation="0" Class="pa-2" Style="background: #F8F9FA; border: 1px solid #E8EAED; border-radius: 4px;">
                     <MudText Typo="Typo.caption" Color="Color.Secondary">Preview:</MudText>
@@ -147,6 +165,10 @@
     // the future (e.g. if Target ever needs filtering again). Today both
     // receive the same full catalog from SchemaBuilder.OpenJoinDialog.
     [Parameter] public IEnumerable<CustomPrimaryTableRecord>? AvailableSourceAliases { get; set; }
+    // Primary-scope picker (PR-3). Only entries marked IsPrimary in the
+    // Table Aliases catalog appear here — they're the valid report roots
+    // a join can be scoped to. Null/empty list disables the picker.
+    [Parameter] public IEnumerable<CustomPrimaryTableRecord>? AvailablePrimaryAliases { get; set; }
 
     private SchemaBuilder.JoinEntry _edited = new();
     private string _originalRef = string.Empty;
@@ -162,6 +184,10 @@
     // when no full source list is supplied.
     private List<CustomPrimaryTableRecord> _effectiveSourceAliases = new();
     private string _selectedSourceKey = string.Empty;
+    // Primary-scope picker. Empty key = "Any primary (generic)" — the
+    // first MudSelectItem below — which clears PrimaryTable / PrimaryAlias.
+    private List<CustomPrimaryTableRecord> _effectivePrimaryAliases = new();
+    private string _selectedPrimaryKey = string.Empty;
 
     private string TargetTableHelperText =>
         _effectiveAliases.Count == 0
@@ -208,6 +234,24 @@
         }
     }
 
+    private void OnPrimaryPicked(string? key)
+    {
+        _selectedPrimaryKey = key ?? string.Empty;
+        if (string.IsNullOrEmpty(key))
+        {
+            // "Any primary (generic)" — preserves legacy behavior.
+            _edited.PrimaryTable = string.Empty;
+            _edited.PrimaryAlias = string.Empty;
+            return;
+        }
+        var match = _effectivePrimaryAliases.FirstOrDefault(e => BuildAliasKey(e) == key);
+        if (match is not null)
+        {
+            _edited.PrimaryTable = match.TableName;
+            _edited.PrimaryAlias = match.Alias ?? string.Empty;
+        }
+    }
+
     // Dialect-aware examples so Postgres admins don't see Empower SQL
     // Server table names in every placeholder.
     private bool IsPostgres => string.Equals(ConnectionType, "postgres", StringComparison.OrdinalIgnoreCase);
@@ -241,7 +285,9 @@
                 UseRawSql = Join.UseRawSql,
                 RawSql = Join.RawSql,
                 SourceTable = Join.SourceTable,
-                SourceAlias = Join.SourceAlias
+                SourceAlias = Join.SourceAlias,
+                PrimaryTable = Join.PrimaryTable,
+                PrimaryAlias = Join.PrimaryAlias
             };
             _originalRef = !string.IsNullOrWhiteSpace(Join.Alias) ? Join.Alias : Join.TargetTable;
         }
@@ -277,6 +323,33 @@
                 });
             }
             _selectedAliasKey = $"{tableKey}|{aliasKey}";
+        }
+
+        // Primary-scope picker. Filter is applied caller-side
+        // (AvailablePrimaryAliases is already primary-flagged-only); the
+        // dialog just renders. Synthesize a synthetic entry for the saved
+        // primary if it's missing from the catalog so legacy rows stay
+        // editable, mirroring the source/target patterns.
+        _effectivePrimaryAliases = AvailablePrimaryAliases is null
+            ? new List<CustomPrimaryTableRecord>()
+            : AvailablePrimaryAliases.ToList();
+        if (!IsNew && !string.IsNullOrWhiteSpace(_edited.PrimaryTable))
+        {
+            var pTableKey = _edited.PrimaryTable;
+            var pAliasKey = _edited.PrimaryAlias ?? string.Empty;
+            var pExists = _effectivePrimaryAliases.Any(a =>
+                string.Equals(a.TableName, pTableKey, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(a.Alias ?? string.Empty, pAliasKey, StringComparison.OrdinalIgnoreCase));
+            if (!pExists)
+            {
+                _effectivePrimaryAliases.Insert(0, new CustomPrimaryTableRecord
+                {
+                    Id = Guid.Empty,
+                    TableName = pTableKey,
+                    Alias = pAliasKey
+                });
+            }
+            _selectedPrimaryKey = $"{pTableKey}|{pAliasKey}";
         }
 
         // Mirror the legacy-row injection for the Source picker: if the

@@ -53,6 +53,27 @@ public static class QueryBuilder
             throw new ArgumentException($"Invalid join type: '{joinType}'");
     }
 
+    // Qualifies the request's FallbackSortColumns (raw PK column names) with
+    // the primary table's alias (or bare name when none) so they're safe to
+    // drop into an ORDER BY. Each name is identifier-validated — the values
+    // come from information_schema, but the trust boundary still lives here.
+    // Returns an empty list when no PKs were shipped, so callers can do a
+    // simple null/empty check.
+    private static List<string> BuildPkOrderExpressions(
+        IList<string>? fallbackSortColumns, string? primaryAlias, string primaryName)
+    {
+        var result = new List<string>();
+        if (fallbackSortColumns is null || fallbackSortColumns.Count == 0) return result;
+        var aliasOrName = !string.IsNullOrWhiteSpace(primaryAlias) ? primaryAlias : primaryName;
+        foreach (var col in fallbackSortColumns)
+        {
+            if (string.IsNullOrWhiteSpace(col)) continue;
+            ValidateIdentifier(col, "FallbackSortColumns");
+            result.Add(string.IsNullOrWhiteSpace(aliasOrName) ? col : $"{aliasOrName}.{col}");
+        }
+        return result;
+    }
+
     // Topologically sorts a list of JOIN SQL fragments. A fragment B is placed
     // after fragment A when B's ON/SQL references an alias defined by A. Self-
     // references and references to unknown aliases (primary table, external
@@ -172,6 +193,10 @@ public static class QueryBuilder
         TleReportingDashboard.Web.Services.QueryPipeline.ISqlDialect? dialect = null,
         string? primaryTableOverride = null)
     {
+        // Per-report SQL-mode calc columns ride on the request so every call
+        // site (QueryService, ReportBuilder preview, detail viewer, tests)
+        // picks them up without a signature change.
+        var tableCalcSqlColumns = request.TableCalcSqlColumns;
         // Default to SQL Server dialect when caller didn't supply one —
         // preserves the historical behavior for any call site that hasn't
         // been updated yet. QueryService and SqlEmitter now always pass
@@ -230,6 +255,27 @@ public static class QueryBuilder
         // Inline-SQL fields manage their own table/column references inside SqlExpression
         // (admin-curated, same trust model as JoinDefinition.Sql) — skip identifier validation.
         var resolvedFields = dedupedFieldIds.Select(id => fieldLookup[id]).ToList();
+
+        // Sort-only fields. The Report Builder lets admins pick a Sort By
+        // / Then By field that isn't part of the report's visible columns
+        // (useful for "sort by created_at on a Status / Name report" or
+        // "tiebreak by an unselected unique field under DISTINCT"). Pull
+        // any such field into the SELECT list so it's reachable from the
+        // ORDER BY clause — required under SELECT DISTINCT, harmless
+        // otherwise. The QueryService column-metadata path keys off
+        // request.FieldIds, NOT resolvedFields, so these silent additions
+        // don't surface as grid columns.
+        foreach (var sortFid in new[] { request.SortField, request.SecondarySortField })
+        {
+            if (string.IsNullOrWhiteSpace(sortFid)) continue;
+            if (resolvedFields.Any(f => string.Equals(f.Id, sortFid, StringComparison.OrdinalIgnoreCase))) continue;
+            // Calc keys aren't field ids — they ride on tableCalcSqlColumns
+            // and are validated separately.
+            if (tableCalcSqlColumns?.Any(c => string.Equals(c.Key, sortFid, StringComparison.OrdinalIgnoreCase)) == true) continue;
+            if (!fieldLookup.TryGetValue(sortFid, out var sortField)) continue;
+            resolvedFields.Add(sortField);
+        }
+
         foreach (var field in resolvedFields)
         {
             if (!string.IsNullOrWhiteSpace(field.SqlExpression))
@@ -356,13 +402,95 @@ public static class QueryBuilder
         // the server already aggregates).
         var willGroupBy = resolvedFields.Any(IsAggregateField);
 
-        // SELECT clause
+        // SELECT clause. DISTINCT is opt-in per-report — useful when a
+        // one-to-many LEFT JOIN multiplies the parent rows and the admin
+        // only cares about the distinct outer rows. Skipped automatically
+        // when willGroupBy is true (GROUP BY already deduplicates by the
+        // grouped key set, so DISTINCT is redundant noise on those plans
+        // — and the planner's de-dupe path is usually slower than the
+        // grouping it'd be paired with).
         sb.Append("SELECT ");
+        if (request.Distinct && !willGroupBy)
+            sb.Append("DISTINCT ");
         var selectColumns = resolvedFields
             .Select(f => $"{f.GetSqlExpression()} AS {dialect.QuoteIdentifier(f.Id)}")
             .ToList();
         if (willGroupBy)
             selectColumns.Add($"COUNT(*) AS {dialect.QuoteIdentifier("__row_count")}");
+
+        // Per-report SQL-mode calc columns. Trust model: admin-authored
+        // raw SQL embedded as-is, same as FieldConfig.SqlExpression. Each
+        // becomes "<sql> AS <key>" and shows up in the row dict under Key.
+        // Skipped silently when the report aggregates — calc columns target
+        // the table view (raw rows) and would otherwise need GROUP BY logic
+        // we don't currently emit.
+        if (tableCalcSqlColumns is { Count: > 0 } && !willGroupBy)
+        {
+            foreach (var calc in tableCalcSqlColumns)
+            {
+                if (string.IsNullOrWhiteSpace(calc.Key) || string.IsNullOrWhiteSpace(calc.SqlExpression))
+                    continue;
+                ValidateIdentifier(calc.Key, $"TableCalcSqlSelector '{calc.Key}' Key");
+                selectColumns.Add($"{calc.SqlExpression} AS {dialect.QuoteIdentifier(calc.Key)}");
+            }
+        }
+
+        // DISTINCT + ORDER BY safety net: Postgres rejects "for SELECT
+        // DISTINCT, ORDER BY expressions must appear in select list" when
+        // the ORDER BY references something that isn't projected. The
+        // sort-only-field add-on above covers the case where the admin
+        // sorts by an out-of-report column (the field's GetSqlExpression()
+        // gets pulled into SELECT). It does NOT cover the case where the
+        // field IS in the report but its ORDER BY uses GetSortExpression()
+        // — typical when a status field's lookup auto-set
+        // SortExpression="LOOKUP.ORDERBY". SELECT has "c_30.CODEDESC AS
+        // loan_status"; ORDER BY emits "LOOKUP.ORDERBY"; Postgres errors.
+        // Inject any ORDER BY expression text that doesn't text-match an
+        // existing SELECT expression OR alias as a hidden "__sort_N"
+        // column. Skipped when not DISTINCT — the bare ORDER BY rule is
+        // permissive without it.
+        if (request.Distinct && !willGroupBy)
+        {
+            var existingSelectExprs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var col in selectColumns)
+            {
+                var asIdx = col.LastIndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+                if (asIdx > 0)
+                {
+                    existingSelectExprs.Add(col[..asIdx].Trim());
+                    existingSelectExprs.Add(col[(asIdx + 4)..].Trim());
+                }
+                else
+                {
+                    existingSelectExprs.Add(col.Trim());
+                }
+            }
+
+            string? ResolveSortExpressionEarly(string fid)
+            {
+                if (fieldLookup.TryGetValue(fid, out var f)) return f.GetSortExpression();
+                if (tableCalcSqlColumns is { Count: > 0 } &&
+                    tableCalcSqlColumns.Any(c => string.Equals(c.Key, fid, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return dialect.QuoteIdentifier(fid);
+                }
+                return null;
+            }
+
+            var sortInjectIdx = 0;
+            foreach (var fid in new[] { request.SortField, request.SecondarySortField })
+            {
+                if (string.IsNullOrWhiteSpace(fid)) continue;
+                var sortExpr = ResolveSortExpressionEarly(fid);
+                if (string.IsNullOrWhiteSpace(sortExpr)) continue;
+                if (existingSelectExprs.Contains(sortExpr)) continue;
+                var alias = $"__sort_{sortInjectIdx++}";
+                selectColumns.Add($"{sortExpr} AS {dialect.QuoteIdentifier(alias)}");
+                existingSelectExprs.Add(sortExpr);
+                existingSelectExprs.Add(dialect.QuoteIdentifier(alias));
+            }
+        }
+
         sb.AppendLine(string.Join(", ", selectColumns));
 
         // FROM clause
@@ -394,6 +522,37 @@ public static class QueryBuilder
                 if (!string.IsNullOrWhiteSpace(bare)) primaryIdentifiers.Add(bare);
             }
         }
+
+        // Primary-scoped joins (PR-2). A join may carry an optional
+        // PrimaryTable / PrimaryAlias tag indicating it should ONLY be
+        // considered when the report's primary matches. Keep:
+        //   * generic joins (PrimaryTable null/empty), and
+        //   * tagged joins whose PrimaryTable or PrimaryAlias matches one
+        //     of the report's primaryIdentifiers.
+        // Drop tagged joins whose primary doesn't match — they belong to a
+        // different report and would otherwise pollute the adjacency graph
+        // (causing duplicate-alias collisions when two joins target the
+        // same alias from different sources).
+        // Then sort so tagged-matching come BEFORE generic, so when the
+        // BFS picks the first edge to a target, a primary-scoped override
+        // wins over the generic fallback.
+        bool MatchesPrimaryScope(JoinConfig j)
+        {
+            if (string.IsNullOrWhiteSpace(j.PrimaryTable) && string.IsNullOrWhiteSpace(j.PrimaryAlias))
+                return true; // generic
+            if (!string.IsNullOrWhiteSpace(j.PrimaryTable) && primaryIdentifiers.Contains(j.PrimaryTable!))
+                return true;
+            if (!string.IsNullOrWhiteSpace(j.PrimaryAlias) && primaryIdentifiers.Contains(j.PrimaryAlias!))
+                return true;
+            return false;
+        }
+        bool IsTaggedScoped(JoinConfig j) =>
+            !string.IsNullOrWhiteSpace(j.PrimaryTable) || !string.IsNullOrWhiteSpace(j.PrimaryAlias);
+
+        var scopedJoinConfigs = joinConfigs
+            .Where(MatchesPrimaryScope)
+            .OrderByDescending(IsTaggedScoped) // tagged-matching first, generic after
+            .ToList();
 
         var joinedTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootTable };
         var emittedJoinIds = new HashSet<int>();
@@ -492,7 +651,7 @@ public static class QueryBuilder
 
         var joinAdjacency = new Dictionary<string, List<(JoinConfig Join, List<string> Targets)>>(
             StringComparer.OrdinalIgnoreCase);
-        foreach (var jc in joinConfigs)
+        foreach (var jc in scopedJoinConfigs)
         {
             if (TargetsPrimary(jc)) continue; // never bring the primary in via a JOIN
             var sources = JoinSourceAliases(jc).ToList();
@@ -548,7 +707,7 @@ public static class QueryBuilder
             // "first match" picker so reports with joins authored before
             // the source-aware resolver still run. The SortJoinFragmentsByDependency
             // pass downstream will reorder fragments topologically.
-            var joinConfig = joinConfigs.FirstOrDefault(j =>
+            var joinConfig = scopedJoinConfigs.FirstOrDefault(j =>
                 !TargetsPrimary(j) &&
                 (string.Equals(j.ToTable, table, StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(j.FromTable, table, StringComparison.OrdinalIgnoreCase) ||
@@ -597,9 +756,39 @@ public static class QueryBuilder
         // Single lookup used by both fields and custom filters to resolve JoinId
         // references (avoids rebuilding the dictionary twice). Skip joins without a
         // JoinId — those can't be referenced and would collide on the empty key.
-        var joinConfigLookup = joinConfigs
+        // Built off the scoped list so a JoinId tagged to a different primary
+        // can't be pulled in via an explicit field/filter reference.
+        // First-wins on duplicate JoinIds across scopes — and because the scoped
+        // list is sorted tagged-matching-first, a primary-scoped variant beats a
+        // generic one with the same JoinId.
+        var joinConfigLookup = scopedJoinConfigs
             .Where(j => !string.IsNullOrWhiteSpace(j.JoinId))
-            .ToDictionary(j => j.JoinId!, j => j, StringComparer.OrdinalIgnoreCase);
+            .GroupBy(j => j.JoinId!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        // True when any of the join's defined targets (ToTable + aliases
+        // extracted from RawSql) is already in scope. Used to skip
+        // explicit JoinId references whose target is already covered by
+        // another join (typically a composite raw-SQL join that nests the
+        // target). Without this, a second "JOIN salesforce.user u …" gets
+        // emitted alongside the one nested in account's composite join,
+        // producing a duplicate-alias error from Postgres.
+        bool TargetAlreadyJoined(JoinConfig j)
+        {
+            foreach (var tgt in JoinDefinedTargets(j))
+            {
+                if (joinedTables.Contains(tgt)) return true;
+            }
+            return false;
+        }
+
+        // Records every alias a freshly-added fragment introduces so
+        // subsequent JoinId lookups can skip duplicates. Mirrors what the
+        // BFS path does after AddFragment(jc.RawSql).
+        void RegisterTargets(JoinConfig j)
+        {
+            foreach (var tgt in JoinDefinedTargets(j)) joinedTables.Add(tgt);
+        }
 
         // JOINs from fields — each referenced join id + any inline SqlJoin.
         // The requiredTables-driven loop above already handles joins for
@@ -613,9 +802,36 @@ public static class QueryBuilder
             {
                 if (!joinConfigLookup.TryGetValue(jid, out var referencedJoin)) continue;
                 if (TargetsPrimary(referencedJoin)) continue; // self-join to the primary — skip
+                if (!emittedJoinIds.Add(referencedJoin.Id)) continue; // already emitted by id
+                if (TargetAlreadyJoined(referencedJoin)) continue;    // alias already in scope
                 AddFragment(referencedJoin.RawSql);
+                RegisterTargets(referencedJoin);
             }
             if (!string.IsNullOrWhiteSpace(f.SqlJoin)) AddFragment(f.SqlJoin);
+        }
+
+        // Pull joins referenced by per-report SQL-mode calc columns. The
+        // calc's SqlExpression names aliases (e.g. C, L) that need to be in
+        // scope; the JoinIds list is the admin's declaration of which
+        // schema joins introduce them.
+        // Same dedupe as the per-field loop: skip when the join was already
+        // emitted by id, OR when its target alias is already in scope from
+        // a composite raw-SQL join that nested it.
+        if (tableCalcSqlColumns is { Count: > 0 })
+        {
+            foreach (var calc in tableCalcSqlColumns)
+            {
+                if (calc.JoinIds is null) continue;
+                foreach (var jid in calc.JoinIds)
+                {
+                    if (!joinConfigLookup.TryGetValue(jid, out var referencedJoin)) continue;
+                    if (TargetsPrimary(referencedJoin)) continue;
+                    if (!emittedJoinIds.Add(referencedJoin.Id)) continue;
+                    if (TargetAlreadyJoined(referencedJoin)) continue;
+                    AddFragment(referencedJoin.RawSql);
+                    RegisterTargets(referencedJoin);
+                }
+            }
         }
 
         // JOINs from active custom filters. JoinId takes precedence over inline SqlJoin.
@@ -628,7 +844,10 @@ public static class QueryBuilder
                 if (!string.IsNullOrWhiteSpace(cf.JoinId) && joinConfigLookup.TryGetValue(cf.JoinId, out var referencedJoin))
                 {
                     if (TargetsPrimary(referencedJoin)) continue; // skip self-join to primary
+                    if (!emittedJoinIds.Add(referencedJoin.Id)) continue;
+                    if (TargetAlreadyJoined(referencedJoin)) continue;
                     joinSql = referencedJoin.RawSql;
+                    RegisterTargets(referencedJoin);
                 }
                 else if (!string.IsNullOrWhiteSpace(cf.SqlJoin))
                 {
@@ -726,7 +945,8 @@ public static class QueryBuilder
                                 SourceTable = fc.SourceTable,
                                 SourceColumn = fc.SourceColumn,
                                 DataType = fc.DataType,
-                                DisplayTimezone = fc.DisplayTimezone
+                                DisplayTimezone = fc.DisplayTimezone,
+                                ApplyTimezoneConversion = fc.ApplyTimezoneConversion
                             }
                             : null,
                         dialect,
@@ -841,21 +1061,96 @@ public static class QueryBuilder
         // SecondarySortField is also present, append it after the primary.
         // Used by the DetailViewer to cluster rows by group first and fall
         // into the default sort within each group.
+        // Resolves a sort field id to its ORDER BY expression. Real fields
+        // use their authored sort expression; SQL-mode calc Keys order by
+        // the quoted SELECT alias — the calc's expression is already in
+        // the SELECT under that alias, so the DB can reuse it.
+        string? ResolveSortExpression(string fid)
+        {
+            if (fieldLookup.TryGetValue(fid, out var f)) return f.GetSortExpression();
+            if (tableCalcSqlColumns is { Count: > 0 } &&
+                tableCalcSqlColumns.Any(c =>
+                    string.Equals(c.Key, fid, StringComparison.OrdinalIgnoreCase)))
+            {
+                return dialect.QuoteIdentifier(fid);
+            }
+            return null;
+        }
+
+        // Resolve the qualified PK column expressions ONCE — they're used in
+        // two branches: as silent tiebreakers appended after the user's sort
+        // and as the standalone ORDER BY when no sort is configured. Empty
+        // when the request didn't ship FallbackSortColumns or the alias
+        // can't be determined.
+        // Suppress the PK auto-anchor entirely when the query is aggregated
+        // OR when DISTINCT is on. Both modes require ORDER BY columns to
+        // appear in the SELECT list (Postgres + SQL Server agree on this);
+        // injecting a raw `<alias>.id` that isn't an aliased SELECT column
+        // produces:
+        //   * GROUP BY: "column must appear in the GROUP BY clause"
+        //   * DISTINCT: "for SELECT DISTINCT, ORDER BY expressions must
+        //                appear in select list"
+        // The OFFSET-stability concern PKs solve doesn't apply to either
+        // mode anyway — aggregated output already produces unique groups,
+        // and DISTINCT collapses duplicates so the row set is deterministic
+        // even without the PK tiebreaker. (Tie-order across runs on a non-
+        // unique sort under DISTINCT is still possible — admins who care
+        // pick a unique Sort By or Then By field, both of which ARE in
+        // the SELECT.)
+        var pkOrderExpressions = (willGroupBy || request.Distinct)
+            ? new List<string>()
+            : BuildPkOrderExpressions(request.FallbackSortColumns, primaryAlias, primaryName);
+
         if (!string.IsNullOrEmpty(request.SortField))
         {
-            if (!fieldLookup.TryGetValue(request.SortField, out var sortField))
-                throw new ArgumentException($"Unknown sort field ID: '{request.SortField}'");
+            var sortExpr = ResolveSortExpression(request.SortField)
+                ?? throw new ArgumentException($"Unknown sort field ID: '{request.SortField}'");
             var direction = string.Equals(request.SortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
-            var orderBy = $"ORDER BY {sortField.GetSortExpression()} {direction}";
+            var orderBy = $"ORDER BY {sortExpr} {direction}";
+            // Track expressions already in the ORDER BY so silent PK
+            // tiebreakers don't duplicate a column the user already sorted on
+            // (e.g. user picked the PK as primary sort — no need to append).
+            var seenExprs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { sortExpr };
 
             if (!string.IsNullOrEmpty(request.SecondarySortField)
-                && !string.Equals(request.SecondarySortField, request.SortField, StringComparison.OrdinalIgnoreCase)
-                && fieldLookup.TryGetValue(request.SecondarySortField, out var secondary))
+                && !string.Equals(request.SecondarySortField, request.SortField, StringComparison.OrdinalIgnoreCase))
             {
-                var secDir = string.Equals(request.SecondarySortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
-                orderBy += $", {secondary.GetSortExpression()} {secDir}";
+                var secExpr = ResolveSortExpression(request.SecondarySortField);
+                if (secExpr is not null)
+                {
+                    var secDir = string.Equals(request.SecondarySortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
+                    orderBy += $", {secExpr} {secDir}";
+                    seenExprs.Add(secExpr);
+                }
+            }
+
+            // Silent PK tiebreakers. Even when the admin picked a stable
+            // sort field, append the primary table's PKs so OFFSET pagination
+            // can never shuffle on duplicate values. Dedupe against the
+            // expressions already in the ORDER BY so we don't emit
+            // "ORDER BY o.id ASC, o.id ASC" when the user sorted on the PK.
+            foreach (var pkExpr in pkOrderExpressions)
+            {
+                if (seenExprs.Contains(pkExpr)) continue;
+                orderBy += $", {pkExpr} ASC";
+                seenExprs.Add(pkExpr);
             }
             sb.AppendLine(orderBy);
+        }
+        else if (pkOrderExpressions.Count > 0)
+        {
+            // Auto-PK fallback. The Report Builder pre-computed the
+            // primary table's PK columns from information_schema and
+            // passes them here when no user sort is configured.
+            sb.AppendLine($"ORDER BY {string.Join(", ", pkOrderExpressions)} ASC");
+        }
+        else if (request.DisableDefaultSort
+                 && !string.Equals(dialect.Name, "sqlserver", StringComparison.OrdinalIgnoreCase))
+        {
+            // Admin explicitly chose "(None)" with no PK fallback available.
+            // Postgres allows OFFSET/FETCH without ORDER BY — skip emission.
+            // SQL Server's OFFSET requires ORDER BY so the fallback below
+            // still applies on that dialect.
         }
         else
         {
@@ -974,6 +1269,12 @@ public static class QueryBuilder
         outerColumns.Add($"COUNT(*) AS {dialect.QuoteIdentifier("count")}");
         foreach (var (fieldId, agg) in measures)
         {
+            // NONE = "don't aggregate, don't show on the dashboard." Skip the
+            // measure entirely — emitting `NONE(field)` produces invalid SQL
+            // that the DB rejects when the user copies it from Show Query.
+            if (string.Equals(agg, "NONE", StringComparison.OrdinalIgnoreCase))
+                continue;
+
             if (string.Equals(agg, "COUNT", StringComparison.OrdinalIgnoreCase))
             {
                 // Distinct from the unconditional COUNT(*): counts non-null of the field.

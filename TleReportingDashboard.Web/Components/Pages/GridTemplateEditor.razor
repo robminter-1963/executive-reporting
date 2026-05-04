@@ -1,6 +1,8 @@
 @page "/grid-templates/new"
 @page "/grid-templates/{TemplateId:guid}"
 @rendermode InteractiveServer
+@implements IDisposable
+@inject EditorModeState EditorMode
 @inject IGridTemplateService TemplateService
 @inject ISchemaService SchemaService
 @inject IAdminService AdminService
@@ -22,7 +24,7 @@
     return;
 }
 
-<MudMainContent Style="padding: 16px; height: calc(100vh - 48px); overflow-y: auto;">
+<MudMainContent Style="padding: 16px; height: calc(100vh - 64px); overflow-y: auto;">
     <div style="max-width: 900px; margin: 0 auto;">
     <MudStack Spacing="3">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
@@ -253,8 +255,12 @@
     private bool _accessDenied;
     private List<CompanyConnectionRecord> _availableConnections = new();
 
+    private IDisposable? _editorScope;
+
     protected override async Task OnInitializedAsync()
     {
+        _editorScope = EditorMode.Enter();
+
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var user = authState.User;
         _userId = user.FindFirst("oid")?.Value ?? user.Identity?.Name ?? "anonymous";
@@ -463,5 +469,11 @@
         {
             Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
         }
+    }
+
+    public void Dispose()
+    {
+        _editorScope?.Dispose();
+        _editorScope = null;
     }
 }

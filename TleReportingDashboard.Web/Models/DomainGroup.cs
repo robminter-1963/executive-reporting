@@ -19,6 +19,11 @@ public class FieldDefinition
     // the source is wholly inside SqlExpression.
     public string SourceTable { get; set; } = string.Empty;
     public string SourceColumn { get; set; } = string.Empty;
+    // Mirrors FieldConfig.IsUnique. Surfaced to the UI so the chip bar /
+    // Sort By dropdown can render the (-) marker on admin-asserted unique
+    // fields without needing a separate constraint lookup against the
+    // target DB.
+    public bool IsUnique { get; set; }
 }
 
 public class DomainGroup

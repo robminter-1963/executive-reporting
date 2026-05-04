@@ -11,13 +11,20 @@ public static partial class DateFilterTranslator
     [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]{0,127}(\.[A-Za-z_][A-Za-z0-9_]{0,127})?$", RegexOptions.Compiled)]
     private static partial Regex SafeIdentifierRegex();
 
+    [GeneratedRegex(@"\bCURRENT_TIMESTAMP\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex CurrentTimestampRegex();
+
+    [GeneratedRegex(@"\bCURRENT_DATE\b", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex CurrentDateRegex();
+
     public static DateFilterResult TranslateDateFilter(
         string? dateFieldId,
         string? dateOperatorId,
         DateTime? dateFrom,
         DateTime? dateTo,
         IReadOnlyList<FieldDefinition> fields,
-        IReadOnlyList<RelativeDateOperator> operators)
+        IReadOnlyList<RelativeDateOperator> operators,
+        bool isPostgres = false)
     {
         if (string.IsNullOrWhiteSpace(dateFieldId) || string.IsNullOrWhiteSpace(dateOperatorId))
             return new DateFilterResult(null, []);
@@ -57,6 +64,22 @@ public static partial class DateFilterTranslator
         // The SqlTemplate uses {{column}} as a placeholder for the qualified column name
         var whereClause = relativeOp.SqlTemplate
             .Replace("{{column}}", qualifiedColumn, StringComparison.OrdinalIgnoreCase);
+
+        // Postgres only: the admin's template may reference CURRENT_DATE /
+        // CURRENT_TIMESTAMP. Both run in the session zone (typically UTC on
+        // managed Postgres), so a late-evening Pacific query computes the
+        // wrong "now". When the connection has a DisplayTimezone configured,
+        // rewrite both tokens to a NOW()-based wrap that returns the user's
+        // wall-clock value in that zone. SQL Server templates use GETDATE()
+        // instead of these tokens (CURRENT_TIMESTAMP on SQL Server returns
+        // server-local time and doesn't have the UTC drift), so the rewrite
+        // is gated on isPostgres to avoid corrupting SQL Server templates.
+        if (isPostgres && !string.IsNullOrWhiteSpace(dateField.DisplayTimezone))
+        {
+            var tz = dateField.DisplayTimezone!.Replace("'", "''");
+            whereClause = CurrentTimestampRegex().Replace(whereClause, $"(NOW() AT TIME ZONE '{tz}')");
+            whereClause = CurrentDateRegex().Replace(whereClause, $"(NOW() AT TIME ZONE '{tz}')::date");
+        }
 
         return new DateFilterResult(whereClause, []);
     }

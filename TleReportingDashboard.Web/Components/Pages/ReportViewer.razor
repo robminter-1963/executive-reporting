@@ -7,8 +7,10 @@
 @inject IExportService ExportService
 @inject ISchemaService SchemaService
 @inject IAdminService AdminService
+@inject IAdminAccessService AdminAccess
 @inject IUserManagementService UserManagement
 @inject IQueryScopeResolver ScopeResolver
+@inject SchemaBuilderService SchemaBrowser
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
@@ -106,6 +108,7 @@
                                 InitialColumnWidths="_columnWidths"
                                 InitialHiddenColumns="_hiddenColumns"
                                 InitialSort="@_initialSortTuples"
+                                CalcColumns="_tableCalcColumns"
                                 DisableUserSort="true"
                                 ReadOnly="true" />
                 </MudTabPanel>
@@ -118,6 +121,8 @@
                                    TableSortDirection="@_tableSortDirection"
                                    ColumnWidths="_columnWidths"
                                    ColumnOrder="_columnOrder"
+                                   InitialHiddenColumns="_hiddenColumns"
+                                   TableCalcColumns="_tableCalcColumns"
                                    ReportId="ReportId"
                                    ReadOnly="true" />
                 </MudTabPanel>
@@ -146,11 +151,13 @@
 
     // Phase 3 authorization: admins see every report, non-admins need a
     // company grant matching the report's CompanyId. Same shape as the
-    // check in MasterDashboard and DetailViewer.
+    // check in MasterDashboard and DetailViewer. Admin-section roles
+    // (System Support et al.) also bypass the per-company gate.
     private async Task<bool> CanViewReportAsync(TleReportingDashboard.Web.Models.SavedReport report)
     {
         if (AdminService.IsAdmin(_userEmail)) return true;
         if (string.IsNullOrEmpty(_userEmail)) return false;
+        if (await AdminAccess.HasAnyAdminAccessAsync(_userEmail)) return true;
         var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
         return access.Any(a => a.CompanyId == report.CompanyId);
     }
@@ -169,6 +176,8 @@
     private string? _error;
     private QueryResponse? _queryData;
     private DashboardView.DashboardConfig? _dashboardConfig;
+    private List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? _tableCalcColumns;
+    private bool _distinct;
     private List<string> _appliedFilters = new();
     private Dictionary<string, string> _fieldLabelsById = new(StringComparer.OrdinalIgnoreCase);
     private string _userId = "anonymous";
@@ -293,6 +302,18 @@
                     }
                     if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
                         _customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
+                    // Per-report SQL calc columns. Hydrated for the read-only
+                    // viewer so the table grid + dashboard tile both render
+                    // calc columns and the dashboard tile's group-by labels
+                    // resolve their captions instead of falling back to
+                    // raw `calc_xxx` keys.
+                    if (doc.RootElement.TryGetProperty("TableCalculatedColumns", out var tcEl))
+                        _tableCalcColumns = System.Text.Json.JsonSerializer
+                            .Deserialize<List<TleReportingDashboard.Web.Models.TableCalcColumnDef>>(tcEl.GetRawText());
+
+                    if (doc.RootElement.TryGetProperty("Distinct", out var distEl)
+                        && distEl.ValueKind == System.Text.Json.JsonValueKind.True)
+                        _distinct = true;
 
                     // Multi-column sort (primary first). Wins over the legacy
                     // single-field TableSortField/Direction when populated.
@@ -308,6 +329,53 @@
                                 list.Add((f!, d ?? "asc"));
                         }
                         if (list.Count > 0) _initialSortTuples = list;
+                    }
+
+                    // Editor's Sort By / Group By dropdowns persist as
+                    // DetailSortFieldId / DetailGroupByFieldId. Despite the
+                    // "detail" prefix they drive BOTH table-view and
+                    // detail-view ORDER BY in the editor — the read-only
+                    // viewer must mirror that or the ORDER BY drifts from
+                    // what the editor showed. Resolution priority matches
+                    // ReportBuilder.ResolveEffectiveSortField:
+                    //   TableSort > GroupBy > SortBy > legacy.
+                    if (_initialSortTuples is null)
+                    {
+                        string? gbf = null, gbd = null, sbf = null, sbd = null, tbf = null, tbd = null;
+                        if (doc.RootElement.TryGetProperty("DetailGroupByFieldId", out var dgfEl))
+                            gbf = dgfEl.GetString();
+                        if (doc.RootElement.TryGetProperty("DetailGroupByDirection", out var dgdEl))
+                            gbd = dgdEl.GetString();
+                        if (doc.RootElement.TryGetProperty("DetailSortFieldId", out var dsfEl))
+                            sbf = dsfEl.GetString();
+                        if (doc.RootElement.TryGetProperty("DetailSortDirection", out var dsdEl))
+                            sbd = dsdEl.GetString();
+                        if (doc.RootElement.TryGetProperty("DetailSortThenByFieldId", out var dtfEl))
+                            tbf = dtfEl.GetString();
+                        if (doc.RootElement.TryGetProperty("DetailSortThenByDirection", out var dtdEl))
+                            tbd = dtdEl.GetString();
+
+                        var derived = new List<(string, string)>();
+                        if (!string.IsNullOrWhiteSpace(gbf)
+                            && !string.Equals(gbd, "none", StringComparison.OrdinalIgnoreCase))
+                        {
+                            derived.Add((gbf!, string.Equals(gbd, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc"));
+                            if (!string.IsNullOrWhiteSpace(sbf)
+                                && !string.Equals(sbf, gbf, StringComparison.OrdinalIgnoreCase))
+                            {
+                                derived.Add((sbf!, string.Equals(sbd, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc"));
+                            }
+                        }
+                        else if (!string.IsNullOrWhiteSpace(sbf))
+                        {
+                            derived.Add((sbf!, string.Equals(sbd, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc"));
+                            if (!string.IsNullOrWhiteSpace(tbf)
+                                && !string.Equals(tbf, sbf, StringComparison.OrdinalIgnoreCase))
+                            {
+                                derived.Add((tbf!, string.Equals(tbd, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc"));
+                            }
+                        }
+                        if (derived.Count > 0) _initialSortTuples = derived;
                     }
                 }
                 catch { }
@@ -326,11 +394,19 @@
             // Template-linked reports inherit ordering and default sort from the template
             // (the report can't reorder columns independently). Per-report show/hide is kept
             // but trimmed to fields that still exist in the template.
+            // Calc-column positions from the report's saved combined order are
+            // woven back in — templates don't own calcs, so without this the
+            // viewer drops user-customized calc placement on every load.
             if (report.GridTemplateId.HasValue && resolvedTemplate is not null)
             {
-                _columnOrder = resolvedTemplate.ColumnOrder is { Count: > 0 }
+                var templateOrder = resolvedTemplate.ColumnOrder is { Count: > 0 }
                     ? new List<string>(resolvedTemplate.ColumnOrder)
                     : new List<string>(_fieldIds);
+                _columnOrder = TleReportingDashboard.Web.Services.GridTemplateService
+                    .WeaveCalcsIntoTemplateOrder(
+                        templateOrder,
+                        _columnOrder,
+                        _tableCalcColumns?.Where(c => !string.IsNullOrEmpty(c.Key)).Select(c => c.Key));
                 if (string.IsNullOrEmpty(_tableSortField)
                     && !string.IsNullOrEmpty(resolvedTemplate.DefaultSortField))
                 {
@@ -381,15 +457,69 @@
             AddIds(_dashboardConfig?.ExtraGroupByFieldIds);
             AddIds(_dashboardConfig?.ExtraDimensionFieldIds);
 
+            // Push the saved sort onto the SQL request so the viewer matches
+            // editor table-view ORDER BY. _initialSortTuples already holds
+            // the multi-sort (TableSort) with the legacy single-field as a
+            // fallback — reuse it instead of re-parsing ColumnState.
+            string? viewerSortField = null, viewerSortDir = null;
+            string? viewerSecondarySort = null, viewerSecondaryDir = null;
+            if (_initialSortTuples is { Count: > 0 } sortTuples)
+            {
+                viewerSortField = sortTuples[0].Item1;
+                viewerSortDir = sortTuples[0].Item2;
+                if (sortTuples.Count > 1)
+                {
+                    viewerSecondarySort = sortTuples[1].Item1;
+                    viewerSecondaryDir = sortTuples[1].Item2;
+                }
+            }
+
+            // Pre-fetch primary-table PKs for the silent OFFSET tiebreaker.
+            // Best-effort: failures fall through to the legacy default.
+            List<string>? pkColumns = null;
+            if (!string.IsNullOrWhiteSpace(_primaryTable))
+            {
+                try
+                {
+                    var bare = _primaryTable;
+                    var asIdx = bare.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+                    if (asIdx > 0) bare = bare[..asIdx].Trim();
+                    var dot = bare.IndexOf('.');
+                    string? schema = dot > 0 ? bare[..dot] : null;
+                    var table = dot > 0 ? bare[(dot + 1)..] : bare;
+                    // Effective lookup folds in admin-flagged IsUnique
+                    // fields so accounts that can't read information_schema
+                    // still get a stable OFFSET tiebreaker.
+                    var schemaFields = await SchemaService.GetFieldConfigsAsync(_connectionId);
+                    pkColumns = await SchemaBrowser.GetEffectivePrimaryKeyColumnsAsync(_connectionId, schema, table, schemaFields);
+                }
+                catch { pkColumns = null; }
+            }
+
             var request = new QueryRequest
             {
                 FieldIds = queryFieldIds,
                 Filters = new Dictionary<string, object?>(_filters),
                 CustomFilterIds = _customFilterIds,
+                SortField = viewerSortField,
+                SortDirection = viewerSortDir,
+                SecondarySortField = viewerSecondarySort,
+                SecondarySortDirection = viewerSecondaryDir,
+                FallbackSortColumns = pkColumns is { Count: > 0 } ? pkColumns : null,
+                Distinct = _distinct,
                 Page = 1,
                 PageSize = 50000,
                 ConnectionId = _connectionId,
-                PrimaryTable = _primaryTable
+                PrimaryTable = _primaryTable,
+                TableCalcSqlColumns = _tableCalcColumns?
+                    .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression) && !string.IsNullOrEmpty(c.Key))
+                    .Select(c => new TleReportingDashboard.Web.Models.TableCalcSqlSelector
+                    {
+                        Key = c.Key,
+                        SqlExpression = c.SqlExpression!,
+                        JoinIds = c.JoinIds
+                    })
+                    .ToList()
             };
             request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _connectionId, _primaryTable);
             _queryData = await QueryService.ExecuteQueryAsync(request);

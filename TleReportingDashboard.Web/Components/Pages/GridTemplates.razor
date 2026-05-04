@@ -1,5 +1,7 @@
 @page "/grid-templates"
 @rendermode InteractiveServer
+@implements IDisposable
+@inject EditorModeState EditorMode
 @inject IGridTemplateService TemplateService
 @inject ISchemaService SchemaService
 @inject IAdminService AdminService
@@ -128,8 +130,12 @@
     private List<GridTemplate> _templates = new();
     private Dictionary<Guid, string> _connectionNames = new();
 
+    private IDisposable? _editorScope;
+
     protected override async Task OnInitializedAsync()
     {
+        _editorScope = EditorMode.Enter();
+
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var user = authState.User;
         _userId = user.FindFirst("oid")?.Value ?? user.Identity?.Name ?? "anonymous";
@@ -210,15 +216,39 @@
     {
         try
         {
+            // Build the connection list from the same map the table uses
+            // for the Connection column — covers every active company so
+            // admins can retarget across companies, not just within one.
+            var options = _connectionNames
+                .Select(kv => new CloneTemplateDialog.ConnectionOption(kv.Key, kv.Value))
+                .ToList();
+
+            var dialogParams = new DialogParameters
+            {
+                { nameof(CloneTemplateDialog.SourceName), source.Name },
+                { nameof(CloneTemplateDialog.SourceConnectionId), source.ConnectionId },
+                { nameof(CloneTemplateDialog.Connections), options }
+            };
+            var dialog = await DialogService.ShowAsync<CloneTemplateDialog>("Clone template", dialogParams,
+                new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            var result = await dialog.Result;
+            if (result is null || result.Canceled || result.Data is not CloneTemplateDialog.Result picked)
+                return;
+
             var cloned = new GridTemplate
             {
-                Name = $"{source.Name} (Copy)",
+                Name = picked.NewName,
                 Description = source.Description,
                 OwnerId = _userId,
                 OwnerEmail = _userEmail,
                 FieldIds = source.FieldIds,
                 ColumnState = source.ColumnState,
-                ConnectionId = source.ConnectionId
+                // Connection is now admin-pickable. ColumnState carries
+                // field ids that may not exist on the target connection's
+                // schema; per product direction, no validation here —
+                // missing fields render blank in the grid editor and the
+                // admin tunes them up after the clone.
+                ConnectionId = picked.TargetConnectionId
             };
             await TemplateService.SaveTemplateAsync(cloned);
             await LoadTemplates();
@@ -240,5 +270,11 @@
         {
             Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
         }
+    }
+
+    public void Dispose()
+    {
+        _editorScope?.Dispose();
+        _editorScope = null;
     }
 }

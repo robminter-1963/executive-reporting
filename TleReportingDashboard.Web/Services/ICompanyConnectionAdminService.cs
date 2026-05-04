@@ -12,6 +12,17 @@ public interface ICompanyConnectionAdminService
     // Opens the connection, runs a trivial "SELECT 1" equivalent, closes.
     // Safe on unsaved form values — caller passes the in-memory record.
     Task<ConnectionTestResult> TestAsync(CompanyConnectionRecord record, CancellationToken ct = default);
+
+    // Copies a hand-picked set of connections (by id) into targetCompanyId.
+    // Each copy gets a new id and prefixed name to dodge the (company_id,
+    // name) unique index. is_default is cleared on copies so the
+    // (company_id) WHERE is_default=1 filtered unique index doesn't collide
+    // with the target's existing default. Source rows must all belong to a
+    // single source company; mixing across companies isn't supported (the
+    // UI's picker doesn't allow it either). Returns the count copied.
+    Task<int> CopyConnectionsAsync(
+        IReadOnlyList<Guid> sourceConnectionIds, Guid targetCompanyId, string namePrefix,
+        CancellationToken ct = default);
 }
 
 // Test-button outcome. Success=true means an open + ping succeeded;

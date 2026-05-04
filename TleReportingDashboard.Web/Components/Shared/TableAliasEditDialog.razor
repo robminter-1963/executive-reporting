@@ -4,31 +4,55 @@
 <MudDialog>
     <DialogContent>
         <MudStack Spacing="2" Style="min-width: 420px;">
-            @* Autocomplete over the DB-enumerated table list. SearchFunc
-               substring-matches case-insensitively so admins can type
-               "borr" to narrow to borrower tables. Strict=true prevents
-               freeform entry — only list values are accepted. When editing
-               a row whose table is no longer in the DB (rename/drop), the
-               stale value is injected into the list so it stays editable. *@
-            @* MaxItems=null → uncapped list, limited only by the DB result
-               count and MudAutocomplete's own scrollable popover. Trade-off:
-               a 10k-table DB would render them all, which is fine for modern
-               browsers but noticeable on slow hardware. Users can still type
-               to narrow the list — SearchTables filters by substring. *@
-            <MudAutocomplete T="string" @bind-Value="_tableName"
-                             Label="Schema.Table"
-                             SearchFunc="SearchTables"
-                             Strict="true" CoerceValue="false"
-                             Required RequiredError="Table is required"
-                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                             Dense Immediate
-                             MaxItems="null"
-                             HelperText="@TableHelperText" />
-            <MudTextField @bind-Value="_alias" Label="Alias (optional)" Placeholder="L"
+            @* "Virtual" toggle — flips the table picker between strict
+               DB-enumerated mode (default) and free-form text. Use it for
+               CTE-backed primaries that don't exist in INFORMATION_SCHEMA
+               (e.g. a Lookup CTE alias used as the report's primary). The
+               name still passes through PrimaryTableRef.TableRegex on save
+               so admins can't smuggle SQL meta-characters in. *@
+            <MudCheckBox T="bool" @bind-Value="_isVirtual" Color="Color.Primary" Dense
+                         Label="Virtual table (CTE / Lookup, not in DB)" />
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 32px; margin-top: -8px;">
+                Check this if the table doesn't exist in the live database — typical when a Lookup CTE materializes the rows at query time.
+            </MudText>
+
+            @if (_isVirtual)
+            {
+                @* Free-form entry. Same identifier validation runs on save —
+                   `^[A-Za-z_][A-Za-z0-9_\.\[\]]*$`, no spaces or SQL meta. *@
+                <MudTextField T="string" @bind-Value="_tableName"
+                              Label="Virtual table name"
+                              Placeholder="ranked_calls"
+                              Required RequiredError="Table is required"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                              HelperText="Identifier admin chooses; must match the CTE name in the Lookup that defines it." />
+            }
+            else
+            {
+                @* Autocomplete over the DB-enumerated table list. SearchFunc
+                   substring-matches case-insensitively so admins can type
+                   "borr" to narrow to borrower tables. Strict=true prevents
+                   freeform entry — only list values are accepted. When editing
+                   a row whose table is no longer in the DB (rename/drop), the
+                   stale value is injected into the list so it stays editable.
+                   MaxItems=null → uncapped list, limited only by the DB result
+                   count and MudAutocomplete's own scrollable popover. *@
+                <MudAutocomplete T="string" @bind-Value="_tableName"
+                                 Label="Schema.Table"
+                                 SearchFunc="SearchTables"
+                                 Strict="true" CoerceValue="false"
+                                 Required RequiredError="Table is required"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                 Dense Immediate
+                                 MaxItems="null"
+                                 HelperText="@TableHelperText" />
+            }
+            <MudTextField @bind-Value="_alias" Label="Alias" Placeholder="L"
                           Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                          Required RequiredError="Alias is required"
                           Error="@IsAliasTaken()"
                           ErrorText="@("Already used on this connection")"
-                          HelperText="Short identifier used in field references (e.g. L.ColName). Blank means no alias." />
+                          HelperText="Required. Short identifier used in field references (e.g. L.ColName)." />
 
             @* Primary curation flags. Eligible-as-primary surfaces the row
                in the Report Builder's "Suggested primaries" group; default
@@ -234,6 +258,12 @@
     private string? _alias;
     private bool _isPrimary;
     private bool _isDefaultPrimary;
+    // True when the admin is registering a CTE/Lookup-backed virtual primary
+    // (table won't appear in INFORMATION_SCHEMA, so the autocomplete can't
+    // see it). Toggling on swaps the picker for a free-form text field.
+    // Not persisted — derived on edit by checking whether InitialTableName
+    // is missing from AvailableTables.
+    private bool _isVirtual;
     private string? _validationError;
     private List<string> _effectiveTables = new();
     private List<RoleOwnerRow> _roleOwners = new();
@@ -309,6 +339,16 @@
         {
             _effectiveTables.Insert(0, InitialTableName);
         }
+
+        // Auto-detect virtual-table editing: an existing row whose name isn't
+        // in the live DB list is presumed virtual (CTE-backed). Lets the
+        // admin re-open and edit the row without re-checking the box.
+        if (!IsNew
+            && !string.IsNullOrWhiteSpace(InitialTableName)
+            && !AvailableTables.Contains(InitialTableName, StringComparer.OrdinalIgnoreCase))
+        {
+            _isVirtual = true;
+        }
     }
 
     private Task<IEnumerable<string>> SearchTables(string? value, CancellationToken ct)
@@ -324,8 +364,10 @@
         if (string.IsNullOrWhiteSpace(_tableName)) return false;
         if (!TleReportingDashboard.Web.Services.PrimaryTableRef.TableRegex().IsMatch(_tableName.Trim())) return false;
         var alias = _alias?.Trim() ?? string.Empty;
-        if (alias.Length > 0
-            && !TleReportingDashboard.Web.Services.PrimaryTableRef.AliasRegex().IsMatch(alias)) return false;
+        // Alias is required — every catalog row needs one so field/join
+        // references unambiguously identify their target.
+        if (alias.Length == 0) return false;
+        if (!TleReportingDashboard.Web.Services.PrimaryTableRef.AliasRegex().IsMatch(alias)) return false;
         if (IsAliasTaken()) return false;
         return true;
     }
@@ -345,7 +387,7 @@
         _validationError = null;
         if (!CanSubmit())
         {
-            _validationError = "Table and alias must be valid identifiers.";
+            _validationError = "Table and alias are both required and must be valid identifiers.";
             return;
         }
         // Coerce: Default without Eligible is nonsensical. The Disabled=""
@@ -353,7 +395,7 @@
         var isPrimary = _isPrimary || _isDefaultPrimary;
         MudDialog.Close(DialogResult.Ok(new EditResult(
             _tableName!.Trim(),
-            string.IsNullOrWhiteSpace(_alias) ? null : _alias!.Trim(),
+            _alias!.Trim(),
             isPrimary,
             _isDefaultPrimary,
             string.IsNullOrWhiteSpace(_tableType) ? null : _tableType!.Trim(),

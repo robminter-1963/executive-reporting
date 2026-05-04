@@ -7,6 +7,7 @@
 @inject IUserPreferenceService PreferenceService
 @inject UserPreferenceState PreferenceState
 @inject IAdminService AdminService
+@inject IAdminAccessService AdminAccess
 @inject ICompanyConnectionAdminService ConnectionAdminSvc
 @inject ICompanyRegistry CompanyRegistry
 @inject IMasterDashboardService MasterService
@@ -27,15 +28,43 @@
    FixedHeader + Height gives the table body its own scrollbar AND the
    page's natural flow also scrolls, so users saw two stacked scrollbars.
    HeadContent is removed automatically when the page unmounts, so other
-   pages keep their default body-scroll behavior. *@
+   pages keep their default body-scroll behavior.
+
+   The flex chain below replaces the older magic-number height math
+   (`calc(100vh - 350px)` and friends) that kept clipping the bottom
+   row whenever chrome height shifted (banners on/off, app-bar height
+   change). Now the table grows/shrinks with the viewport and its pager
+   sits flush at the bottom. *@
 <HeadContent>
     <style>
         html, body { overflow-y: hidden !important; }
+        .rl-page    { display: flex; flex-direction: column; height: calc(100vh - 64px); }
+        .rl-grow    { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+        /* Override MudTabs internals so the active panel fills the
+           available column space. MudTabs nests several wrappers; each
+           needs flex-grow + min-height:0 to forward the bound. */
+        .rl-grow .mud-tabs,
+        .rl-grow .mud-tabs-panels,
+        .rl-grow .mud-tab-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+        /* MudTable's outer wrapper inherits 100% from its parent panel
+           so its FixedHeader scroll viewport sizes from real available
+           space, and the pager (rendered just under the body) lands at
+           the bottom of the page. */
+        .rl-grow .mud-table { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+        .rl-grow .mud-table-container { flex: 1 1 auto; min-height: 0; }
     </style>
 </HeadContent>
 
-@* ── Top bar ── *@
-<MudAppBar Elevation="1" Style="background: #FFFFFF; border-bottom: 1px solid #DADCE0;" Dense Fixed="false">
+@* ── Page toolbar ──
+   Plain MudPaper instead of a second MudAppBar. MudAppBar is designed
+   to BE the global app bar; using one as a page-local secondary toolbar
+   stacks it against the MainLayout's global bar and creates the
+   "bleeds into the title bar" overlap we used to patch with margin
+   hacks. A normal in-flow flex toolbar inside MudMainContent renders
+   below the global bar by default — no z-index or padding fights. *@
+<div class="rl-page">
+
+<MudPaper Elevation="1" Square Style="background: #FFFFFF; border-bottom: 1px solid #DADCE0; padding: 8px 16px; flex: 0 0 auto;">
     <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width: 100%;">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
             <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
@@ -76,7 +105,7 @@
             </MudButton>
         </MudStack>
     </MudStack>
-</MudAppBar>
+</MudPaper>
 
 @* ── Dev mode banner ── *@
 @if (_isDevMode)
@@ -105,7 +134,7 @@
     <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
 }
 
-<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4">
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4 rl-grow">
     @* ── Search + company filter ──
        The company pick is persisted per-user via RPT_user_preferences, so
        it survives session restarts. "All companies" (null) is the default
@@ -139,7 +168,7 @@
             {
                 <MudTable Items="@FilteredMyReports" Hover Striped Dense FixedHeader
                           T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
-                          Height="max(230px, calc(100vh - 350px))"
+                          Height="100%"
                           RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
                     <HeaderContent>
                         <MudTh>Name</MudTh>
@@ -297,7 +326,7 @@
             {
                 <MudTable Items="@FilteredSharedReports" Hover Striped Dense FixedHeader
                           T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
-                          Height="max(230px, calc(100vh - 350px))"
+                          Height="100%"
                           RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
                     <HeaderContent>
                         <MudTh>Name</MudTh>
@@ -402,7 +431,7 @@
             {
                 <MudTable Items="@FilteredRecent" Hover Striped Dense FixedHeader
                           T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
-                          Height="max(230px, calc(100vh - 350px))"
+                          Height="100%"
                           RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
                     <HeaderContent>
                         <MudTh>Name</MudTh>
@@ -510,6 +539,8 @@
         </MudTabPanel>
     </MudTabs>
 </MudContainer>
+
+</div> @* /.rl-page *@
 
 @code {
     [SupplyParameterFromQuery(Name = "tab")] public int? InitialTab { get; set; }
@@ -696,7 +727,11 @@
             // Picker + master-dashboard URL already enforce this; the Library's
             // company filter has to match so the dropdown can't offer a
             // company whose dashboard the user couldn't open anyway.
-            if (!_isAdmin && !string.IsNullOrEmpty(_userEmail))
+            // Admin-section roles (System Support et al.) bypass this filter
+            // — they need cross-company visibility to do administrative work,
+            // same model the picker / master-dashboard already use.
+            var hasAdminAccess = await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
+            if (!_isAdmin && !hasAdminAccess && !string.IsNullOrEmpty(_userEmail))
             {
                 var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
                 var allowed = access.Select(a => a.CompanyId).ToHashSet();

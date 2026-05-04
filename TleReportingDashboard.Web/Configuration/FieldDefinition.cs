@@ -69,6 +69,16 @@ public sealed class FieldDefinition
     public bool ApplyTimezoneConversion { get; init; }
 
     /// <summary>
+    /// Admin-asserted single-column uniqueness flag. Set when the
+    /// connection's account can't introspect information_schema
+    /// constraints — schema browsing can't auto-detect the PK / UNIQUE,
+    /// so the admin marks the column manually. Used for the (-) marker on
+    /// Sort By picks and the OFFSET-pagination fallback tiebreaker, both
+    /// of which would otherwise depend on a DB constraint lookup.
+    /// </summary>
+    public bool IsUnique { get; init; }
+
+    /// <summary>
     /// Runtime-only: set by the query pipeline (SqlEmitter / QueryService)
     /// before handing the field off to expression builders. When combined
     /// with ApplyTimezoneConversion, GetSqlExpression() returns the wrapped

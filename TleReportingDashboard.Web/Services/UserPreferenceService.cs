@@ -7,14 +7,27 @@ namespace TleReportingDashboard.Web.Services;
 public class UserPreferenceService : IUserPreferenceService
 {
     private readonly string _connectionString;
+    private readonly ConfigDbCache _cache;
+    private readonly EditorModeState _editorMode;
 
-    public UserPreferenceService(IConfiguration configuration)
+    public UserPreferenceService(
+        IConfiguration configuration,
+        ConfigDbCache cache,
+        EditorModeState editorMode)
     {
         _connectionString = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required.");
+        _cache = cache;
+        _editorMode = editorMode;
     }
 
-    public async Task<UserPreference> GetPreferencesAsync(string userId)
+    public Task<UserPreference> GetPreferencesAsync(string userId) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("UserPreferenceService", "ByUser", userId),
+            () => GetPreferencesImplAsync(userId),
+            bypass: _editorMode.IsActive);
+
+    private async Task<UserPreference> GetPreferencesImplAsync(string userId)
     {
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
@@ -158,5 +171,6 @@ public class UserPreferenceService : IUserPreferenceService
         cmd.Parameters.Add(new SqlParameter("@LibCompanyId", (object?)preference.ReportLibraryCompanyId ?? DBNull.Value));
 
         await cmd.ExecuteNonQueryAsync();
+        _cache.Invalidate(ConfigDbCache.Key("UserPreferenceService", "ByUser", preference.UserId));
     }
 }

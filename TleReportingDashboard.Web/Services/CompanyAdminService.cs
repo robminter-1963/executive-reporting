@@ -6,48 +6,61 @@ public sealed class CompanyAdminService : ICompanyAdminService
 {
     private readonly string _connStr;
     private readonly ICompanyRegistry _registry;
+    private readonly ConfigDbCache _cache;
+    private readonly EditorModeState _editorMode;
     private readonly ILogger<CompanyAdminService> _logger;
 
-    public CompanyAdminService(IConfiguration configuration, ICompanyRegistry registry, ILogger<CompanyAdminService> logger)
+    public CompanyAdminService(
+        IConfiguration configuration,
+        ICompanyRegistry registry,
+        ConfigDbCache cache,
+        EditorModeState editorMode,
+        ILogger<CompanyAdminService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required for CompanyAdminService.");
         _registry = registry;
+        _cache = cache;
+        _editorMode = editorMode;
         _logger = logger;
     }
 
-    public async Task<List<CompanyRecord>> GetAllAsync(CancellationToken ct = default)
-    {
-        var rows = new List<CompanyRecord>();
-        await using var conn = new SqlConnection(_connStr);
-        await conn.OpenAsync(ct);
-        // Include logo + logo_content_type so the admin tab can render a
-        // preview thumbnail without a second round-trip. The logo bytes
-        // are typically < 500 KB so pulling them up-front is cheap.
-        await using var cmd = new SqlCommand(
-            "SELECT id, code, name, data_source_type, connection_ref, is_active, created_at, updated_at, logo, logo_content_type, display_order, website_url FROM EMPOWER.RPT_companies ORDER BY is_active DESC, display_order, name",
-            conn);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            rows.Add(new CompanyRecord(
-                reader.GetGuid(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3),
-                reader.GetString(4),
-                reader.GetBoolean(5),
-                reader.GetDateTime(6),
-                reader.GetDateTime(7))
+    public Task<List<CompanyRecord>> GetAllAsync(CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("CompanyAdminService", "All"),
+            async () =>
             {
-                Logo = reader.IsDBNull(8) ? null : (byte[])reader.GetValue(8),
-                LogoContentType = reader.IsDBNull(9) ? null : reader.GetString(9),
-                DisplayOrder = reader.GetInt32(10),
-                WebsiteUrl = reader.IsDBNull(11) ? null : reader.GetString(11)
-            });
-        }
-        return rows;
-    }
+                var rows = new List<CompanyRecord>();
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                // Include logo + logo_content_type so the admin tab can render a
+                // preview thumbnail without a second round-trip. The logo bytes
+                // are typically < 500 KB so pulling them up-front is cheap.
+                await using var cmd = new SqlCommand(
+                    "SELECT id, code, name, data_source_type, connection_ref, is_active, created_at, updated_at, logo, logo_content_type, display_order, website_url FROM EMPOWER.RPT_companies ORDER BY is_active DESC, display_order, name",
+                    conn);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    rows.Add(new CompanyRecord(
+                        reader.GetGuid(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.GetString(3),
+                        reader.GetString(4),
+                        reader.GetBoolean(5),
+                        reader.GetDateTime(6),
+                        reader.GetDateTime(7))
+                    {
+                        Logo = reader.IsDBNull(8) ? null : (byte[])reader.GetValue(8),
+                        LogoContentType = reader.IsDBNull(9) ? null : reader.GetString(9),
+                        DisplayOrder = reader.GetInt32(10),
+                        WebsiteUrl = reader.IsDBNull(11) ? null : reader.GetString(11)
+                    });
+                }
+                return rows;
+            },
+            bypass: _editorMode.IsActive);
 
     public async Task UpdateDisplayOrderAsync(IReadOnlyList<Guid> orderedIds, CancellationToken ct = default)
     {
@@ -75,6 +88,7 @@ public sealed class CompanyAdminService : ICompanyAdminService
         await tx.CommitAsync(ct);
 
         _registry.Invalidate();
+        _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company display order updated: {Count} companies re-ordered", orderedIds.Count);
     }
 
@@ -99,6 +113,7 @@ public sealed class CompanyAdminService : ICompanyAdminService
         await cmd.ExecuteNonQueryAsync(ct);
 
         _registry.Invalidate();
+        _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company created: {Code} by {CreatedBy}", code, createdBy ?? "unknown");
         return new CompanyRecord(id, code, name, dataSourceType, connectionRef, true, now, now)
         {
@@ -128,6 +143,7 @@ public sealed class CompanyAdminService : ICompanyAdminService
         await cmd.ExecuteNonQueryAsync(ct);
 
         _registry.Invalidate();
+        _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company updated: {Id} ({Code}), active={IsActive}", id, code, isActive);
     }
 
@@ -158,6 +174,7 @@ public sealed class CompanyAdminService : ICompanyAdminService
         await cmd.ExecuteNonQueryAsync(ct);
 
         _registry.Invalidate();
+        _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company active-state changed: {Id} → {IsActive}", id, isActive);
     }
 
@@ -185,6 +202,7 @@ public sealed class CompanyAdminService : ICompanyAdminService
         // an Invalidate() isn't strictly required — but future callers that
         // cache the full record would want a fresh read after an upload.
         _registry.Invalidate();
+        _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company logo uploaded: {Id} ({Bytes} bytes, {Ct})", id, bytes.Length, contentType);
     }
 
@@ -202,6 +220,7 @@ public sealed class CompanyAdminService : ICompanyAdminService
         await cmd.ExecuteNonQueryAsync(ct);
 
         _registry.Invalidate();
+        _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company logo cleared: {Id}", id);
     }
 

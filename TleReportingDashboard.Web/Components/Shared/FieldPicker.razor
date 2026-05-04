@@ -47,9 +47,9 @@
                                         {
                                             <div style="color: #ccc; margin-bottom: 4px;">@field.Description</div>
                                         }
-                                        <div style="display: flex; gap: 12px; font-size: 0.7rem; color: #aaa;">
-                                            <span>Type: @field.DataType</span>
-                                            <span>@field.FieldType</span>
+                                        <div style="display: flex; flex-direction: column; gap: 2px; font-size: 0.7rem; color: #ddd;">
+                                            <span><strong>ID:</strong> @field.Id</span>
+                                            <span><strong>Type:</strong> @field.DataType <span style="color: #aaa;">(@field.FieldType)</span></span>
                                         </div>
                                         @if (!string.IsNullOrEmpty(field.RolesRequired))
                                         {

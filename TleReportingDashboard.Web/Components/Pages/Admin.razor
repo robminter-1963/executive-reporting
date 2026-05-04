@@ -1,6 +1,9 @@
 @page "/admin"
 @rendermode InteractiveServer
+@implements IDisposable
+@inject EditorModeState EditorMode
 @inject IAdminService AdminService
+@inject IAdminAccessService AdminAccess
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthStateProvider
 
@@ -10,26 +13,46 @@
     <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
         <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Navigation.NavigateTo("/reports"))" />
         <MudText Typo="Typo.h5" Style="font-weight: 600;">Admin</MudText>
-        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
-                 Icon="@Icons.Material.Filled.Shield"
-                 Style="font-size: 0.65rem; height: 22px;">
-            GLOBAL ADMIN
-        </MudChip>
+        @if (_isFullAdmin)
+        {
+            <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
+                     Icon="@Icons.Material.Filled.Shield"
+                     Style="font-size: 0.65rem; height: 22px;">
+                GLOBAL ADMIN
+            </MudChip>
+        }
+        else
+        {
+            @* Non-admin badge — clarifies that the user only has section-
+               scoped access (e.g. System Support). The chip color shifts
+               to differentiate it from the global-admin chip. *@
+            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined"
+                     Icon="@Icons.Material.Filled.LockPerson"
+                     Style="font-size: 0.65rem; height: 22px;">
+                LIMITED ACCESS
+            </MudChip>
+        }
         <MudSpacer />
-        <MudTooltip Text="Preview the proposed ad-hoc filter UX — nothing persists">
-            <MudButton Variant="Variant.Outlined" Color="Color.Warning"
-                       StartIcon="@Icons.Material.Filled.Science"
-                       OnClick="@(() => Navigation.NavigateTo("/prototype/filters"))">
-                Filter Prototype
-            </MudButton>
-        </MudTooltip>
-        <MudTooltip Text="Schema Builder — edit per-company field catalog">
-            <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                       StartIcon="@Icons.Material.Filled.DataObject"
-                       OnClick="@(() => Navigation.NavigateTo("/admin/schema-builder"))">
-                Schema Builder
-            </MudButton>
-        </MudTooltip>
+        @if (_isFullAdmin)
+        {
+            <MudTooltip Text="Preview the proposed ad-hoc filter UX — nothing persists">
+                <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                           StartIcon="@Icons.Material.Filled.Science"
+                           OnClick="@(() => Navigation.NavigateTo("/prototype/filters"))">
+                    Filter Prototype
+                </MudButton>
+            </MudTooltip>
+        }
+        @if (_allowedSections.Contains(AdminSections.SchemaBuilder))
+        {
+            <MudTooltip Text="Schema Builder — edit per-company field catalog">
+                <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                           StartIcon="@Icons.Material.Filled.DataObject"
+                           OnClick="@(() => Navigation.NavigateTo("/admin/schema-builder"))">
+                    Schema Builder
+                </MudButton>
+            </MudTooltip>
+        }
     </MudStack>
     <MudText Typo="Typo.body2" Color="Color.Secondary">
         Set up companies, their data-source connections, and users (with per-company role grants). Changes take effect immediately.
@@ -38,46 +61,92 @@
     @if (!_accessGranted)
     {
         <MudAlert Severity="Severity.Error">
-            You must be a global admin to access this page.
+            Your role doesn't grant access to any admin sections. Contact a global admin if you need access.
         </MudAlert>
     }
     else
     {
         <MudTabs @bind-ActivePanelIndex="_activeTab" Elevation="0" Rounded ApplyEffectsToContainer>
-            <MudTabPanel Text="Companies" Icon="@Icons.Material.Filled.Business">
-                <AdminCompaniesTab />
-            </MudTabPanel>
-            <MudTabPanel Text="DB Connections" Icon="@Icons.Material.Filled.Storage">
-                <AdminConnectionsTab />
-            </MudTabPanel>
-            <MudTabPanel Text="Users" Icon="@Icons.Material.Filled.ManageAccounts">
-                <AdminUsersTab CurrentUserEmail="@_currentUserEmail" />
-            </MudTabPanel>
-            <MudTabPanel Text="Roles" Icon="@Icons.Material.Filled.Badge">
-                <AdminRolesTab CurrentUserEmail="@_currentUserEmail" />
-            </MudTabPanel>
-            <MudTabPanel Text="Team Builder" Icon="@Icons.Material.Filled.Groups">
-                <AdminTeamBuilderTab CurrentUserEmail="@_currentUserEmail" />
-            </MudTabPanel>
-            <MudTabPanel Text="Schema History" Icon="@Icons.Material.Filled.History">
-                <AdminSchemaHistoryTab />
-            </MudTabPanel>
+            @* Each tab gates on the section key. Tabs the role can't reach
+               are hidden entirely so the editor never lands on one. The
+               component-level guard inside each tab is a backstop. *@
+            @if (_allowedSections.Contains(AdminSections.Companies))
+            {
+                <MudTabPanel Text="Companies" Icon="@Icons.Material.Filled.Business">
+                    <AdminCompaniesTab />
+                </MudTabPanel>
+            }
+            @if (_allowedSections.Contains(AdminSections.DbConnections))
+            {
+                <MudTabPanel Text="DB Connections" Icon="@Icons.Material.Filled.Storage">
+                    <AdminConnectionsTab />
+                </MudTabPanel>
+            }
+            @if (_allowedSections.Contains(AdminSections.Users))
+            {
+                <MudTabPanel Text="Users" Icon="@Icons.Material.Filled.ManageAccounts">
+                    <AdminUsersTab CurrentUserEmail="@_currentUserEmail" />
+                </MudTabPanel>
+            }
+            @if (_allowedSections.Contains(AdminSections.Roles))
+            {
+                <MudTabPanel Text="Roles" Icon="@Icons.Material.Filled.Badge">
+                    <AdminRolesTab CurrentUserEmail="@_currentUserEmail" CanEditAdminSections="@_isFullAdmin" />
+                </MudTabPanel>
+            }
+            @if (_allowedSections.Contains(AdminSections.TeamBuilder))
+            {
+                <MudTabPanel Text="Team Builder" Icon="@Icons.Material.Filled.Groups">
+                    <AdminTeamBuilderTab CurrentUserEmail="@_currentUserEmail" />
+                </MudTabPanel>
+            }
+            @if (_allowedSections.Contains(AdminSections.SchemaHistory))
+            {
+                <MudTabPanel Text="Schema History" Icon="@Icons.Material.Filled.History">
+                    <AdminSchemaHistoryTab />
+                </MudTabPanel>
+            }
+            @if (_allowedSections.Contains(AdminSections.Promotion))
+            {
+                <MudTabPanel Text="Promotion" Icon="@Icons.Material.Filled.Sync">
+                    <AdminPromotionTab CurrentUserEmail="@_currentUserEmail" />
+                </MudTabPanel>
+            }
         </MudTabs>
     }
 </MudStack>
 
 @code {
     private bool _accessGranted;
+    // True for global admins (everything visible). False for limited-access
+    // roles like System Support — they see only the tabs / buttons their
+    // role allows. Drives the chip color in the header and the visibility
+    // of the Filter Prototype button.
+    private bool _isFullAdmin;
+    private IReadOnlySet<string> _allowedSections =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     private int _activeTab;
     private string _currentUserEmail = string.Empty;
+    private IDisposable? _editorScope;
 
     protected override async Task OnInitializedAsync()
     {
+        _editorScope = EditorMode.Enter();
+
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         _currentUserEmail = authState.User.FindFirst("preferred_username")?.Value
             ?? authState.User.FindFirst("email")?.Value
             ?? authState.User.Identity?.Name
             ?? string.Empty;
-        _accessGranted = AdminService.IsGlobalAdmin(_currentUserEmail);
+
+        _isFullAdmin = AdminService.IsGlobalAdmin(_currentUserEmail);
+        _allowedSections = await AdminAccess.GetAllowedSectionsAsync(_currentUserEmail);
+        _accessGranted = _allowedSections.Count > 0;
+    }
+
+    public void Dispose()
+    {
+        _editorScope?.Dispose();
+        _editorScope = null;
     }
 }

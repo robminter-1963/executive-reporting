@@ -31,6 +31,13 @@ public static class AdvancedFilterSqlEmitter
         public string DataType { get; init; } = string.Empty;
         public string? DisplayTimezone { get; init; }
 
+        // Mirrors FieldConfig/FieldDefinition.ApplyTimezoneConversion. The
+        // pipeline paints DisplayTimezone onto every referenced field at
+        // emission time, so DisplayTimezone alone is not a sufficient signal
+        // for "should this field's date filter wrap with AT TIME ZONE" —
+        // only fields explicitly flagged for conversion should wrap.
+        public bool ApplyTimezoneConversion { get; init; }
+
         // Non-date LHS expression — inline SqlExpression if present,
         // otherwise the qualified column reference. Date-typed fields
         // bypass this and go through BuildDateLhs (which always casts
@@ -159,14 +166,19 @@ public static class AdvancedFilterSqlEmitter
 
     // Date filter LHS: always CAST AS DATE so day-grained comparison
     // works regardless of whether the underlying column is date or
-    // datetime. Postgres adds the TZ wrap when DisplayTimezone is set;
-    // SQL Server never wraps (data is stored in local time already).
+    // datetime. Postgres adds the TZ wrap only when the field is
+    // explicitly flagged ApplyTimezoneConversion AND DisplayTimezone is
+    // set on the connection. Without the ApplyTimezoneConversion gate the
+    // wrap fires on every datetime field whose connection has a display
+    // timezone — i.e. fields stored in local time get an unwanted UTC→tz
+    // shift in the WHERE. SQL Server never wraps (stored in local time).
     private static string BuildDateLhs(FilterableField field, bool isPostgres)
     {
         var raw = field.GetRawExpression();
         if (isPostgres)
         {
-            if (!string.IsNullOrWhiteSpace(field.DisplayTimezone))
+            if (field.ApplyTimezoneConversion
+                && !string.IsNullOrWhiteSpace(field.DisplayTimezone))
             {
                 var tz = field.DisplayTimezone!.Replace("'", "''");
                 return $"({raw} AT TIME ZONE 'UTC' AT TIME ZONE '{tz}')::date";
@@ -235,6 +247,14 @@ public static class AdvancedFilterSqlEmitter
         string todayExpr, firstOfMonth, firstOfYear, firstOfLastYear, firstOfLastMonth;
         if (isPostgres)
         {
+            // "Today" always follows the connection's DisplayTimezone, NOT
+            // the field-level ApplyTimezoneConversion flag. The flag controls
+            // whether the field's stored value gets shifted (it's already in
+            // local time when false). "Today" is the user's wall-clock date,
+            // which is the connection's display zone. CURRENT_DATE returns
+            // the session zone (typically UTC on managed Postgres), so a
+            // late-evening Pacific query computes "today" as tomorrow —
+            // wrong reference for any relative comparison.
             todayExpr = !string.IsNullOrWhiteSpace(field.DisplayTimezone)
                 ? $"(NOW() AT TIME ZONE '{field.DisplayTimezone!.Replace("'", "''")}')::date"
                 : "CURRENT_DATE";
@@ -245,6 +265,11 @@ public static class AdvancedFilterSqlEmitter
         }
         else
         {
+            // SQL Server: datetimes are stored in local server time, not UTC,
+            // so GETDATE() (server-local) is the right "today" reference and
+            // no AT TIME ZONE wrap is applied. Per-connection DisplayTimezone
+            // is intentionally ignored on this path — applying a UTC→local
+            // shift would corrupt comparisons against locally-stored data.
             todayExpr        = "CAST(GETDATE() AS DATE)";
             firstOfMonth     = $"DATEFROMPARTS(YEAR({todayExpr}), MONTH({todayExpr}), 1)";
             firstOfYear      = $"DATEFROMPARTS(YEAR({todayExpr}), 1, 1)";

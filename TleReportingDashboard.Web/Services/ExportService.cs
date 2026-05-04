@@ -36,9 +36,12 @@ public class ExportService : IExportService
 
                 // Per-field Format, when set, writes the formatted string so the
                 // cell reads exactly what the user sees in the grid. Skips the
-                // type-based cell-value conversion in that branch.
+                // type-based cell-value conversion in that branch. DataType is
+                // passed through so phone/date branches in FieldFormatter fire
+                // the same way they do in the grid (digit-count guard, default
+                // date format, etc.).
                 if (!string.IsNullOrWhiteSpace(column.Format))
-                    cell.Value = FieldFormatter.Format(value, column.Format);
+                    cell.Value = FieldFormatter.Format(value, column.Format, column.DataType);
                 else
                     SetCellValue(cell, value, column.DataType);
             }
@@ -77,7 +80,7 @@ public class ExportService : IExportService
             {
                 row.TryGetValue(column.FieldId, out var value);
                 var formatted = !string.IsNullOrWhiteSpace(column.Format)
-                    ? FieldFormatter.Format(value, column.Format)
+                    ? FieldFormatter.Format(value, column.Format, column.DataType)
                     : FormatValue(value, column.DataType);
                 fields.Add(EscapeCsvField(formatted));
             }

@@ -46,19 +46,30 @@
                 </MudAlert>
             }
 
-            @if (HasDetail)
+            @if (HasDetail || HasDashboard)
             {
-                @* Two tabs when the caller passed a detail-view query too —
-                   Table vs Detail. Each tab has its own Copy button so the
-                   one you're looking at is the one you copy. *@
+                @* Up to three tabs — Table / Dashboard / Detail. They're
+                   different SQL shapes (Dashboard wraps the row-level
+                   Table query in an outer GROUP BY; Detail re-orders for
+                   drill-down clustering) so they aren't conflated. Each
+                   tab's own Copy button respects the active selection. *@
                 <MudTabs ActivePanelIndex="_activeIndex" ActivePanelIndexChanged="i => _activeIndex = i"
                          Elevation="0" Rounded>
                     <MudTabPanel Text="Table View" Icon="@Icons.Material.Filled.TableChart">
                         @RenderSqlBlock(Sql, Parameters)
                     </MudTabPanel>
-                    <MudTabPanel Text="Detail View" Icon="@Icons.Material.Filled.ZoomIn">
-                        @RenderSqlBlock(DetailSql ?? string.Empty, DetailParameters)
-                    </MudTabPanel>
+                    @if (HasDashboard)
+                    {
+                        <MudTabPanel Text="Dashboard View" Icon="@Icons.Material.Filled.Dashboard">
+                            @RenderSqlBlock(DashboardSql ?? string.Empty, DashboardParameters)
+                        </MudTabPanel>
+                    }
+                    @if (HasDetail)
+                    {
+                        <MudTabPanel Text="Detail View" Icon="@Icons.Material.Filled.ZoomIn">
+                            @RenderSqlBlock(DetailSql ?? string.Empty, DetailParameters)
+                        </MudTabPanel>
+                    }
                 </MudTabs>
             }
             else
@@ -94,6 +105,12 @@
     // respects the active tab.
     [Parameter] public string? DetailSql { get; set; }
     [Parameter] public Dictionary<string, object?>? DetailParameters { get; set; }
+    // Optional — the dashboard-aggregated SQL (the row-level Table query
+    // wrapped in an outer GROUP BY for the dashboard tile). Tabbed in when
+    // a primary group-by is set; null when the report has no dashboard
+    // configuration yet.
+    [Parameter] public string? DashboardSql { get; set; }
+    [Parameter] public Dictionary<string, object?>? DashboardParameters { get; set; }
     // Row-level-scoping note from the resolver. When set, the dialog shows
     // a banner above the SQL explaining why the predicate landed where it
     // did — especially useful for the ForceNoMatch case where the query
@@ -114,6 +131,20 @@
     private int _activeIndex;
 
     private bool HasDetail => !string.IsNullOrEmpty(DetailSql);
+    private bool HasDashboard => !string.IsNullOrEmpty(DashboardSql);
+
+    // Resolves the active tab index to (sql, parameters) given the dynamic
+    // tab layout. Tab 0 is always Table View; the Dashboard tab is inserted
+    // when present, pushing Detail to either index 1 (no Dashboard) or
+    // index 2 (Dashboard present).
+    private (string Sql, Dictionary<string, object?>? Parameters) ActiveTab()
+    {
+        if (HasDashboard && _activeIndex == 1)
+            return (DashboardSql ?? string.Empty, DashboardParameters);
+        if (HasDetail && _activeIndex == (HasDashboard ? 2 : 1))
+            return (DetailSql ?? string.Empty, DetailParameters);
+        return (Sql, Parameters);
+    }
 
     private RenderFragment RenderSqlBlock(string sql, Dictionary<string, object?>? parameters) => @<MudStack Spacing="2">
         <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; max-height: 500px; overflow: auto; background: #1E1E1E;">
@@ -148,18 +179,21 @@
 
     private async Task CopyActiveToClipboard()
     {
-        var sql = HasDetail && _activeIndex == 1 ? (DetailSql ?? string.Empty) : Sql;
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", sql);
-        Snackbar.Add("SQL copied to clipboard.", Severity.Success);
+        var (sql, _) = ActiveTab();
+        var ok = await JS.InvokeAsync<bool>("copyToClipboard", sql);
+        Snackbar.Add(
+            ok ? "SQL copied to clipboard." : "Couldn't copy — your browser blocked clipboard access.",
+            ok ? Severity.Success : Severity.Warning);
     }
 
     private async Task CopyActiveWithValuesToClipboard()
     {
-        var sql        = HasDetail && _activeIndex == 1 ? (DetailSql ?? string.Empty) : Sql;
-        var parameters = HasDetail && _activeIndex == 1 ? DetailParameters             : Parameters;
-        var inlined    = InlineParameters(sql, parameters);
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", inlined);
-        Snackbar.Add("SQL copied with values inlined.", Severity.Success);
+        var (sql, parameters) = ActiveTab();
+        var inlined = InlineParameters(sql, parameters);
+        var ok = await JS.InvokeAsync<bool>("copyToClipboard", inlined);
+        Snackbar.Add(
+            ok ? "SQL copied with values inlined." : "Couldn't copy — your browser blocked clipboard access.",
+            ok ? Severity.Success : Severity.Warning);
     }
 
     // Substitute every @parameter reference in the SQL with the value it

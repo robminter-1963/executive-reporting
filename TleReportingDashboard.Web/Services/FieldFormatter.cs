@@ -58,11 +58,20 @@ public static class FieldFormatter
         // (international). Strip those so a 10-digit mask like "(999) 999-9999"
         // lines up with the body of the number — without this normalization
         // "+15551234567" formats as "(155) 512-3456" instead of "(555) 123-4567".
+        //
+        // Underflow guard: if the raw value carries fewer digits than the
+        // mask demands (e.g. mask "(999) 999-9999" needs 10 digits but the
+        // raw is "5551234"), masking would emit a half-formed result like
+        // "(555) 123-4   ". Skip the mask in that case and return the raw
+        // value as-is — typically a partially-entered or extension-style
+        // number that the source system wrote without normalization.
         if (string.Equals(dataType, "phone", StringComparison.OrdinalIgnoreCase))
         {
             var raw = NormalizePhoneRaw(value.ToString() ?? string.Empty);
             var mask = string.IsNullOrWhiteSpace(format) ? DefaultPhoneMask : format;
-            return IsMask(mask) ? ApplyMask(raw, mask) : raw;
+            if (!IsMask(mask)) return raw;
+            if (CountDigits(raw) < CountChar(mask, '9')) return raw;
+            return ApplyMask(raw, mask);
         }
 
         if (string.IsNullOrWhiteSpace(format))
@@ -129,6 +138,20 @@ public static class FieldFormatter
             if (c == '9' || c == 'A' || c == '*') return true;
         }
         return false;
+    }
+
+    private static int CountDigits(string s)
+    {
+        var count = 0;
+        foreach (var c in s) if (c >= '0' && c <= '9') count++;
+        return count;
+    }
+
+    private static int CountChar(string s, char target)
+    {
+        var count = 0;
+        foreach (var c in s) if (c == target) count++;
+        return count;
     }
 
     private static string ApplyMask(string raw, string mask)

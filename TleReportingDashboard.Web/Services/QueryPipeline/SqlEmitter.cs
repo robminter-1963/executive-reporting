@@ -141,6 +141,13 @@ public sealed partial class SqlEmitter : IQueryPipeline
         var aggregation = AggregationBuilder.BuildAggregation(
             projectedColumns, resolvedFields, request.Aggregations);
 
+        // Resolve dialect for SQL emission + connection dispatch. Pulled
+        // ahead of the date-filter translate step so the translator can
+        // rewrite Postgres-only tokens (CURRENT_DATE / CURRENT_TIMESTAMP)
+        // in admin-authored SqlTemplates to timezone-aware equivalents.
+        var dialect = await ResolveDialectAsync(request.ConnectionId);
+        var isPostgres = string.Equals(dialect.Name, "postgres", StringComparison.OrdinalIgnoreCase);
+
         // Stage 5: Translate date filter
         var dateFilter = DateFilterTranslator.TranslateDateFilter(
             request.DateFieldId,
@@ -148,13 +155,11 @@ public sealed partial class SqlEmitter : IQueryPipeline
             request.DateFrom,
             request.DateTo,
             schema.Fields,
-            schema.Settings.RelativeDateOperators);
+            schema.Settings.RelativeDateOperators,
+            isPostgres);
 
         // Stage 6: Apply guardrails
         var guardrails = QueryGuardrails.Apply(schema.Settings);
-
-        // Resolve dialect for SQL emission + connection dispatch.
-        var dialect = await ResolveDialectAsync(request.ConnectionId);
 
         // Stage 7: Build and execute SQL
         var (sql, parameters) = BuildSql(
@@ -349,7 +354,8 @@ public sealed partial class SqlEmitter : IQueryPipeline
                         SourceTable = fd.SourceTable,
                         SourceColumn = fd.SourceColumn,
                         DataType = fd.DataType,
-                        DisplayTimezone = fd.DisplayTimezone
+                        DisplayTimezone = fd.DisplayTimezone,
+                        ApplyTimezoneConversion = fd.ApplyTimezoneConversion
                     }
                     : null,
                 dialect,
@@ -512,8 +518,12 @@ public sealed partial class SqlEmitter : IQueryPipeline
     }
 
     /// <summary>
-    /// For fields with a LookupId that has an ORDERBY column, returns "LOOKUP.ORDERBY".
-    /// Otherwise falls back to the field's default SQL expression.
+    /// For fields with a LookupId, returns "<CTE>.<last column>" — the
+    /// convention is that the last column in a lookup CTE header carries
+    /// the workflow / display order. Handles 2-column "LOOKUP(STATUS,
+    /// ORDERBY)", 3-column "LOOKUP(STATUS, EVENTNUM, ORDERBY)", and any
+    /// wider variants. Falls back to the field's default expression when
+    /// the field has no lookup or the preamble doesn't parse.
     /// </summary>
     private static string ResolveSortExpression(FieldDefinition field, List<LookupDefinition> lookups)
     {
@@ -523,11 +533,18 @@ public sealed partial class SqlEmitter : IQueryPipeline
             foreach (var id in field.LookupIds)
             {
                 if (!lookupMap.TryGetValue(id, out var lu)) continue;
-                // Parse CTE name and 3rd column: "LOOKUP(STATUS, EVENTNUM, ORDERBY)" → "LOOKUP.ORDERBY"
                 var match = System.Text.RegularExpressions.Regex.Match(lu.SqlPreamble.Trim(),
-                    @"^(\w+)\s*\(\s*\w+\s*,\s*\w+\s*,\s*(\w+)\s*\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                if (match.Success)
-                    return $"{match.Groups[1].Value}.{match.Groups[2].Value}";
+                    @"^(\w+)\s*\(\s*([^)]+?)\s*\)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (!match.Success) continue;
+                var cteName = match.Groups[1].Value;
+                var cols = match.Groups[2].Value
+                    .Split(',')
+                    .Select(c => c.Trim().Trim('"', '[', ']', '`'))
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .ToList();
+                if (cols.Count >= 2)
+                    return $"{cteName}.{cols[^1]}";
             }
         }
         return field.GetSqlExpression();

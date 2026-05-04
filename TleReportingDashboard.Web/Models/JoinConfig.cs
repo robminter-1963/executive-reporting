@@ -10,4 +10,10 @@ public class JoinConfig
     public string ToColumn { get; set; } = string.Empty;
     public string JoinType { get; set; } = "INNER JOIN";
     public string? RawSql { get; set; }
+    // Optional primary-table scope. When set, QueryBuilder only considers
+    // this join for reports whose primary matches (via name OR alias).
+    // Null/empty = GENERIC (eligible for any report) — preserves the
+    // pre-scoping behavior for legacy joins.
+    public string? PrimaryTable { get; set; }
+    public string? PrimaryAlias { get; set; }
 }

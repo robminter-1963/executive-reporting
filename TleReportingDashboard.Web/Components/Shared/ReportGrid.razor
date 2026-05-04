@@ -16,15 +16,29 @@
         <table>
             <thead>
                 <tr>
-                    @foreach (var col in VisibleColumns)
+                    @foreach (var entry in BuildRenderColumns())
                     {
-                        var (minWidth, defaultMax) = GetColumnWidths(col);
-                        var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
-                        var align = GetCellAlign(col.DataType);
-                        <th class="mud-table-cell"
-                            style="@($"width: {w}px; max-width: {w}px; min-width: {minWidth}px; {align}")">
-                            @col.Label
-                        </th>
+                        if (entry is ColumnMeta col)
+                        {
+                            var (minWidth, defaultMax) = GetColumnWidths(col);
+                            var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
+                            var align = GetCellAlign(col.DataType);
+                            <th class="mud-table-cell"
+                                style="@($"width: {w}px; max-width: {w}px; min-width: {minWidth}px; {align}")">
+                                @col.Label
+                            </th>
+                        }
+                        else if (entry is TableCalcColumnDef cc)
+                        {
+                            var ccLocal = cc;
+                            var (ccMin, ccMax) = GetCalcColumnWidths(cc);
+                            var ccAlign = GetCellAlign(cc.DataType ?? "decimal");
+                            <th class="mud-table-cell"
+                                style="@($"width: {ccMax}px; max-width: {ccMax}px; min-width: {ccMin}px; {ccAlign}")"
+                                title="@(string.IsNullOrWhiteSpace(ccLocal.SqlExpression) ? $"Formula: {ccLocal.Formula}" : $"SQL: {ccLocal.SqlExpression}")">
+                                @ccLocal.Label
+                            </th>
+                        }
                     }
                     <th class="grid-filler" style="width: 100%; padding: 0; border: none;"></th>
                 </tr>
@@ -33,16 +47,30 @@
                 @foreach (var row in PagedSortedRows)
                 {
                     <tr>
-                        @foreach (var col in VisibleColumns)
+                        @foreach (var entry in BuildRenderColumns())
                         {
-                            var (minWidth, defaultMax) = GetColumnWidths(col);
-                            var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
-                            var align = GetCellAlign(col.DataType);
-                            <td class="mud-table-cell"
-                                style="@($"width: {w}px; min-width: {minWidth}px; max-width: {w}px; {align}")"
-                                title="@FormatValue(row, col)">
-                                <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {w}px;")">@FormatValue(row, col)</span>
-                            </td>
+                            if (entry is ColumnMeta col)
+                            {
+                                var (minWidth, defaultMax) = GetColumnWidths(col);
+                                var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
+                                var align = GetCellAlign(col.DataType);
+                                <td class="mud-table-cell"
+                                    style="@($"width: {w}px; min-width: {minWidth}px; max-width: {w}px; {align}")"
+                                    title="@FormatValue(row, col)">
+                                    <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {w}px;")">@FormatValue(row, col)</span>
+                                </td>
+                            }
+                            else if (entry is TableCalcColumnDef cc)
+                            {
+                                var (ccMin, ccMax) = GetCalcColumnWidths(cc);
+                                var ccAlign = GetCellAlign(cc.DataType ?? "decimal");
+                                var ccText = FormatCalcCell(row, cc);
+                                <td class="mud-table-cell"
+                                    style="@($"width: {ccMax}px; min-width: {ccMin}px; max-width: {ccMax}px; {ccAlign}")"
+                                    title="@ccText">
+                                    <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {ccMax}px;")">@ccText</span>
+                                </td>
+                            }
                         }
                         <td class="grid-filler" style="padding: 0; border: none;"></td>
                     </tr>
@@ -87,24 +115,55 @@ else
                      RowsPerPageChanged="OnPageSizeChanged"
                      Class="resizable-grid">
             <Columns>
-                @foreach (var col in VisibleColumns)
+                @* Walk the unified render order so calc columns (TC-SQL) sit
+                   wherever the admin dragged them in the chip bar instead of
+                   always at the end. Each entry is either a ColumnMeta or a
+                   TableCalcColumnDef. *@
+                @foreach (var entry in BuildRenderColumns())
                 {
-                    var (minWidth, defaultMax) = GetColumnWidths(col);
-                    var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
-                    var align = GetCellAlign(col.DataType);
-                    var c = col;
-                    <TemplateColumn T="Dictionary<string, object?>" Title="@col.Label"
-                                    Field="@col.FieldId"
-                                    PropertyName="@col.FieldId"
-                                    Sortable="true"
-                                    SortBy="@(row => GetSortValue(row, c))"
-                                    HeaderStyle="@($"width: {w}px; max-width: {w}px; white-space: nowrap; overflow: hidden; {align}")"
-                                    CellStyle="@($"width: {w}px; min-width: {minWidth}px; max-width: {w}px; overflow: hidden; text-overflow: ellipsis; {align}")">
-                        <CellTemplate>
-                            <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {w}px;")"
-                                  title="@FormatValue(context.Item, col)">@FormatValue(context.Item, col)</span>
-                        </CellTemplate>
-                    </TemplateColumn>
+                    if (entry is ColumnMeta col)
+                    {
+                        var (minWidth, defaultMax) = GetColumnWidths(col);
+                        var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
+                        var align = GetCellAlign(col.DataType);
+                        var c = col;
+                        <TemplateColumn T="Dictionary<string, object?>" Title="@col.Label"
+                                        Field="@col.FieldId"
+                                        PropertyName="@col.FieldId"
+                                        Sortable="true"
+                                        SortBy="@(row => GetSortValue(row, c))"
+                                        HeaderStyle="@($"width: {w}px; max-width: {w}px; white-space: nowrap; overflow: hidden; {align}")"
+                                        CellStyle="@($"width: {w}px; min-width: {minWidth}px; max-width: {w}px; overflow: hidden; text-overflow: ellipsis; {align}")">
+                            <CellTemplate>
+                                <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {w}px;")"
+                                      title="@FormatValue(context.Item, col)">@FormatValue(context.Item, col)</span>
+                            </CellTemplate>
+                        </TemplateColumn>
+                    }
+                    else if (entry is TableCalcColumnDef cc)
+                    {
+                        var ccLocal = cc;
+                        var (ccMin, ccMax) = GetCalcColumnWidths(cc);
+                        var ccAlign = GetCellAlign(cc.DataType ?? "decimal");
+                        <TemplateColumn T="Dictionary<string, object?>" Title="@cc.Label"
+                                        Sortable="true"
+                                        SortBy="@(row => CalcSortValue(row, ccLocal))"
+                                        HeaderStyle="@($"width: {ccMax}px; max-width: {ccMax}px; white-space: nowrap; overflow: hidden; {ccAlign}")"
+                                        CellStyle="@($"width: {ccMax}px; min-width: {ccMin}px; max-width: {ccMax}px; overflow: hidden; text-overflow: ellipsis; {ccAlign}")">
+                            <HeaderTemplate>
+                                <MudTooltip Text="@(string.IsNullOrWhiteSpace(ccLocal.SqlExpression) ? $"Formula: {ccLocal.Formula}" : $"SQL: {ccLocal.SqlExpression}")">
+                                    <span>@ccLocal.Label</span>
+                                </MudTooltip>
+                            </HeaderTemplate>
+                            <CellTemplate>
+                                @{
+                                    var ccText = FormatCalcCell(context.Item, ccLocal);
+                                }
+                                <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {ccMax}px;")"
+                                      title="@ccText">@ccText</span>
+                            </CellTemplate>
+                        </TemplateColumn>
+                    }
                 }
                 @* Filler column to absorb remaining width *@
                 <TemplateColumn T="Dictionary<string, object?>" title=""
@@ -274,6 +333,12 @@ else
     // Columns the Table view must always hide — e.g. aggregate fields whose
     // values only make sense in the Dashboard view. Not user-toggleable.
     [Parameter] public List<string>? AlwaysHiddenColumns { get; set; }
+    // Calculated columns rendered AFTER the data columns. Each is evaluated
+    // per-row at render time against the row dictionary; unlike data
+    // columns these don't round-trip through SQL. Null / empty list = no
+    // calc columns shown. Independent of any template lock — calc columns
+    // are admin derivations on top of the template's field set.
+    [Parameter] public List<TableCalcColumnDef>? CalcColumns { get; set; }
     [Parameter] public bool ReadOnly { get; set; }
     // When true, the grid fills the browser viewport (minus a small allowance
     // for the page header above it). Once the user picks a specific rows-per-
@@ -314,9 +379,22 @@ else
     private bool _hiddenLoaded;
     private HashSet<string> _hiddenColumns = new();
     private List<ColumnMeta> _columnOrder = new();
+    // Live combined order — mirrors InitialColumnOrder on first load and
+    // gets updated whenever ApplyColumnOrder is called. BuildRenderColumns
+    // walks this list (not the immutable InitialColumnOrder parameter) so
+    // chip-bar reorders take effect immediately without a re-run of the
+    // query. Mixed list of field ids and calc keys.
+    private List<string>? _combinedColumnOrder;
     private int _renderCount;
     private Dictionary<string, int> _customWidths = new();
     private DotNetObjectReference<ReportGrid>? _dotNetRef;
+    // Set in Dispose. OnAfterRenderAsync awaits a 100ms debounce before
+    // wiring up JS; if the component disposes during that delay (parent
+    // re-render swapping in fresh data, or page navigation), the post-
+    // delay code must not use _dotNetRef — it's already been disposed
+    // and JSInterop's serializer throws ObjectDisposedException trying
+    // to write the reference.
+    private bool _disposed;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -345,8 +423,19 @@ else
             {
                 var col = _columnOrder.FirstOrDefault(c =>
                     string.Equals(c.FieldId, field, StringComparison.OrdinalIgnoreCase));
-                if (col is null) continue;
-                specs.Add(new { label = col.Label, direction = dir });
+                if (col is not null)
+                {
+                    specs.Add(new { label = col.Label, direction = dir });
+                    continue;
+                }
+                // Fall back to calc columns — saved sort by a calc Key
+                // restores by matching against the calc's Label (the JS
+                // applier dispatches a header click on the column whose
+                // visible text equals this label).
+                var calc = CalcColumns?.FirstOrDefault(c =>
+                    string.Equals(c.Key, field, StringComparison.OrdinalIgnoreCase));
+                if (calc is not null && !string.IsNullOrEmpty(calc.Label))
+                    specs.Add(new { label = calc.Label, direction = dir });
             }
             if (specs.Count > 0)
                 await JS.InvokeVoidAsync("mudGridSort.applyInitial", $"#{_gridHostId}", specs);
@@ -367,10 +456,19 @@ else
             _renderCount++;
             var currentRender = _renderCount;
             await Task.Delay(100);
+            // _disposed guard for the disposal-during-delay race: parent
+            // re-rendered with fresh data (or the page navigated away)
+            // while the 100ms debounce was awaiting, Dispose ran, and
+            // _dotNetRef was disposed. Resuming and passing the disposed
+            // reference to JSInterop throws ObjectDisposedException
+            // inside the serializer. Bail silently — the next render
+            // will set everything up again with a fresh ref.
+            if (_disposed) return;
             if (currentRender == _renderCount)
             {
                 _dotNetRef ??= DotNetObjectReference.Create(this);
                 await JS.InvokeVoidAsync("initColumnResize", ".resizable-grid", _dotNetRef);
+                if (_disposed) return;
 
                 // Activate the JS-driven dynamic height whenever fill-mode
                 // is on. The grid always fills the viewport; pagination and
@@ -412,6 +510,10 @@ else
     // TemplateColumn in MudBlazor 9.3; PropertyName gets auto-generated to a
     // GUID even when we try to override it via the Razor attribute. Title
     // round-trips reliably so we match via Title ↔ ColumnMeta.Label.
+    // Also includes calc columns (key = calc Key, label = calc Label) so a
+    // sort applied to a calc column survives save/reload — without this,
+    // the SortChanged → field-id translation drops calc-column sorts on the
+    // floor and the persisted TableSort lacks them.
     private Dictionary<string, string> BuildIdentifierToFieldMap()
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -422,6 +524,14 @@ else
         {
             if (!string.IsNullOrEmpty(c.Label))
                 labelToField[c.Label] = c.FieldId;
+        }
+        if (CalcColumns is { Count: > 0 })
+        {
+            foreach (var cc in CalcColumns)
+            {
+                if (!string.IsNullOrEmpty(cc.Label) && !string.IsNullOrEmpty(cc.Key))
+                    labelToField[cc.Label] = cc.Key;
+            }
         }
 
         foreach (var rc in _mudGrid.RenderedColumns)
@@ -489,6 +599,9 @@ else
 
     public void Dispose()
     {
+        // Set first so any in-flight OnAfterRenderAsync past its
+        // Task.Delay short-circuits before touching the disposed ref.
+        _disposed = true;
         if (FillViewport)
         {
             // Best-effort: tell the fill-viewport observer to detach so we don't
@@ -497,6 +610,7 @@ else
             catch { /* JS runtime may already be gone — ignore */ }
         }
         _dotNetRef?.Dispose();
+        _dotNetRef = null;
     }
 
     private static (int min, int max) GetColumnWidths(ColumnMeta col)
@@ -540,6 +654,232 @@ else
 
     // Numeric fields right-align; dates, text, bool, and everything else stay left.
     private static string GetCellAlign(string dataType) => IsNumeric(dataType) ? "text-align: right;" : "";
+
+    // ── Calc column rendering (TC-4) ──────────────────────────────────
+    // Width pair for a calc column. Mirrors the type-driven branch in
+    // GetColumnWidths(ColumnMeta) but without MaxLength (calc results
+    // don't have a declared max).
+    // Walks the saved ColumnOrder to interleave regular fields and calc
+    // columns. Each entry is either a ColumnMeta (field) or a
+    // TableCalcColumnDef (calc) — the foreach dispatches by type. Fields
+    // and calcs not covered by the saved order get appended at the end so
+    // newly added items show up without losing the user's manual order.
+    private List<object> BuildRenderColumns()
+    {
+        var visibleFields = VisibleColumns.ToList();
+        var fieldsById = visibleFields.ToDictionary(c => c.FieldId, StringComparer.OrdinalIgnoreCase);
+        var calcs = (CalcColumns ?? new()).Where(c => !string.IsNullOrEmpty(c.Key)).ToList();
+        var calcsByKey = calcs.ToDictionary(c => c.Key, StringComparer.OrdinalIgnoreCase);
+
+        var result = new List<object>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Prefer the live _combinedColumnOrder (mutated by ApplyColumnOrder)
+        // over the immutable InitialColumnOrder parameter so chip-bar
+        // reorders take effect immediately. Falls back to InitialColumnOrder
+        // on the first render before the chip bar has emitted any reorder.
+        var orderSource = _combinedColumnOrder ?? InitialColumnOrder;
+
+        if (orderSource is { Count: > 0 })
+        {
+            foreach (var id in orderSource)
+            {
+                if (seen.Contains(id)) continue;
+                if (fieldsById.TryGetValue(id, out var col))
+                {
+                    result.Add(col);
+                    seen.Add(id);
+                }
+                else if (calcsByKey.TryGetValue(id, out var calc))
+                {
+                    result.Add(calc);
+                    seen.Add(id);
+                }
+            }
+        }
+
+        // Append anything the saved order didn't cover. Maintain VisibleColumns
+        // order for fields and CalcColumns order for calcs so the fallback is
+        // deterministic.
+        foreach (var col in visibleFields)
+        {
+            if (seen.Add(col.FieldId)) result.Add(col);
+        }
+        foreach (var calc in calcs)
+        {
+            if (seen.Add(calc.Key)) result.Add(calc);
+        }
+
+        return result;
+    }
+
+    private static (int min, int max) GetCalcColumnWidths(TableCalcColumnDef cc) =>
+        (cc.DataType ?? string.Empty).ToLowerInvariant() switch
+        {
+            "currency" or "money"     => (70, 110),
+            "percent"  or "percentage"=> (80, 100),
+            "integer"  or "int"       => (35, 70),
+            "boolean"                 => (50, 80),
+            "date"                    => (90, 110),
+            "datetime"                => (130, 170),
+            "text"                    => (120, 240),
+            _                         => (70, 130)
+        };
+
+    // Per-row formatted text for a calc column. Two paths:
+    //   * SQL mode: value lives in the row dict under cc.Key (server-side
+    //     SELECT result). Numeric values still flow through FormatCalcValue
+    //     so percent / currency / etc formats apply; non-numeric values
+    //     (strings from CASE expressions, etc.) render verbatim.
+    //   * Formula mode: client-side evaluator over [bracket-refs]. NaN /
+    //     Infinity (e.g. divide-by-zero on a row with a missing operand)
+    //     renders blank so a single broken row doesn't crash the grid.
+    private string FormatCalcCell(Dictionary<string, object?> row, TableCalcColumnDef cc)
+    {
+        if (!string.IsNullOrWhiteSpace(cc.SqlExpression))
+        {
+            if (!row.TryGetValue(cc.Key, out var raw) || raw is null || raw is DBNull)
+                return string.Empty;
+            return FormatCalcRaw(cc, raw);
+        }
+        try
+        {
+            var val = TleReportingDashboard.Web.Services.CalculatedColumnEvaluator
+                .Evaluate(cc.Formula, ident => CalcLookup(row, ident));
+            if (double.IsNaN(val) || double.IsInfinity(val)) return string.Empty;
+            return FormatCalcValue(cc, val);
+        }
+        catch (FormatException)
+        {
+            return string.Empty;
+        }
+    }
+
+    // Sort-key projector. Returns object? so MudDataGrid can compare both
+    // numeric (formula / numeric SQL) and string (text-valued SQL) values
+    // without an unsafe double cast. NaN / unresolved values still sort to
+    // the bottom regardless of direction.
+    private object? CalcSortValue(Dictionary<string, object?> row, TableCalcColumnDef cc)
+    {
+        if (!string.IsNullOrWhiteSpace(cc.SqlExpression))
+        {
+            if (!row.TryGetValue(cc.Key, out var raw) || raw is null || raw is DBNull)
+                return null;
+            return CalcToDouble(raw) is double d ? d : raw.ToString();
+        }
+        try
+        {
+            var val = TleReportingDashboard.Web.Services.CalculatedColumnEvaluator
+                .Evaluate(cc.Formula, ident => CalcLookup(row, ident));
+            return double.IsNaN(val) || double.IsInfinity(val) ? double.MinValue : val;
+        }
+        catch (FormatException)
+        {
+            return double.MinValue;
+        }
+    }
+
+    // Resolves a bracketed identifier in a calc formula against this row.
+    // Tries the identifier as a field id first (most stable — survives
+    // label rename), then falls back to label match (case-insensitive)
+    // for ergonomics. Returns null when the identifier doesn't match
+    // anything; CalculatedColumnEvaluator turns null into NaN downstream.
+    private double? CalcLookup(Dictionary<string, object?> row, string ident)
+    {
+        if (row.TryGetValue(ident, out var direct))
+            return CalcToDouble(direct);
+
+        if (Data?.Columns is { } cols)
+        {
+            var col = cols.FirstOrDefault(c => string.Equals(c.Label, ident, StringComparison.OrdinalIgnoreCase));
+            if (col is not null && row.TryGetValue(col.FieldId, out var byLabel))
+                return CalcToDouble(byLabel);
+        }
+        return null;
+    }
+
+    private static double? CalcToDouble(object? v)
+    {
+        if (v is null || v is DBNull) return null;
+        if (v is double d) return d;
+        if (v is decimal dec) return (double)dec;
+        if (v is int i) return i;
+        if (v is long l) return l;
+        if (v is short s) return s;
+        if (v is float f) return f;
+        if (double.TryParse(v.ToString(), System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.CurrentCulture, out var parsed))
+            return parsed;
+        return null;
+    }
+
+    private static string FormatCalcValue(TableCalcColumnDef cc, double val)
+    {
+        var format = cc.Format;
+        if (string.IsNullOrWhiteSpace(format))
+        {
+            format = (cc.DataType?.ToLowerInvariant()) switch
+            {
+                "percent"  => "N1",
+                "currency" => "C2",
+                "integer"  => "N0",
+                _          => "N2"
+            };
+        }
+        return val.ToString(format, System.Globalization.CultureInfo.CurrentCulture);
+    }
+
+    // Handles non-numeric SQL-mode calc results. Branches by DataType:
+    //   text / boolean → ToString (boolean coerces 0/1/true/false to Yes/No)
+    //   date / datetime → DateTime parse + .NET format string (cc.Format
+    //                     overrides the default).
+    //   numeric (anything else parseable as a number) → FormatCalcValue
+    //                     so currency/percent/integer/decimal land on the
+    //                     same per-type defaults they used in formula mode.
+    private static string FormatCalcRaw(TableCalcColumnDef cc, object raw)
+    {
+        var dt = (cc.DataType ?? string.Empty).ToLowerInvariant();
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+
+        if (dt == "boolean")
+        {
+            return CoerceBool(raw) is bool b
+                ? (b ? "Yes" : "No")
+                : (raw.ToString() ?? string.Empty);
+        }
+        if (dt is "date" or "datetime")
+        {
+            if (raw is DateTime d
+                || (raw is string ds && DateTime.TryParse(ds, culture,
+                        System.Globalization.DateTimeStyles.None, out d)))
+            {
+                var fmt = string.IsNullOrWhiteSpace(cc.Format)
+                    ? (dt == "date" ? "yyyy-MM-dd" : "yyyy-MM-dd HH:mm")
+                    : cc.Format;
+                return d.ToString(fmt, culture);
+            }
+            return raw.ToString() ?? string.Empty;
+        }
+        if (dt == "text")
+        {
+            return raw.ToString() ?? string.Empty;
+        }
+        // Default / numeric data types — try double, fall back to string.
+        var asDouble = CalcToDouble(raw);
+        return asDouble is double dd ? FormatCalcValue(cc, dd) : (raw.ToString() ?? string.Empty);
+    }
+
+    private static bool? CoerceBool(object? v) => v switch
+    {
+        bool b => b,
+        int i => i != 0,
+        long l => l != 0,
+        short s => s != 0,
+        string str when bool.TryParse(str, out var b) => b,
+        string str when str == "1" => true,
+        string str when str == "0" => false,
+        _ => null
+    };
 
     private static bool IsNumeric(string dataType) => dataType.ToLowerInvariant() switch
     {
@@ -592,6 +932,12 @@ else
                     if (!_columnOrder.Any(c => c.FieldId.Equals(col.FieldId, StringComparison.OrdinalIgnoreCase)))
                         _columnOrder.Add(col);
                 }
+                // Seed the live combined order (mixed field ids + calc keys)
+                // so BuildRenderColumns has the saved interleaving from the
+                // first render — without this, the first render falls back
+                // to InitialColumnOrder anyway, but keeping the two in sync
+                // means later resets via ApplyColumnOrder behave consistently.
+                _combinedColumnOrder = new List<string>(InitialColumnOrder);
                 _orderLoaded = true;
             }
             else
@@ -619,8 +965,19 @@ else
     // Used as @key on the data grid wrapper so the grid remounts when the column
     // sequence changes. Without this, MudDataGrid keeps its internally registered
     // column order and the table headers don't reorder even though _columnOrder did.
-    private string ColumnOrderKey =>
-        string.Join("|", _columnOrder.Select(c => c.FieldId));
+    // Includes the combined order so calc-column moves (which don't touch
+    // _columnOrder) also force a remount.
+    private string ColumnOrderKey
+    {
+        get
+        {
+            var fields = string.Join("|", _columnOrder.Select(c => c.FieldId));
+            var combined = _combinedColumnOrder is null
+                ? string.Empty
+                : string.Join("|", _combinedColumnOrder);
+            return $"{fields}::{combined}";
+        }
+    }
 
     private IEnumerable<ColumnMeta> VisibleColumns =>
         _columnOrder.Where(c => !_hiddenColumns.Contains(c.FieldId)
@@ -681,6 +1038,11 @@ else
         // new list here is enough to re-key the MudDataGrid and force a header
         // reorder.
         _columnOrder = reordered;
+        // Mirror the unified order (which may include calc keys) so
+        // BuildRenderColumns sees the new positions immediately. Without
+        // this the grid would only update on the next query re-run because
+        // BuildRenderColumns reads from InitialColumnOrder otherwise.
+        _combinedColumnOrder = new List<string>(fieldIds);
         StateHasChanged();
     }
 

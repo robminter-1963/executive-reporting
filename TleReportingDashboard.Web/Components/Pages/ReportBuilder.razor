@@ -1,6 +1,8 @@
 @page "/builder"
 @page "/builder/{ReportId:guid?}"
 @rendermode InteractiveServer
+@implements IDisposable
+@inject EditorModeState EditorMode
 @inject ISchemaService SchemaService
 @inject IQueryService QueryService
 @inject IReportService ReportService
@@ -12,12 +14,14 @@
 @inject IDialogService DialogService
 @inject IGridTemplateService GridTemplateService
 @inject IAdminService AdminService
+@inject IAdminAccessService AdminAccess
 @inject IUserManagementService UserManagement
 @inject IQueryScopeResolver ScopeResolver
 @inject ICompanyConnectionAdminService ConnectionAdminSvc
 @inject ICompanyRegistry CompanyRegistry
 @inject IUserPreferenceService PreferenceService
 @inject ISchemaConfigStore SchemaStore
+@inject SchemaBuilderService SchemaBrowser
 @inject ICustomPrimaryTableService CustomPrimaryTableSvc
 @inject TleReportingDashboard.Web.Services.QueryPipeline.ISqlDialectFactory DialectFactory
 @inject ILogger<ReportBuilder> Logger
@@ -30,8 +34,8 @@
 @* ── Left drawer: Field Picker (resizable) ── *@
 @if (_drawerOpen)
 {
-    @* Offset by the 48px MudAppBar in MainLayout so the top of the picker (banner / search) isn't clipped. *@
-    <div style="display: flex; height: calc(100vh - 48px); position: fixed; top: 48px; left: 0; z-index: 100;">
+    @* Offset by the 64px MudAppBar in MainLayout so the top of the picker (banner / search) isn't clipped. *@
+    <div style="display: flex; height: calc(100vh - 64px); position: fixed; top: 64px; left: 0; z-index: 100;">
         <div style="width: @(_drawerWidth)px; min-width: 180px; max-width: 500px;
                     background: #FFFFFF; border-right: 1px solid #DADCE0;
                     overflow: hidden; display: flex; flex-direction: column;">
@@ -49,7 +53,7 @@
     </div>
 }
 
-<MudMainContent Style="@($"padding: 0 16px 16px 16px; margin-left: {(_drawerOpen ? _drawerWidth + 5 : 0)}px; transition: margin-left 0.15s; height: calc(100vh - 48px); overflow-y: auto;")">
+<MudMainContent Style="@($"padding: 0 16px 16px 16px; margin-left: {(_drawerOpen ? _drawerWidth + 5 : 0)}px; transition: margin-left 0.15s; height: calc(100vh - 64px); overflow-y: auto;")">
     @* ── Loading indicator ── *@
     @if (_isLoading)
     {
@@ -268,6 +272,15 @@
                                      Icon="@Icons.Material.Filled.Code">
                             Show generated SQL
                         </MudMenuItem>
+                        @* Show the report's saved-state JSON in a dialog —
+                           same purpose as Schema Builder's Export tab, but
+                           inline so admins can copy/inspect without leaving
+                           the report. Useful for diagnosing column-order /
+                           hidden-list / dashboard-config drift. *@
+                        <MudMenuItem OnClick="ShowReportJson"
+                                     Icon="@Icons.Material.Filled.DataObject">
+                            View report JSON
+                        </MudMenuItem>
                     </MudMenu>
                 </MudTooltip>
                 @if (_isAdmin)
@@ -401,7 +414,39 @@
                           OnFieldRemoved="HandleFieldRemoved"
                           OnClearAll="HandleClearAllFields"
                           OnFieldOrderChanged="HandleFieldOrderChanged"
+                          CalcColumns="_currentConfig.TableCalculatedColumns"
+                          CombinedOrder="_currentConfig.ColumnOrder"
                           TemplateLocked="_linkedTemplateId.HasValue" />
+
+            @* Calc-column add button. The actual calc chips render INSIDE
+               FieldChipBar above as green chips so they reorder inline with
+               regular fields. Clicking a chip in the bar opens its edit
+               dialog (re-routed below); the X on a chip removes it. *@
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+                <MudButton StartIcon="@Icons.Material.Filled.Calculate" Variant="Variant.Text"
+                           Color="Color.Tertiary" Dense Size="Size.Small"
+                           OnClick="@(() => OpenTableCalcDialog(null))">
+                    + Calc Column
+                </MudButton>
+                @if (_currentConfig.TableCalculatedColumns is { Count: > 0 })
+                {
+                    @* Edit links — small text buttons listed compactly so the
+                       admin still has a click-to-edit path without crowding
+                       the chip bar above with click handlers. *@
+                    @foreach (var cc in _currentConfig.TableCalculatedColumns)
+                    {
+                        var ccLocal = cc;
+                        <MudTooltip Text="@($"Edit \"{ccLocal.Label}\" — {(string.IsNullOrWhiteSpace(ccLocal.SqlExpression) ? $"Formula: {ccLocal.Formula}" : $"SQL: {ccLocal.SqlExpression}")}")">
+                            <MudChip T="string" Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                     Icon="@Icons.Material.Filled.Edit"
+                                     OnClick="@(() => OpenTableCalcDialog(ccLocal.Key))"
+                                     OnClose="@(() => RemoveTableCalcColumn(ccLocal.Key))">
+                                @ccLocal.Label
+                            </MudChip>
+                        </MudTooltip>
+                    }
+                }
+            </MudStack>
         }
 
         @* ── Group By chips ── Shown only when at least one selected field has
@@ -451,6 +496,31 @@
                       Icon="@Icons.Material.Filled.FilterAlt">
                 Showing the first @_queryData.Rows.Count.ToString("N0") of @_queryData.TotalCount.ToString("N0") results.
                 Add filters above to narrow to the rows you need.
+            </MudAlert>
+        }
+
+        @* ── Persistent query-error banner ── *@
+        @* Stays visible until the next successful Run. Backed by the
+           last-good _queryData restoration in HandleRunQuery so the
+           table / dashboard tabs below are still interactive — admins
+           edit the offending filter/field/sort right where they are and
+           hit Run again. The snackbar is transient; this banner sticks
+           around as long as the report is in a broken state. *@
+        @if (!string.IsNullOrEmpty(_lastQueryError))
+        {
+            <MudAlert Severity="Severity.Error" Dense Variant="Variant.Outlined"
+                      Icon="@Icons.Material.Filled.ErrorOutline" Class="mb-2"
+                      ShowCloseIcon CloseIconClicked="() => _lastQueryError = null">
+                <MudText Typo="Typo.body2" Style="font-weight: 600;">Last run failed</MudText>
+                <MudText Typo="Typo.caption" Style="white-space: pre-wrap; word-break: break-word;">
+                    @_lastQueryError
+                </MudText>
+                @if (_queryData is not null)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-top: 4px;">
+                        Showing the previous successful results below — edit the filter / field / sort that caused the error and re-run.
+                    </MudText>
+                }
             </MudAlert>
         }
 
@@ -527,10 +597,24 @@
                                    Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                                    Style="min-width: 240px;">
                             <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
+                            @{
+                                var detailHidden = _currentConfig.HiddenColumns is { Count: > 0 }
+                                    ? new HashSet<string>(_currentConfig.HiddenColumns, StringComparer.OrdinalIgnoreCase)
+                                    : null;
+                            }
                             @foreach (var f in _selectedFieldDefinitions
-                                .Where(f => string.IsNullOrWhiteSpace(f.SqlExpression)))
+                                .Where(f => string.IsNullOrWhiteSpace(f.SqlExpression)
+                                         && (detailHidden is null || !detailHidden.Contains(f.Id))))
                             {
                                 <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                            }
+                            @* SQL-mode table calcs are real columns in the
+                               SELECT; sortable / groupable via their Key alias. *@
+                            @foreach (var cc in (_currentConfig.TableCalculatedColumns ?? new())
+                                .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression)
+                                         && (detailHidden is null || !detailHidden.Contains(c.Key))))
+                            {
+                                <MudSelectItem T="string" Value="@cc.Key">@cc.Label (*)</MudSelectItem>
                             }
                         </MudSelect>
                         <MudSelect T="string" @bind-Value="_detailGroupByDirection"
@@ -551,9 +635,47 @@
                                    Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                                    Style="min-width: 240px;">
                             <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
-                            @foreach (var f in _selectedFieldDefinitions)
+                            @{
+                                var detailSortHidden = _currentConfig.HiddenColumns is { Count: > 0 }
+                                    ? new HashSet<string>(_currentConfig.HiddenColumns, StringComparer.OrdinalIgnoreCase)
+                                    : null;
+                                var sortSelectedSet = new HashSet<string>(_selectedFieldIds, StringComparer.OrdinalIgnoreCase);
+                                // Combine selected fields with the rest of the schema.
+                                // Selected fields filter out hidden columns (admin chose
+                                // to hide; honor that for sort too). Non-selected fields
+                                // are eligible regardless of hidden state — they're
+                                // already invisible in the grid by virtue of not being
+                                // in _selectedFieldIds.
+                                var sortFieldOptions = _domains
+                                    .SelectMany(d => d.Fields)
+                                    .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+                                    .Select(g => g.First())
+                                    .Where(f => !sortSelectedSet.Contains(f.Id)
+                                             || detailSortHidden is null
+                                             || !detailSortHidden.Contains(f.Id))
+                                    .OrderByDescending(f => sortSelectedSet.Contains(f.Id))
+                                    .ThenBy(f => f.Label, StringComparer.OrdinalIgnoreCase);
+                            }
+                            @foreach (var f in sortFieldOptions)
                             {
-                                <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                                @* Suffix legend:
+                                   (-) = unique column, eligible OFFSET tiebreaker
+                                   (+) = not in this report; QueryBuilder adds it to
+                                         the SELECT silently so it's reachable from
+                                         ORDER BY, but it doesn't render as a grid
+                                         column. Useful for picking a unique sort
+                                         key without polluting the visible columns. *@
+                                var inReport = sortSelectedSet.Contains(f.Id);
+                                var sortLabel = f.Label;
+                                if (_uniqueFieldIds.Contains(f.Id)) sortLabel += " (-)";
+                                if (!inReport) sortLabel += " (+)";
+                                <MudSelectItem T="string" Value="@f.Id">@sortLabel</MudSelectItem>
+                            }
+                            @foreach (var cc in (_currentConfig.TableCalculatedColumns ?? new())
+                                .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression)
+                                         && (detailSortHidden is null || !detailSortHidden.Contains(c.Key))))
+                            {
+                                <MudSelectItem T="string" Value="@cc.Key">@cc.Label (*)</MudSelectItem>
                             }
                         </MudSelect>
                         <MudSelect T="string" @bind-Value="_detailSortDirection"
@@ -564,6 +686,81 @@
                             <MudSelectItem T="string" Value="@("asc")">Ascending</MudSelectItem>
                             <MudSelectItem T="string" Value="@("desc")">Descending</MudSelectItem>
                         </MudSelect>
+                        @* Tiebreaker / unique-key sort. Required for stable
+                           OFFSET pagination when the primary Sort By field
+                           isn't unique (e.g. Status). Without it, OFFSET +
+                           a low-cardinality sort can shuffle rows between
+                           pages on Postgres. *@
+                        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px; margin-left: 16px;">
+                            Then By
+                        </MudText>
+                        <MudSelect T="string" Value="_detailSortThenByFieldId ?? string.Empty"
+                                   ValueChanged="OnDetailSortThenByChanged"
+                                   ToStringFunc="@DetailSortThenByLabelFor"
+                                   Disabled="@string.IsNullOrEmpty(_detailSortFieldId)"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="min-width: 220px;">
+                            <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
+                            @{
+                                // Re-derive locally — Razor's @{} blocks don't share variable
+                                // scope across sibling MudSelect children, so we can't reuse
+                                // the detailSortHidden from the primary Sort By picker above.
+                                var thenByHidden = _currentConfig.HiddenColumns is { Count: > 0 }
+                                    ? new HashSet<string>(_currentConfig.HiddenColumns, StringComparer.OrdinalIgnoreCase)
+                                    : null;
+                                var thenBySelectedSet = new HashSet<string>(_selectedFieldIds, StringComparer.OrdinalIgnoreCase);
+                                var thenByFieldOptions = _domains
+                                    .SelectMany(d => d.Fields)
+                                    .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+                                    .Select(g => g.First())
+                                    .Where(f => (!thenBySelectedSet.Contains(f.Id)
+                                                 || thenByHidden is null
+                                                 || !thenByHidden.Contains(f.Id))
+                                             && !string.Equals(f.Id, _detailSortFieldId, StringComparison.OrdinalIgnoreCase))
+                                    .OrderByDescending(f => thenBySelectedSet.Contains(f.Id))
+                                    .ThenBy(f => f.Label, StringComparer.OrdinalIgnoreCase);
+                            }
+                            @foreach (var f in thenByFieldOptions)
+                            {
+                                @* (-) unique tiebreaker, (+) not in this report (added
+                                   to SELECT silently for ORDER BY but no grid column). *@
+                                var inReport = thenBySelectedSet.Contains(f.Id);
+                                var thenByLabel = f.Label;
+                                if (_uniqueFieldIds.Contains(f.Id)) thenByLabel += " (-)";
+                                if (!inReport) thenByLabel += " (+)";
+                                <MudSelectItem T="string" Value="@f.Id">@thenByLabel</MudSelectItem>
+                            }
+                            @foreach (var cc in (_currentConfig.TableCalculatedColumns ?? new())
+                                .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression)
+                                         && (thenByHidden is null || !thenByHidden.Contains(c.Key))
+                                         && !string.Equals(c.Key, _detailSortFieldId, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                <MudSelectItem T="string" Value="@cc.Key">@cc.Label (*)</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="string" @bind-Value="_detailSortThenByDirection"
+                                   Label="Direction"
+                                   Disabled="@(string.IsNullOrEmpty(_detailSortFieldId) || string.IsNullOrEmpty(_detailSortThenByFieldId))"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                   Style="width: 150px;">
+                            <MudSelectItem T="string" Value="@("asc")">Ascending</MudSelectItem>
+                            <MudSelectItem T="string" Value="@("desc")">Descending</MudSelectItem>
+                        </MudSelect>
+                        @* Per-report DISTINCT. Useful when a one-to-many
+                           LEFT JOIN multiplies rows and the admin only
+                           wants the parent's distinct values. Skipped
+                           server-side when the query already has GROUP BY
+                           (aggregation deduplicates by definition), so
+                           toggling this on a dashboard-aggregated report
+                           is a no-op. *@
+                        <MudTooltip Text="Emit SELECT DISTINCT — collapses duplicate rows produced by LEFT JOINs"
+                                    Placement="Placement.Top">
+                            <MudSwitch T="bool" @bind-Value="_currentConfig.Distinct"
+                                       Color="Color.Primary" Size="Size.Small"
+                                       Style="margin-left: 16px;">
+                                Distinct
+                            </MudSwitch>
+                        </MudTooltip>
                     </MudStack>
                     @* Execution summary — intentionally rendered above the
                        grid, not below. When the grid has FillViewport on,
@@ -594,6 +791,7 @@
                                 DefaultSortDirection="@_currentConfig.DefaultSortDirection"
                                 InitialSort="@_initialSortTuples"
                                 OnSortChanged="HandleSortChanged"
+                                CalcColumns="_currentConfig.TableCalculatedColumns"
                                 FillViewport="true" />
                 </MudTabPanel>
                 <MudTabPanel Text="Chart" Icon="@Icons.Material.Filled.BarChart">
@@ -607,6 +805,8 @@
                                    ColumnWidths="_currentConfig.ColumnWidths"
                                    ColumnOrder="_currentConfig.ColumnOrder"
                                    AllDimensionFields="_allDimensionFields"
+                                   TableCalcColumns="_currentConfig.TableCalculatedColumns"
+                                   InitialHiddenColumns="_currentConfig.HiddenColumns"
                                    OnExtraFieldRequired="HandleExtraFieldRequired" />
                 </MudTabPanel>
             </MudTabs>
@@ -685,6 +885,12 @@
     private int _activeTabIndex;
     private bool _editingName;
     private int _drawerWidth = 240;
+    // Set when the last Run failed; cleared on the next successful run.
+    // Surfaces as a persistent banner above the tabs so the editor stays
+    // usable on bad SQL — admins can fix the offending field/filter and
+    // re-run without losing the dashboard config or the previously-good
+    // data already rendered in the table/dashboard tabs.
+    private string? _lastQueryError;
 
     // ── Custom filters ──
     private List<TleReportingDashboard.Web.Configuration.CustomFilterDefinition> _customFilters = new();
@@ -764,6 +970,26 @@
     // fall into the intended order.
     private string? _detailSortFieldId;
     private string _detailSortDirection = "asc";
+    // Tiebreaker / "Then By" sort. Required for stable OFFSET pagination
+    // when the primary Sort By field isn't unique. Persisted as
+    // DetailSortThenByFieldId / DetailSortThenByDirection in ColumnState.
+    private string? _detailSortThenByFieldId;
+    private string _detailSortThenByDirection = "asc";
+    // Field ids whose source column is uniquely keyed in the target DB
+    // (PK or single-column UNIQUE). Drives the "(-)" marker in the Sort
+    // By / Then By dropdowns so admins can spot stable-pagination picks
+    // at a glance. Cached per session — refreshed on connection change
+    // and when fields are added.
+    private HashSet<string> _uniqueFieldIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _uniqueColumnsByTable
+        = new(StringComparer.OrdinalIgnoreCase);
+    // Primary-key columns of the report's primary table, in PK ordinal
+    // order. Pre-computed once per (connection, primary-table) and shipped
+    // on the QueryRequest as FallbackSortColumns — QueryBuilder uses them
+    // when no user sort is configured so OFFSET pagination stays stable
+    // even when the admin picked "(None)".
+    private List<string> _primaryTablePkColumns = new();
+    private string? _pkLookupCacheKey;
 
     // ── Linked template ──
     private Guid? _linkedTemplateId;
@@ -867,8 +1093,14 @@
 
     // ── Lifecycle ──
 
+    // Held for the lifetime of the page so ConfigDbCache bypasses for this
+    // circuit while the admin is editing. Disposed on navigation so cached
+    // reads resume in the next visited page.
+    private IDisposable? _editorScope;
+
     protected override async Task OnInitializedAsync()
     {
+        _editorScope = EditorMode.Enter();
         try
         {
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
@@ -892,7 +1124,11 @@
             // Non-admins only see companies they've been granted access to.
             // Matches the filter on Report Library / picker so a user can't
             // create a report scoped to a company they couldn't view.
-            if (!_isAdmin && !string.IsNullOrEmpty(_userEmail))
+            // Admin-section roles (System Support et al.) bypass this filter
+            // — they have cross-company visibility everywhere else, this
+            // surface needs to match.
+            var hasAdminAccess = await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
+            if (!_isAdmin && !hasAdminAccess && !string.IsNullOrEmpty(_userEmail))
             {
                 var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
                 var allowed = access.Select(a => a.CompanyId).ToHashSet();
@@ -978,7 +1214,10 @@
                 Snackbar.Add("Report not found.", Severity.Warning);
                 return;
             }
-            if (!_isAdmin)
+            // Admin-section roles (System Support et al.) bypass the per-
+            // company gate too — same model used by the company filter
+            // above and elsewhere in the app.
+            if (!_isAdmin && !await AdminAccess.HasAnyAdminAccessAsync(_userEmail))
             {
                 var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
                 if (!access.Any(a => a.CompanyId == report.CompanyId))
@@ -1069,6 +1308,10 @@
                         _detailSortFieldId = dsfEl.GetString();
                     if (root.TryGetProperty("DetailSortDirection", out var dsdEl))
                         _detailSortDirection = dsdEl.GetString() ?? "asc";
+                    if (root.TryGetProperty("DetailSortThenByFieldId", out var dstfEl))
+                        _detailSortThenByFieldId = dstfEl.GetString();
+                    if (root.TryGetProperty("DetailSortThenByDirection", out var dstdEl))
+                        _detailSortThenByDirection = dstdEl.GetString() ?? "asc";
 
                     // Extract hidden columns. Union with the template's list
                     // (set earlier at line ~953) instead of overwriting — a
@@ -1088,6 +1331,16 @@
                     if (root.TryGetProperty("CustomFilterIds", out var cfElement))
                     {
                         _currentConfig.CustomFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfElement.GetRawText());
+                    }
+
+                    // Table-view calculated columns. Independent of the
+                    // dashboard's calc columns (those live inside
+                    // DashboardConfigJson). Missing key on legacy saves
+                    // is treated as "no calc columns".
+                    if (root.TryGetProperty("TableCalculatedColumns", out var tcElement))
+                    {
+                        _currentConfig.TableCalculatedColumns = System.Text.Json.JsonSerializer
+                            .Deserialize<List<TableCalcColumnDef>>(tcElement.GetRawText());
                     }
 
                     // Extract Advanced (ad-hoc) filters. Only honored when
@@ -1135,6 +1388,14 @@
                     if (root.TryGetProperty("TableSortDirection", out var tsdElement))
                         _currentConfig.DefaultSortDirection = tsdElement.GetString();
 
+                    // Per-report DISTINCT toggle. Read explicitly from JSON
+                    // (true / false / missing → defaults to false) so a
+                    // saved report keeps its stored state. The model's
+                    // `Distinct = true` initializer only matters for
+                    // brand-new reports that never hit this load path.
+                    _currentConfig.Distinct = root.TryGetProperty("Distinct", out var distElement)
+                        && distElement.ValueKind == System.Text.Json.JsonValueKind.True;
+
                     // Extract multi-column sort (primary first). When present,
                     // takes precedence over DefaultSortField/Direction for the
                     // grid's initial sort seeding.
@@ -1172,11 +1433,20 @@
             // so the report stays consistent with the template (matching the "fields locked
             // to template" lock on the FieldPicker). Per-report show/hide is preserved but
             // filtered to fields that still exist in the template.
+            // Calc columns are NOT owned by the template — they're per-report
+            // derivations on top — so calc keys from the saved combined
+            // order are woven back into the template's field order at the
+            // user-customized positions. Without this merge, every reload
+            // of a templated report would drop the user's calc positioning.
             if (report.GridTemplateId.HasValue && resolvedTemplate is not null)
             {
-                _currentConfig.ColumnOrder = resolvedTemplate.ColumnOrder is { Count: > 0 }
+                var templateOrder = resolvedTemplate.ColumnOrder is { Count: > 0 }
                     ? new List<string>(resolvedTemplate.ColumnOrder)
                     : new List<string>(_selectedFieldIds);
+                _currentConfig.ColumnOrder = WeaveCalcsIntoTemplateOrder(
+                    templateOrder,
+                    _currentConfig.ColumnOrder ?? new List<string>(),
+                    _currentConfig.TableCalculatedColumns);
                 // Default sort: keep the per-report sort if the user saved one;
                 // only fall back to the template's sort when the report has none.
                 if (string.IsNullOrEmpty(_currentConfig.DefaultSortField)
@@ -1217,6 +1487,15 @@
             {
                 await HandleRunQuery();
             }
+            // Seed the unique-column lookup so the Sort By / Then By
+            // dropdowns show "(-)" markers from the very first render.
+            await RefreshUniqueFieldIdsAsync();
+            // Pre-fetch primary-table PKs so the first run already has a
+            // FallbackSortColumns payload — without this the very first
+            // (None)-sorted query falls through to "ORDER BY first selected
+            // field" (legacy behavior), which is the same instability we're
+            // trying to avoid.
+            await RefreshPrimaryKeyColumnsAsync();
         }
         catch (Exception ex)
         {
@@ -1236,12 +1515,29 @@
             // grid. New fields append to the end of the existing order.
             if (_currentConfig.ColumnOrder is { Count: > 0 } && !_currentConfig.ColumnOrder.Contains(fieldId))
                 _currentConfig.ColumnOrder.Add(fieldId);
+            // Refresh the unique-column lookup so the new field's source
+            // table gets queried (skipped if cached) — drives the "(-)"
+            // marker in the Sort By / Then By dropdowns.
+            await RefreshUniqueFieldIdsAsync();
             if (_hasRunOnce) await HandleRunQuery();
         }
     }
 
     private async Task HandleFieldRemoved(string fieldId)
     {
+        // The chip bar emits IDs for both fields AND calc keys (calc chips
+        // are reorderable inline). Dispatch to the calc-removal helper when
+        // the id matches a calc Key — otherwise fall through to the regular
+        // field-removal path.
+        if (_currentConfig.TableCalculatedColumns is { Count: > 0 } &&
+            _currentConfig.TableCalculatedColumns.Any(c =>
+                string.Equals(c.Key, fieldId, StringComparison.OrdinalIgnoreCase)))
+        {
+            RemoveTableCalcColumn(fieldId);
+            _currentConfig.ColumnOrder?.Remove(fieldId);
+            return;
+        }
+
         _selectedFieldIds.Remove(fieldId);
         _currentConfig.SelectedFieldIds = new List<string>(_selectedFieldIds);
         _currentConfig.ColumnOrder?.Remove(fieldId);
@@ -1299,6 +1595,222 @@
         return Task.CompletedTask;
     }
 
+    // ── Table-view calculated columns ─────────────────────────────────
+    // Add / edit / remove a TableCalcColumnDef. Storage lives on
+    // ReportConfig.TableCalculatedColumns; ReportGrid reads the list to
+    // render extra columns inline alongside the data columns. Per-row
+    // evaluation runs against the row dict via CalculatedColumnEvaluator.
+    private async Task OpenTableCalcDialog(string? existingKey)
+    {
+        var list = _currentConfig.TableCalculatedColumns ??= new List<TableCalcColumnDef>();
+        var existing = existingKey is null ? null : list.FirstOrDefault(c => c.Key == existingKey);
+
+        // Picks come from the report's currently-selected non-aggregate
+        // fields — those are the values present on each row. Aggregate
+        // fields are excluded because their values aren't on the raw row;
+        // they're only meaningful in dashboard / group-by contexts.
+        var picks = _selectedFieldDefinitions
+            .Where(f => string.IsNullOrWhiteSpace(f.SqlExpression))
+            .Select(f => new CalculatedColumnDialog.ColumnPick(f.Id, f.Label))
+            .ToList();
+
+        // Load this connection's joins so the SQL-mode JOINs picker has
+        // something to offer. Best-effort: a load failure leaves the list
+        // empty and the dialog falls back to the "no joins available"
+        // hint, which is still actionable.
+        var joinPicks = await LoadJoinPicksAsync();
+
+        var parameters = new DialogParameters
+        {
+            { "IsNew", existing is null },
+            { "InitialKey", existing?.Key },
+            { "InitialLabel", existing?.Label ?? string.Empty },
+            { "InitialFormula", existing?.Formula ?? string.Empty },
+            { "InitialFormat", existing?.Format },
+            { "InitialDataType", existing?.DataType },
+            { "InitialSqlExpression", existing?.SqlExpression },
+            { "InitialJoinIds", existing?.JoinIds },
+            { "AvailableColumns", picks },
+            // Per-report SQL mode is enabled for the table view's calc
+            // dialog. The dashboard's calc dialog leaves AllowSqlMode at
+            // its default of false so its existing formula-only flow is
+            // unchanged.
+            { "AllowSqlMode", true },
+            { "AvailableJoins", joinPicks }
+        };
+        var dialog = await DialogService.ShowAsync<CalculatedColumnDialog>(
+            existing is null ? "Add Calculated Column" : "Edit Calculated Column",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        if (result.Data is not CalculatedColumnDialog.CalcDialogResult res) return;
+
+        if (existing is null)
+        {
+            list.Add(new TableCalcColumnDef
+            {
+                Key = res.Key,
+                Label = res.Label,
+                Formula = res.Formula,
+                SqlExpression = res.SqlExpression,
+                JoinIds = res.JoinIds,
+                Format = res.Format,
+                DataType = res.DataType
+            });
+        }
+        else
+        {
+            existing.Label = res.Label;
+            existing.Formula = res.Formula;
+            existing.SqlExpression = res.SqlExpression;
+            existing.JoinIds = res.JoinIds;
+            existing.Format = res.Format;
+            existing.DataType = res.DataType;
+        }
+        MarkDirty();
+        StateHasChanged();
+    }
+
+    // Loads the report's connection joins and projects them into the
+    // (Id, Label) shape the calc dialog's JOINs picker expects. JoinId is
+    // the string slug QueryBuilder uses to match references; label is a
+    // friendly "<id> — <ToTable>" description. Joins without a JoinId
+    // (raw SQL with no slug) are skipped because they can't be referenced.
+    private async Task<List<CalculatedColumnDialog.JoinPick>> LoadJoinPicksAsync()
+    {
+        try
+        {
+            var joinConfigs = await SchemaService.GetJoinConfigsAsync(_currentConfig.ConnectionId);
+            return joinConfigs
+                .Where(j => !string.IsNullOrWhiteSpace(j.JoinId))
+                .Select(j => new CalculatedColumnDialog.JoinPick(
+                    j.JoinId!,
+                    string.IsNullOrWhiteSpace(j.ToTable)
+                        ? j.JoinId!
+                        : $"{j.JoinId} — {j.ToTable}"))
+                .OrderBy(p => p.Label, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch
+        {
+            return new List<CalculatedColumnDialog.JoinPick>();
+        }
+    }
+
+    private void RemoveTableCalcColumn(string key)
+    {
+        _currentConfig.TableCalculatedColumns?.RemoveAll(c => c.Key == key);
+        StateHasChanged();
+    }
+
+    // Resolves the effective sort field for the table-view query. Priority:
+    //   1. _currentConfig.TableSort (live multi-sort from column-header
+    //      clicks — most-recent explicit user intent). Element 0 = primary.
+    //   2. _detailSortFieldId (the "Sort By" dropdown). The dropdown drives
+    //      both the table-view query sort AND the detail-view sort so
+    //      what the admin sees in the dropdown matches what the SQL does.
+    //   3. _detailGroupByFieldId (the "Group By" dropdown) as the primary
+    //      sort, with the Sort By dropdown sliding into secondary — same
+    //      cluster-by-group then sort-within-group shape the detail view
+    //      uses, so the table view stays consistent.
+    //   4. Legacy DefaultSortField (older saves before multi-sort existed).
+    // Without this, the SQL falls back to ORDER BY first selected field.
+    private string? ResolveEffectiveSortField()
+    {
+        if (_currentConfig.TableSort is { Count: > 0 } ts) return ts[0].Field;
+        if (!string.IsNullOrWhiteSpace(_detailGroupByFieldId)
+            && _detailGroupByDirection != "none") return _detailGroupByFieldId;
+        if (!string.IsNullOrWhiteSpace(_detailSortFieldId)) return _detailSortFieldId;
+        // Empty (not null) _detailSortFieldId = user explicitly picked
+        // (None) — fall through with no sort. The legacy SortField
+        // fallback only applies when the dropdown was never touched (null).
+        if (_detailSortFieldId == string.Empty) return null;
+        return _currentConfig.SortField ?? _currentConfig.DefaultSortField;
+    }
+
+    // True when the user has explicitly chosen "(None)" in the Sort By
+    // dropdown AND no other sort source (live header click, Group By,
+    // legacy default) is in play. Drives QueryRequest.DisableDefaultSort
+    // so QueryBuilder skips its own fallback ORDER BY.
+    private bool ResolveDisableDefaultSort()
+    {
+        if (_currentConfig.TableSort is { Count: > 0 }) return false;
+        if (!string.IsNullOrWhiteSpace(_detailGroupByFieldId)
+            && _detailGroupByDirection != "none") return false;
+        if (!string.IsNullOrWhiteSpace(_detailSortFieldId)) return false;
+        // Sort By dropdown picked (None) wins over the legacy slots —
+        // honoring the explicit choice over an older saved default.
+        if (_detailSortFieldId == string.Empty) return true;
+        return false;
+    }
+
+    private string? ResolveEffectiveSortDirection()
+    {
+        if (_currentConfig.TableSort is { Count: > 0 } ts) return ts[0].Direction;
+        if (!string.IsNullOrWhiteSpace(_detailGroupByFieldId)
+            && _detailGroupByDirection != "none")
+            return _detailGroupByDirection == "desc" ? "desc" : "asc";
+        if (!string.IsNullOrWhiteSpace(_detailSortFieldId))
+            return _detailSortDirection == "desc" ? "desc" : "asc";
+        return _currentConfig.SortDirection ?? _currentConfig.DefaultSortDirection;
+    }
+
+    private string? ResolveEffectiveSecondarySortField()
+    {
+        if (_currentConfig.TableSort is { Count: > 1 } ts) return ts[1].Field;
+        // When Group By drives primary, the Sort By dropdown slides into
+        // secondary — sort rows within each group by the picked field.
+        if (!string.IsNullOrWhiteSpace(_detailGroupByFieldId)
+            && _detailGroupByDirection != "none"
+            && !string.IsNullOrWhiteSpace(_detailSortFieldId)
+            && !string.Equals(_detailSortFieldId, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase))
+            return _detailSortFieldId;
+        // Then By tiebreaker — stable OFFSET pagination when Sort By
+        // isn't unique. Only relevant when there's a primary Sort By
+        // and the tiebreaker picks a different field.
+        if (!string.IsNullOrWhiteSpace(_detailSortFieldId)
+            && !string.IsNullOrWhiteSpace(_detailSortThenByFieldId)
+            && !string.Equals(_detailSortFieldId, _detailSortThenByFieldId, StringComparison.OrdinalIgnoreCase))
+            return _detailSortThenByFieldId;
+        return null;
+    }
+
+    private string? ResolveEffectiveSecondarySortDirection()
+    {
+        if (_currentConfig.TableSort is { Count: > 1 } ts) return ts[1].Direction;
+        if (!string.IsNullOrWhiteSpace(_detailGroupByFieldId)
+            && _detailGroupByDirection != "none"
+            && !string.IsNullOrWhiteSpace(_detailSortFieldId)
+            && !string.Equals(_detailSortFieldId, _detailGroupByFieldId, StringComparison.OrdinalIgnoreCase))
+            return _detailSortDirection == "desc" ? "desc" : "asc";
+        if (!string.IsNullOrWhiteSpace(_detailSortFieldId)
+            && !string.IsNullOrWhiteSpace(_detailSortThenByFieldId)
+            && !string.Equals(_detailSortFieldId, _detailSortThenByFieldId, StringComparison.OrdinalIgnoreCase))
+            return _detailSortThenByDirection == "desc" ? "desc" : "asc";
+        return null;
+    }
+
+    // Projects the report's SQL-mode calc columns into the request shape
+    // QueryBuilder reads. Formula-mode calcs aren't included — they
+    // evaluate client-side in ReportGrid and don't touch the query.
+    private List<TleReportingDashboard.Web.Models.TableCalcSqlSelector>? BuildTableCalcSqlSelectors()
+    {
+        var calcs = _currentConfig.TableCalculatedColumns;
+        if (calcs is null || calcs.Count == 0) return null;
+        var sqlCalcs = calcs
+            .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression))
+            .Select(c => new TleReportingDashboard.Web.Models.TableCalcSqlSelector
+            {
+                Key = c.Key,
+                SqlExpression = c.SqlExpression!,
+                JoinIds = c.JoinIds
+            })
+            .ToList();
+        return sqlCalcs.Count > 0 ? sqlCalcs : null;
+    }
+
     // Called from FieldChipBar drag-drop. The chip bar owns the column order
     // now — user drags chips to reorder the report table. Persist the new
     // order and rebuild _selectedFieldIds so subsequent picker changes and
@@ -1353,9 +1865,47 @@
 
     private Task HandleFieldOrderChanged(List<string> newOrder)
     {
-        _selectedFieldIds = new List<string>(newOrder);
-        _currentConfig.SelectedFieldIds = new List<string>(newOrder);
+        // newOrder is the unified chip list — a mix of field ids and calc
+        // keys. Split into the field-only and calc-only subsets so the
+        // separate state stores stay accurate. ColumnOrder holds the FULL
+        // mixed sequence so the grid can interleave on render.
+        var calcKeys = (_currentConfig.TableCalculatedColumns ?? new())
+            .Select(c => c.Key)
+            .Where(k => !string.IsNullOrEmpty(k))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var fieldOrder = newOrder.Where(id => !calcKeys.Contains(id)).ToList();
+        var calcOrder = newOrder.Where(id => calcKeys.Contains(id)).ToList();
+
+        _selectedFieldIds = new List<string>(fieldOrder);
+        _currentConfig.SelectedFieldIds = new List<string>(fieldOrder);
         _currentConfig.ColumnOrder = new List<string>(newOrder);
+
+        // Reorder TableCalculatedColumns to match the new calc-key order.
+        // Any calc not in calcOrder (shouldn't happen but defensive) gets
+        // appended at the end so we don't drop user data.
+        if (_currentConfig.TableCalculatedColumns is { Count: > 0 } && calcOrder.Count > 0)
+        {
+            var byKey = _currentConfig.TableCalculatedColumns
+                .ToDictionary(c => c.Key, StringComparer.OrdinalIgnoreCase);
+            var reordered = new List<TleReportingDashboard.Web.Models.TableCalcColumnDef>();
+            foreach (var key in calcOrder)
+            {
+                if (byKey.TryGetValue(key, out var c))
+                {
+                    reordered.Add(c);
+                    byKey.Remove(key);
+                }
+            }
+            // Anything left in byKey wasn't represented in calcOrder —
+            // append in original list order.
+            foreach (var c in _currentConfig.TableCalculatedColumns)
+            {
+                if (byKey.ContainsKey(c.Key)) reordered.Add(c);
+            }
+            _currentConfig.TableCalculatedColumns = reordered;
+        }
+
         // If the grid is mounted, push the new order through so it re-lays-out.
         _reportGrid?.ApplyColumnOrder(newOrder);
         return Task.CompletedTask;
@@ -1388,6 +1938,55 @@
                 .ToList()
             : SelectedNonAggregateFieldIds.ToList();
 
+    // Returns the field id list to ship on a QueryRequest. Removes
+    // HiddenColumns from the SELECT unless something else in the report
+    // config still needs them — Sort By / Then By / Detail Group By /
+    // aggregation Group By all "protect" their referenced field so the
+    // SQL emits correct ORDER BY / GROUP BY clauses (and any associated
+    // lookup CTE + JOIN). Without this filter, a hidden column wastes a
+    // SELECT column AND emits its lookup CTE + JOIN even when nothing
+    // references it. The QueryBuilder's sort-only auto-include path
+    // re-adds out-of-report sort fields to resolvedFields anyway, so
+    // hiding a sort field here is safe — its lookup still gets emitted
+    // because it's reachable from the sort.
+    private List<string> BuildEffectiveQueryFieldIds()
+    {
+        var hidden = _currentConfig.HiddenColumns is { Count: > 0 }
+            ? new HashSet<string>(_currentConfig.HiddenColumns, StringComparer.OrdinalIgnoreCase)
+            : null;
+
+        var protectedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var primary = ResolveEffectiveSortField();
+        if (!string.IsNullOrWhiteSpace(primary)) protectedIds.Add(primary);
+        var secondary = ResolveEffectiveSecondarySortField();
+        if (!string.IsNullOrWhiteSpace(secondary)) protectedIds.Add(secondary);
+        if (!string.IsNullOrWhiteSpace(_detailSortFieldId)) protectedIds.Add(_detailSortFieldId);
+        if (!string.IsNullOrWhiteSpace(_detailSortThenByFieldId)) protectedIds.Add(_detailSortThenByFieldId);
+        if (!string.IsNullOrWhiteSpace(_detailGroupByFieldId)) protectedIds.Add(_detailGroupByFieldId);
+        if (_currentConfig.GroupByFieldIds is { Count: > 0 })
+        {
+            foreach (var id in _currentConfig.GroupByFieldIds) protectedIds.Add(id);
+        }
+
+        var result = new List<string>(_selectedFieldIds.Count);
+        foreach (var id in _selectedFieldIds)
+        {
+            if (hidden is null || !hidden.Contains(id) || protectedIds.Contains(id))
+                result.Add(id);
+        }
+
+        // Extra group-by fields (dashboard-tab "extra dimensions") aren't
+        // necessarily in _selectedFieldIds and aren't subject to the hide
+        // filter — they're explicit dashboard-only adds.
+        foreach (var extra in _extraGroupByFieldIds)
+        {
+            if (!result.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                result.Add(extra);
+        }
+
+        return result;
+    }
+
     private void ToggleGroupByField(string fieldId)
     {
         var list = _currentConfig.GroupByFieldIds is { Count: > 0 }
@@ -1409,6 +2008,12 @@
     private void OnDetailGroupByChanged(string? value)
     {
         _detailGroupByFieldId = string.IsNullOrEmpty(value) ? null : value;
+        // Picking from this dropdown is an explicit sort intent — clear
+        // any live header-click sort so it doesn't shadow the dropdown's
+        // choice. Without this, a stale TableSort entry (e.g. from a
+        // column header you clicked earlier) keeps winning even after
+        // you change the dropdown.
+        ClearLiveTableSort();
     }
 
     // Resolves a field id back to its label for the picker's display — keeps
@@ -1417,19 +2022,180 @@
     private string DetailGroupLabelFor(string? value)
     {
         if (string.IsNullOrEmpty(value)) return "(None)";
-        return _selectedFieldDefinitions.FirstOrDefault(f => f.Id == value)?.Label ?? value;
+        var f = _selectedFieldDefinitions.FirstOrDefault(f => f.Id == value);
+        if (f is not null) return f.Label;
+        // SQL-mode calc Key — return its caption with the (*) marker so the
+        // closed display matches the dropdown items.
+        var cc = _currentConfig.TableCalculatedColumns?.FirstOrDefault(c =>
+            string.Equals(c.Key, value, StringComparison.OrdinalIgnoreCase));
+        if (cc is not null) return $"{cc.Label} (*)";
+        return value;
     }
 
     // Detail default sort — same pattern as the group-by picker.
     private void OnDetailSortChanged(string? value)
     {
-        _detailSortFieldId = string.IsNullOrEmpty(value) ? null : value;
+        // Distinguish "user explicitly picked (None)" (empty string) from
+        // "dropdown never touched" (null). Used by ResolveEffectiveSortField
+        // to skip the fallback ORDER BY when None was the explicit choice
+        // — without this, the table query always sorts by the first column.
+        _detailSortFieldId = value ?? string.Empty;
+        // Same reason as OnDetailGroupByChanged: dropdown pick is an
+        // explicit override of any prior live header-click sort.
+        ClearLiveTableSort();
+    }
+
+    // Resets the live multi-sort state when the admin makes an explicit
+    // choice via the Sort By / Group By dropdowns. Without this, a stale
+    // TableSort entry from a previous column-header click outranks the
+    // dropdown in ResolveEffectiveSortField and the dropdown's choice
+    // never reaches the SQL.
+    private void ClearLiveTableSort()
+    {
+        if (_currentConfig.TableSort is { Count: > 0 })
+            _currentConfig.TableSort = new();
+        if (_liveSort.Count > 0)
+            _liveSort = new List<(string, string)>();
+        // Force the grid to re-mount so MudDataGrid's internal sort
+        // indicators clear too — otherwise the up/down arrow stays on
+        // the previously-clicked column even though the saved sort is gone.
+        _gridRenderKey = Guid.NewGuid().ToString();
     }
 
     private string DetailSortLabelFor(string? value)
     {
         if (string.IsNullOrEmpty(value)) return "(None)";
-        return _selectedFieldDefinitions.FirstOrDefault(f => f.Id == value)?.Label ?? value;
+        var f = _selectedFieldDefinitions.FirstOrDefault(f => f.Id == value);
+        if (f is not null)
+        {
+            return _uniqueFieldIds.Contains(f.Id) ? $"{f.Label} (-)" : f.Label;
+        }
+        var cc = _currentConfig.TableCalculatedColumns?.FirstOrDefault(c =>
+            string.Equals(c.Key, value, StringComparison.OrdinalIgnoreCase));
+        if (cc is not null) return $"{cc.Label} (*)";
+        return value;
+    }
+
+    private void OnDetailSortThenByChanged(string? value)
+    {
+        _detailSortThenByFieldId = string.IsNullOrEmpty(value) ? null : value;
+        // Same intent as the primary Sort By dropdown — clear any live
+        // header-click sort so the dropdown chain takes over.
+        ClearLiveTableSort();
+    }
+
+    private string DetailSortThenByLabelFor(string? value) => DetailSortLabelFor(value);
+
+    // Refreshes the unique-column lookup for every distinct source table
+    // referenced by selected fields. Runs after field changes so the
+    // dropdown's "(-)" marker accurately tags eligible tiebreakers.
+    // Best-effort: per-table query failures (locked-down accounts) just
+    // skip the marker for that table.
+    private async Task RefreshUniqueFieldIdsAsync()
+    {
+        var tables = _selectedFieldDefinitions
+            .Where(f => string.IsNullOrWhiteSpace(f.SqlExpression)
+                     && !string.IsNullOrWhiteSpace(f.SourceTable)
+                     && !string.IsNullOrWhiteSpace(f.SourceColumn))
+            .Select(f => f.SourceTable)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var tableRef in tables)
+        {
+            if (_uniqueColumnsByTable.ContainsKey(tableRef)) continue;
+            // Strip alias / schema-qualify. "schema.table" or "table" both
+            // accepted; aliased "schema.table AS x" reduces to schema.table.
+            var bare = tableRef;
+            var asIdx = bare.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+            if (asIdx > 0) bare = bare[..asIdx].Trim();
+            var dot = bare.IndexOf('.');
+            string? schema = dot > 0 ? bare[..dot] : null;
+            var table = dot > 0 ? bare[(dot + 1)..] : bare;
+            try
+            {
+                var cols = await SchemaBrowser.GetUniqueColumnNamesAsync(_currentConfig.ConnectionId, schema, table);
+                _uniqueColumnsByTable[tableRef] = cols;
+            }
+            catch
+            {
+                _uniqueColumnsByTable[tableRef] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Pass 1: admin-asserted IsUnique fields from the ENTIRE schema —
+        // not just the report's selected set. The Sort By / Then By
+        // dropdowns surface every schema field with markers, and an admin
+        // routinely picks a unique column (e.g. an "ID") as the tiebreaker
+        // *without* adding it as a visible grid column. If we only scanned
+        // selected fields, that out-of-report unique pick would lose its
+        // (-) marker AND fail the save-time stability check.
+        foreach (var f in _domains.SelectMany(d => d.Fields))
+        {
+            if (f.IsUnique) ids.Add(f.Id);
+        }
+
+        // Pass 2: DB-attested uniques for the selected fields' source
+        // tables. Constraint coverage stays scoped to selected fields —
+        // those are the only tables the report is reading from.
+        foreach (var f in _selectedFieldDefinitions)
+        {
+            if (string.IsNullOrWhiteSpace(f.SourceTable) || string.IsNullOrWhiteSpace(f.SourceColumn)) continue;
+            if (_uniqueColumnsByTable.TryGetValue(f.SourceTable, out var cols)
+                && cols.Contains(f.SourceColumn))
+            {
+                ids.Add(f.Id);
+            }
+        }
+        _uniqueFieldIds = ids;
+    }
+
+    // Pulls the PK column names of the report's primary table (in PK ordinal
+    // order) and stashes them on _primaryTablePkColumns. Shipped on the
+    // QueryRequest as FallbackSortColumns — QueryBuilder appends them as the
+    // ORDER BY when no user sort is configured, so OFFSET pagination stays
+    // stable on Postgres even when the admin picked "(None)" in the Sort By
+    // dropdown. Cached per (connection, primary-table) to avoid repeating the
+    // information_schema lookup on every keystroke / re-run.
+    private async Task RefreshPrimaryKeyColumnsAsync()
+    {
+        var primary = _currentConfig.PrimaryTable;
+        var cid = _currentConfig.ConnectionId;
+        if (string.IsNullOrWhiteSpace(primary) || cid is null)
+        {
+            _primaryTablePkColumns = new();
+            _pkLookupCacheKey = null;
+            return;
+        }
+
+        // Strip alias if present — we only need the bare schema.table.
+        var bare = primary;
+        var asIdx = bare.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+        if (asIdx > 0) bare = bare[..asIdx].Trim();
+
+        var cacheKey = $"{cid}|{bare}";
+        if (string.Equals(_pkLookupCacheKey, cacheKey, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var dot = bare.IndexOf('.');
+        string? schema = dot > 0 ? bare[..dot] : null;
+        var table = dot > 0 ? bare[(dot + 1)..] : bare;
+        try
+        {
+            // GetEffectivePrimaryKeyColumnsAsync layers admin-flagged
+            // IsUnique fields on top of the information_schema lookup, so
+            // accounts that can't query constraints still get a fallback
+            // tiebreaker (and accounts that can get the union).
+            var schemaFields = await SchemaService.GetFieldConfigsAsync(cid);
+            var pks = await SchemaBrowser.GetEffectivePrimaryKeyColumnsAsync(cid, schema, table, schemaFields);
+            _primaryTablePkColumns = pks ?? new List<string>();
+        }
+        catch
+        {
+            _primaryTablePkColumns = new List<string>();
+        }
+        _pkLookupCacheKey = cacheKey;
     }
 
     // ── Advanced Filters helpers ──
@@ -1666,19 +2432,25 @@
     // legacy off-catalog rows. We parse the selection back into
     // (_primaryTable, _primaryAlias) so the rest of the app has the two
     // parts it needs for FROM emission and JoinResolver.
-    private void OnPrimaryTableChanged(string? value)
+    private async Task OnPrimaryTableChanged(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
             _primaryTable = null;
             _primaryAlias = null;
             RecombinePrimaryTable();
+            // Primary table cleared → drop the PK fallback so we don't ship
+            // stale identifiers from the previous root.
+            await RefreshPrimaryKeyColumnsAsync();
             return;
         }
         var (table, alias) = PrimaryTableRef.Parse(value);
         _primaryTable = string.IsNullOrWhiteSpace(table) ? null : table;
         _primaryAlias = string.IsNullOrWhiteSpace(alias) ? null : alias;
         RecombinePrimaryTable();
+        // Refresh PKs against the new primary so subsequent (None)-sorted
+        // runs ship the right identifiers as FallbackSortColumns.
+        await RefreshPrimaryKeyColumnsAsync();
     }
 
     // Single source of truth for _currentConfig.PrimaryTable. Called whenever
@@ -1849,6 +2621,12 @@
         if (liveConfig is not null)
             _dashboardConfig = liveConfig;
 
+        // Snapshot the last-good QueryResponse so we can restore it if the
+        // upcoming Run throws. Without restoration the table/dashboard tabs
+        // would vanish on a SQL error, locking the admin out of the very
+        // config they need to edit to fix the problem.
+        var previousData = _queryData;
+
         // Force grid to unmount so stale DOM is cleared before new columns render
         _queryData = null;
         StateHasChanged();
@@ -1856,13 +2634,7 @@
 
         try
         {
-            // Include extra group-by fields not in the selected field list
-            var queryFieldIds = new List<string>(_selectedFieldIds);
-            foreach (var extra in _extraGroupByFieldIds)
-            {
-                if (!queryFieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
-                    queryFieldIds.Add(extra);
-            }
+            var queryFieldIds = BuildEffectiveQueryFieldIds();
 
             var request = new QueryRequest
             {
@@ -1872,22 +2644,47 @@
                 AdvancedFilters = _advancedFiltersEnabled && HasAdvancedFilterLeaves(_filterRoot)
                     ? CloneFilterGroup(_filterRoot)
                     : null,
-                SortField = _currentConfig.SortField ?? _currentConfig.DefaultSortField,
-                SortDirection = _currentConfig.SortDirection ?? _currentConfig.DefaultSortDirection,
+                SortField = ResolveEffectiveSortField(),
+                SortDirection = ResolveEffectiveSortDirection(),
+                SecondarySortField = ResolveEffectiveSecondarySortField(),
+                SecondarySortDirection = ResolveEffectiveSecondarySortDirection(),
+                DisableDefaultSort = ResolveDisableDefaultSort(),
+                Distinct = _currentConfig.Distinct,
+                // Auto-PK fallback: when the admin picked "(None)" in the
+                // Sort By dropdown (DisableDefaultSort = true) AND no live
+                // header click is active, QueryBuilder consults this list
+                // to keep OFFSET pagination stable. Pre-loaded by
+                // RefreshPrimaryKeyColumnsAsync on report load + primary
+                // table change. Empty = no PK detected, fall back to
+                // legacy "first selected field" behavior.
+                FallbackSortColumns = _primaryTablePkColumns.Count > 0
+                    ? new List<string>(_primaryTablePkColumns)
+                    : null,
                 Page = 1,
                 PageSize = 50000,
                 ConnectionId = _currentConfig.ConnectionId,
                 PrimaryTable = _currentConfig.PrimaryTable,
-                GroupByFieldIds = _currentConfig.GroupByFieldIds
+                GroupByFieldIds = _currentConfig.GroupByFieldIds,
+                // Per-report SQL calc columns. Filtered to non-aggregating
+                // queries inside QueryBuilder; safe to always include here.
+                TableCalcSqlColumns = BuildTableCalcSqlSelectors()
             };
             request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _currentConfig.ConnectionId, _currentConfig.PrimaryTable);
             _queryData = await QueryService.ExecuteQueryAsync(request);
             _hasRunOnce = true;
             _activeTabIndex = 0;
+            _lastQueryError = null;
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Query failed: {ex.Message}", Severity.Error);
+            // Surface the error as a persistent inline banner AND restore
+            // the last-good data so the table/dashboard tabs stay rendered.
+            // Editing the broken filter/field/sort and re-running is the
+            // admin's path forward — that's only possible if those tabs
+            // remain reachable.
+            _lastQueryError = ex.Message;
+            _queryData = previousData;
         }
         finally
         {
@@ -1980,12 +2777,82 @@
         if (resolved is null) return Task.CompletedTask;
         _selectedFieldIds = new List<string>(resolved.FieldIds);
         _currentConfig.SelectedFieldIds = new List<string>(resolved.FieldIds);
-        _currentConfig.ColumnOrder = resolved.ColumnOrder;
+        _currentConfig.ColumnOrder = WeaveCalcsIntoTemplateOrder(
+            resolved.ColumnOrder ?? new List<string>(_selectedFieldIds),
+            _currentConfig.ColumnOrder ?? new List<string>(),
+            _currentConfig.TableCalculatedColumns);
         _currentConfig.HiddenColumns = resolved.HiddenColumns;
         _currentConfig.DefaultSortField = resolved.DefaultSortField;
         _currentConfig.DefaultSortDirection = resolved.DefaultSortDirection;
         return Task.CompletedTask;
     }
+
+    // Returns a user-facing error string when the configured sort would
+    // produce unstable OFFSET pagination AND no auto-anchor is available.
+    // Stability is provided by ANY of:
+    //   * DISTINCT off — QueryBuilder appends PK tiebreakers silently AND
+    //     the legacy "ORDER BY first selected field" fallback applies, so
+    //     even a non-unique sort produces deterministic enough results;
+    //     not worth blocking save over,
+    //   * a unique sort field (primary or secondary, marked "(-)") — admin
+    //     opted in explicitly,
+    //   * the primary table having PKs that QueryBuilder can append as
+    //     silent tiebreakers (FallbackSortColumns) — covers the common
+    //     case where the user picked "Status" or any non-unique field,
+    //   * no sort configured at all — QueryBuilder uses the PK list as
+    //     the entire ORDER BY.
+    // Only DISTINCT-on reports without one of the other escape hatches
+    // get the error: under DISTINCT, ORDER BY columns must be in SELECT
+    // and PK auto-anchors are suppressed (would leak unselected columns
+    // into the projection), so a non-unique sort really can shuffle.
+    private string? ValidateSortHasUniqueField()
+    {
+        // DISTINCT off bypasses the check entirely. The PK auto-anchor +
+        // legacy fallback handle stability without admin intervention.
+        if (!_currentConfig.Distinct) return null;
+
+        var primary = ResolveEffectiveSortField();
+        var secondary = ResolveEffectiveSecondarySortField();
+
+        // No sort + no PKs is fine on Postgres (DisableDefaultSort emits
+        // no ORDER BY) and falls back to the first selected field on
+        // SQL Server. Either way nothing to validate at save time.
+        if (string.IsNullOrEmpty(primary) && string.IsNullOrEmpty(secondary))
+            return null;
+
+        bool primaryIsUnique = !string.IsNullOrEmpty(primary)
+            && _uniqueFieldIds.Contains(primary);
+        bool secondaryIsUnique = !string.IsNullOrEmpty(secondary)
+            && _uniqueFieldIds.Contains(secondary);
+        if (primaryIsUnique || secondaryIsUnique) return null;
+
+        // PK auto-anchor available — QueryBuilder will silently append
+        // the primary table's PK columns to the ORDER BY at run time, so
+        // pagination is stable without requiring the admin to pick a
+        // unique tiebreaker manually. (Note: under DISTINCT, the
+        // QueryBuilder *suppresses* the PK auto-anchor to avoid leaking
+        // un-selected columns into the projection — but this validation
+        // path only runs with DISTINCT on already, so the check here is
+        // stricter and PK presence is not enough on its own. Keep the
+        // path for explicitness; admins will see the "(-)" requirement.)
+        if (_primaryTablePkColumns.Count > 0) return null;
+
+        var primaryLabel = !string.IsNullOrEmpty(primary)
+            ? (_selectedFieldDefinitions.FirstOrDefault(f => f.Id == primary)?.Label ?? primary)
+            : "(none)";
+        return $"Sort by \"{primaryLabel}\" isn't unique and the primary table has no detectable PK — "
+             + "page results can shuffle between runs. Add a unique field (marked \"(-)\" in the dropdown) "
+             + "as Then By to make pagination stable.";
+    }
+
+    // Wrapper around the shared GridTemplateService helper — projects the
+    // calc-def list down to keys before delegating.
+    private static List<string> WeaveCalcsIntoTemplateOrder(
+        IList<string> templateOrder,
+        IList<string> savedOrder,
+        List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? calcDefs) =>
+        TleReportingDashboard.Web.Services.GridTemplateService.WeaveCalcsIntoTemplateOrder(
+            templateOrder, savedOrder, calcDefs?.Select(c => c.Key));
 
     private async Task HandleSave()
     {
@@ -1995,6 +2862,20 @@
         if (string.IsNullOrWhiteSpace(_currentConfig.PrimaryTable))
         {
             Snackbar.Add("Primary Table is required. Enter the root table (e.g. salesforce.lead) next to the Connection picker.", Severity.Warning);
+            return;
+        }
+
+        // Sort stability check: when any sort is configured (Sort By
+        // dropdown, Then By, or live header click), at least one of the
+        // sort fields must be a uniquely-keyed column (marked "(-)" in
+        // the dropdowns). Without it, OFFSET pagination shuffles rows
+        // between pages on Postgres and the saved report runs differently
+        // every time. Calc columns aren't considered unique here — the
+        // check only counts DB-attested unique fields.
+        var sortValidationError = ValidateSortHasUniqueField();
+        if (sortValidationError is not null)
+        {
+            Snackbar.Add(sortValidationError, Severity.Warning);
             return;
         }
 
@@ -2316,6 +3197,12 @@
         if (_currentConfig.HiddenColumns is not null && _currentConfig.HiddenColumns.Count > 0)
             state["HiddenColumns"] = _currentConfig.HiddenColumns;
 
+        // Table-view calculated columns. Distinct key from any dashboard
+        // calc list (which lives inside DashboardConfigJson) — this slot
+        // is evaluated per-row in ReportGrid, not per-group.
+        if (_currentConfig.TableCalculatedColumns is { Count: > 0 })
+            state["TableCalculatedColumns"] = _currentConfig.TableCalculatedColumns;
+
         // Custom filter IDs
         if (_currentConfig.CustomFilterIds is not null && _currentConfig.CustomFilterIds.Count > 0)
             state["CustomFilterIds"] = _currentConfig.CustomFilterIds;
@@ -2326,6 +3213,11 @@
         // but isn't written anymore now that the Default Sort dropdown is gone.
         if (_currentConfig.TableSort is { Count: > 0 })
             state["TableSort"] = _currentConfig.TableSort;
+
+        // Per-report DISTINCT. Only written when true so legacy reports
+        // don't get a noisy `"Distinct": false` key on every save.
+        if (_currentConfig.Distinct)
+            state["Distinct"] = true;
 
         // Detail-view grouping (drill-down). Direction is persisted even when
         // "none" so the user's pick round-trips exactly.
@@ -2341,6 +3233,14 @@
             state["DetailSortFieldId"] = _detailSortFieldId;
             state["DetailSortDirection"] = _detailSortDirection;
         }
+        // Then By tiebreaker — only persisted when both primary Sort By
+        // and Then By are populated. The empty case means "no tiebreaker".
+        if (!string.IsNullOrEmpty(_detailSortFieldId)
+            && !string.IsNullOrEmpty(_detailSortThenByFieldId))
+        {
+            state["DetailSortThenByFieldId"] = _detailSortThenByFieldId;
+            state["DetailSortThenByDirection"] = _detailSortThenByDirection;
+        }
 
         // Advanced (ad-hoc) filters. Only emitted when the feature is on
         // AND the user has defined at least one. Keeps existing reports
@@ -2354,6 +3254,68 @@
     }
 
     // ── Show Query ──
+    private async Task ShowReportJson()
+    {
+        // Snapshot the current report state in the same shape the save path
+        // emits — covers field ids, filters, ColumnState (column order /
+        // hidden / widths / dashboard config / calc columns / sorts),
+        // primary table, connection. Lets admins inspect drift without
+        // round-tripping through the DB.
+        // Capture live edits the same way HandleSave does so the JSON
+        // reflects what would actually be persisted right now, not just
+        // what's in _currentConfig.
+        var dashConfig = _dashboardView?.GetCurrentConfig() ?? _dashboardConfig;
+        if (dashConfig is not null)
+        {
+            if (_extraGroupByFieldIds.Count > 0)
+                dashConfig = dashConfig with { ExtraGroupByFieldIds = _extraGroupByFieldIds.ToList() };
+            _currentConfig.DashboardConfigJson = System.Text.Json.JsonSerializer.Serialize(dashConfig);
+        }
+        var widths = _reportGrid?.GetCustomWidths();
+        if (widths is not null && widths.Count > 0)
+            _currentConfig.ColumnWidths = widths;
+
+        var snapshot = new
+        {
+            ReportId = _loadedReportId,
+            Name = _loadedReportName,
+            InternalName = _loadedInternalName,
+            ConnectionId = _currentConfig.ConnectionId,
+            PrimaryTable = _currentConfig.PrimaryTable,
+            GridTemplateId = _linkedTemplateId,
+            FieldIds = _selectedFieldIds,
+            Filters = _currentConfig.Filters,
+            CustomFilterIds = _currentConfig.CustomFilterIds,
+            ColumnState = TryParseObject(BuildColumnStateJson())
+        };
+        var json = System.Text.Json.JsonSerializer.Serialize(snapshot,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+        var parameters = new DialogParameters
+        {
+            { "Title", string.IsNullOrWhiteSpace(_loadedReportName) ? "Report JSON" : $"Report JSON — {_loadedReportName}" },
+            { "Subtitle", _loadedReportId is null ? "Unsaved report — showing the snapshot the next save would persist." : null },
+            { "Json", json }
+        };
+        await DialogService.ShowAsync<JsonViewerDialog>("Report JSON", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+    }
+
+    // BuildColumnStateJson returns a JSON string. To get a NESTED object
+    // in the snapshot (instead of a stringly-quoted blob), parse it back
+    // to a JsonElement so System.Text.Json keeps it as structured JSON
+    // when serializing the outer envelope.
+    private static System.Text.Json.JsonElement? TryParseObject(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.Clone();
+        }
+        catch { return null; }
+    }
+
     private async Task ShowQuery()
     {
         if (string.IsNullOrWhiteSpace(_currentConfig.PrimaryTable))
@@ -2372,13 +3334,7 @@
             var joinConfigs = await SchemaService.GetJoinConfigsAsync(cid);
             var customFilters = await SchemaService.GetCustomFiltersAsync(cid);
             var lookups = await SchemaService.GetLookupsAsync(cid);
-            // Include extra group-by fields not in the selected field list
-            var queryFieldIds = new List<string>(_selectedFieldIds);
-            foreach (var extra in _extraGroupByFieldIds)
-            {
-                if (!queryFieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
-                    queryFieldIds.Add(extra);
-            }
+            var queryFieldIds = BuildEffectiveQueryFieldIds();
 
             var request = new QueryRequest
             {
@@ -2388,13 +3344,26 @@
                 AdvancedFilters = _advancedFiltersEnabled && HasAdvancedFilterLeaves(_filterRoot)
                     ? CloneFilterGroup(_filterRoot)
                     : null,
-                SortField = _currentConfig.SortField ?? _currentConfig.DefaultSortField,
-                SortDirection = _currentConfig.SortDirection ?? _currentConfig.DefaultSortDirection,
+                SortField = ResolveEffectiveSortField(),
+                SortDirection = ResolveEffectiveSortDirection(),
+                SecondarySortField = ResolveEffectiveSecondarySortField(),
+                SecondarySortDirection = ResolveEffectiveSecondarySortDirection(),
+                DisableDefaultSort = ResolveDisableDefaultSort(),
+                Distinct = _currentConfig.Distinct,
+                // Mirror HandleRunQuery: ship the primary table's PKs so the
+                // Show Query preview matches what'll actually execute when
+                // the admin picked "(None)".
+                FallbackSortColumns = _primaryTablePkColumns.Count > 0
+                    ? new List<string>(_primaryTablePkColumns)
+                    : null,
                 Page = 1,
                 PageSize = 50000,
                 ConnectionId = _currentConfig.ConnectionId,
                 PrimaryTable = _currentConfig.PrimaryTable,
-                GroupByFieldIds = _currentConfig.GroupByFieldIds
+                GroupByFieldIds = _currentConfig.GroupByFieldIds,
+                // Per-report SQL calc columns. Filtered to non-aggregating
+                // queries inside QueryBuilder; safe to always include here.
+                TableCalcSqlColumns = BuildTableCalcSqlSelectors()
             };
             request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _currentConfig.ConnectionId, _currentConfig.PrimaryTable);
             // Pick the dialect that matches the report's connection so the
@@ -2406,10 +3375,12 @@
                 request, fieldConfigs, joinConfigs, customFilters, lookups, dialect,
                 _currentConfig.PrimaryTable);
 
-            // If the user is viewing the Dashboard tab (_activeTabIndex == 2),
-            // wrap the row-level SQL as an aggregated GROUP BY query so the
-            // preview matches what the dashboard summary displays.
-            if (_activeTabIndex == 2)
+            // Always build the dashboard-wrapped SQL too, regardless of
+            // which tab the admin clicked Show Query from. The dialog
+            // exposes them as separate tabs so Table / Dashboard / Detail
+            // views aren't conflated. Built only when a primary group-by
+            // is set; otherwise no meaningful aggregation SQL exists.
+            string? dashboardSql = null;
             {
                 var liveDashConfig = _dashboardView?.GetCurrentConfig() ?? _dashboardConfig;
                 if (liveDashConfig is not null && !string.IsNullOrWhiteSpace(liveDashConfig.GroupByFieldId))
@@ -2428,7 +3399,7 @@
                         foreach (var ec in liveDashConfig.ExtraColumns)
                             measures.Add((ec.FieldId, ec.Aggregation));
 
-                    sql = QueryBuilder.BuildDashboardPreviewSql(
+                    dashboardSql = QueryBuilder.BuildDashboardPreviewSql(
                         sql, dims, measures, fieldConfigs, dialect,
                         liveDashConfig.DefaultSortColumn, liveDashConfig.DefaultSortDirection);
                 }
@@ -2480,7 +3451,20 @@
                 SortField = detailPrimary,
                 SortDirection = detailPrimaryDir,
                 SecondarySortField = detailSecondary,
-                SecondarySortDirection = detailSecondaryDir
+                SecondarySortDirection = detailSecondaryDir,
+                Distinct = _currentConfig.Distinct,
+                // Same auto-PK fallback as the table-view request: when the
+                // detail dropdowns leave SortField unset, QueryBuilder
+                // anchors the ORDER BY on PK columns so the preview matches
+                // runtime behavior.
+                FallbackSortColumns = _primaryTablePkColumns.Count > 0
+                    ? new List<string>(_primaryTablePkColumns)
+                    : null,
+                // Detail view shares the same per-report SQL calc columns as
+                // the table view — its preview SQL needs them in the SELECT
+                // and FROM chain too, otherwise sorting / displaying by a
+                // calc Key references a non-existent alias.
+                TableCalcSqlColumns = BuildTableCalcSqlSelectors()
             };
             detailRequest.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _currentConfig.ConnectionId, _currentConfig.PrimaryTable);
             var (detailSql, detailParams) = QueryBuilder.BuildQuery(
@@ -2492,6 +3476,8 @@
             {
                 { "Sql", sql },
                 { "Parameters", paramDict },
+                { "DashboardSql", dashboardSql },
+                { "DashboardParameters", paramDict },
                 { "DetailSql", detailSql },
                 { "DetailParameters", detailParamDict }
             };
@@ -2550,5 +3536,11 @@
             _staticInstance = this;
             _drawerWidth = _staticDrawerWidth;
         }
+    }
+
+    public void Dispose()
+    {
+        _editorScope?.Dispose();
+        _editorScope = null;
     }
 }

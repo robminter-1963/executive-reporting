@@ -1,7 +1,11 @@
 @* Field chip bar doubles as the column reorder bar for the report table.
    Drag a chip (grab the grip icon or anywhere on the chip) to reorder columns;
    click the X to remove. When locked to a grid template, drag and remove are
-   disabled — the template owns the order. *@
+   disabled — the template owns the order.
+
+   Calc columns render in the same row as regular fields with a green chip
+   so admins can spot them at a glance and reorder them inline. Removal of
+   a calc is via its X just like a regular field. *@
 
 <MudStack Spacing="1">
     @* Header / lock hint. *@
@@ -9,14 +13,14 @@
     {
         <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined"
                   Icon="@Icons.Material.Filled.Lock">
-            Columns are locked by the grid template. Reordering, adding, and removing template fields is not allowed.
+            Template fields can't be added or removed. You can still drag to reorder them.
             @if (OrphanFieldIds.Any())
             {
                 <text> Hidden / orphan fields can still be removed.</text>
             }
         </MudAlert>
     }
-    else if (SelectedFields.Any() || OrphanFieldIds.Any())
+    else if (SelectedFields.Any() || OrphanFieldIds.Any() || (CalcColumns is { Count: > 0 }))
     {
         <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
             Columns (drag to reorder)
@@ -25,47 +29,84 @@
 
     <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
         <div class="field-chip-zone">
-            @for (var i = 0; i < SelectedFields.Count; i++)
+            @{
+                var items = BuildChipItems();
+            }
+            @for (var i = 0; i < items.Count; i++)
             {
                 var idx = i;
-                var field = SelectedFields[i];
-                <div @key="field.Id"
-                     class="field-chip-wrap @(_dragSource == idx ? "dragging" : "") @(TemplateLocked ? "locked" : "draggable")"
-                     draggable="@(TemplateLocked ? "false" : "true")"
+                var item = items[i];
+                @* Drag is allowed even under TemplateLocked — the template
+                   owns the field SET (no add / no remove), but admins can
+                   still rearrange the visual order of those fields without
+                   violating the template contract. The close-X stays gated
+                   on !TemplateLocked for regular fields. Calc columns are
+                   always removable (they're not template-owned). *@
+                <MudTooltip Placement="Placement.Top" Arrow="true" Style="max-width: 320px;">
+                    <TooltipContent>
+                        <div style="text-align: left; font-size: 0.8rem;">
+                            <div style="font-weight: 600; margin-bottom: 4px;">@item.Label</div>
+                            <div style="display: flex; flex-direction: column; gap: 2px; font-size: 0.7rem; color: #ddd;">
+                                <span><strong>@(item.IsCalc ? "Field Alias:" : "ID:")</strong> @item.Id</span>
+                                @if (!string.IsNullOrWhiteSpace(item.DataType))
+                                {
+                                    <span><strong>Type:</strong> @item.DataType</span>
+                                }
+                            </div>
+                            <div style="font-size: 0.65rem; color: #aaa; margin-top: 4px;">drag to move</div>
+                        </div>
+                    </TooltipContent>
+                    <ChildContent>
+                <div @key="@($"{(item.IsCalc ? "calc" : "field")}-{item.Id}")"
+                     class="field-chip-wrap @(_dragSource == idx ? "dragging" : "") draggable"
+                     draggable="true"
                      @ondragstart="() => OnDragStart(idx)"
                      @ondragend="OnDragEnd"
                      @ondragover:preventDefault
                      @ondragover="() => OnDragOver(idx)"
-                     @ondrop="() => OnDrop(idx)"
-                     title="@(TemplateLocked ? field.Label : $"{field.Label} — drag to move")">
+                     @ondrop="() => OnDrop(idx)">
                     @if (_dropTarget == idx && _dragSource != idx && _dragSource >= 0)
                     {
                         <div class="drop-indicator"></div>
                     }
-                    @if (TemplateLocked)
+                    @{
+                        // Calc chips are always closable (not template-owned).
+                        // Regular field chips honor TemplateLocked for the X.
+                        var canClose = item.IsCalc || !TemplateLocked;
+                        var color = item.IsCalc ? Color.Success : Color.Primary;
+                        var icon = item.IsCalc
+                            ? Icons.Material.Filled.Calculate
+                            : Icons.Material.Filled.DragIndicator;
+                    }
+                    @if (canClose)
                     {
-                        <MudChip T="string" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small">
-                            @field.Label
+                        <MudChip T="string" Variant="Variant.Filled" Color="@color" Size="Size.Small"
+                                 Icon="@icon"
+                                 OnClose="() => OnFieldRemoved.InvokeAsync(item.Id)">
+                            @item.Label
                         </MudChip>
                     }
                     else
                     {
-                        <MudChip T="string" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                                 Icon="@Icons.Material.Filled.DragIndicator"
-                                 OnClose="() => OnFieldRemoved.InvokeAsync(field.Id)">
-                            @field.Label
+                        <MudChip T="string" Variant="Variant.Filled" Color="@color" Size="Size.Small"
+                                 Icon="@icon">
+                            @item.Label
                         </MudChip>
                     }
                 </div>
+                    </ChildContent>
+                </MudTooltip>
             }
-            @* Drop zone at the end for placing items after the last chip. *@
-            @if (!TemplateLocked && SelectedFields.Any())
+            @* End-of-row drop zone — always rendered when items exist so a
+               drop after the last chip lands at the end regardless of
+               template-lock state. *@
+            @if (items.Count > 0)
             {
                 <div class="field-chip-end"
                      @ondragover:preventDefault
-                     @ondragover="() => OnDragOver(SelectedFields.Count)"
-                     @ondrop="() => OnDrop(SelectedFields.Count)">
-                    @if (_dropTarget == SelectedFields.Count)
+                     @ondragover="() => OnDragOver(items.Count)"
+                     @ondrop="() => OnDrop(items.Count)">
+                    @if (_dropTarget == items.Count)
                     {
                         <div class="drop-indicator"></div>
                     }
@@ -100,7 +141,7 @@
             }
         </div>
 
-        @if (!TemplateLocked && (SelectedFields.Any() || OrphanFieldIds.Any()))
+        @if (!TemplateLocked && (SelectedFields.Any() || OrphanFieldIds.Any() || (CalcColumns is { Count: > 0 })))
         {
             <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary"
                        OnClick="OnClearAll">
@@ -159,19 +200,79 @@
     [Parameter] public List<FieldDefinition> SelectedFields { get; set; } = new();
     [Parameter] public EventCallback<string> OnFieldRemoved { get; set; }
     [Parameter] public EventCallback OnClearAll { get; set; }
+    // Emits the new ordered list of chip ids — a mix of field ids and calc
+    // keys. Caller splits and persists.
     [Parameter] public EventCallback<List<string>> OnFieldOrderChanged { get; set; }
     [Parameter] public bool TemplateLocked { get; set; }
     // Selected field ids that don't resolve to a FieldDefinition in any
     // active domain. Rendered as warning chips so the admin can see and
     // remove them — without this, they were silent yet still emitted in SQL.
     [Parameter] public List<string> OrphanFieldIds { get; set; } = new();
+    // Per-report calc columns. Rendered alongside fields as green chips,
+    // fully reorderable inline. Removal goes through OnFieldRemoved with
+    // the calc Key — the parent splits by membership.
+    [Parameter] public List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? CalcColumns { get; set; }
+    // Saved combined order — a mix of field ids and calc keys. When set,
+    // chips render in this order; ids missing from the order list (newly
+    // added fields / calcs) get appended in their list order. When null,
+    // defaults to "fields first, then calcs."
+    [Parameter] public List<string>? CombinedOrder { get; set; }
 
     private int _dragSource = -1;
     private int _dropTarget = -1;
 
+    public sealed record ChipItem(string Id, string Label, bool IsCalc, string? DataType);
+
+    private List<ChipItem> BuildChipItems()
+    {
+        var items = new List<ChipItem>();
+        var fieldsById = SelectedFields.ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+        var calcsByKey = (CalcColumns ?? new())
+            .Where(c => !string.IsNullOrEmpty(c.Key))
+            .ToDictionary(c => c.Key, StringComparer.OrdinalIgnoreCase);
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (CombinedOrder is { Count: > 0 })
+        {
+            foreach (var id in CombinedOrder)
+            {
+                if (seen.Contains(id)) continue;
+                if (fieldsById.TryGetValue(id, out var f))
+                {
+                    items.Add(new ChipItem(f.Id, f.Label, false, f.DataType));
+                    seen.Add(id);
+                }
+                else if (calcsByKey.TryGetValue(id, out var c))
+                {
+                    items.Add(new ChipItem(c.Key, string.IsNullOrEmpty(c.Label) ? c.Key : c.Label, true, c.DataType));
+                    seen.Add(id);
+                }
+            }
+        }
+
+        // Append any items the saved order doesn't cover (newly added since
+        // last save, or first render with no saved order). Fields first
+        // matches the legacy default; calcs go after.
+        foreach (var f in SelectedFields)
+        {
+            if (seen.Add(f.Id)) items.Add(new ChipItem(f.Id, f.Label, false, f.DataType));
+        }
+        foreach (var c in CalcColumns ?? new())
+        {
+            if (string.IsNullOrEmpty(c.Key)) continue;
+            if (seen.Add(c.Key)) items.Add(new ChipItem(c.Key, string.IsNullOrEmpty(c.Label) ? c.Key : c.Label, true, c.DataType));
+        }
+
+        return items;
+    }
+
     private void OnDragStart(int idx)
     {
-        if (TemplateLocked) return;
+        // TemplateLocked no longer blocks drag — admins can reorder
+        // template fields freely; only add / remove are gated. The
+        // close-X on each chip is the only thing that respects the
+        // lock, suppressed in the chip render above.
         _dragSource = idx;
     }
 
@@ -195,16 +296,23 @@
             return;
         }
 
-        var reordered = SelectedFields.Select(f => f.Id).ToList();
-        var item = reordered[_dragSource];
-        reordered.RemoveAt(_dragSource);
+        var items = BuildChipItems();
+        if (_dragSource >= items.Count)
+        {
+            OnDragEnd();
+            return;
+        }
+
+        var ids = items.Select(i => i.Id).ToList();
+        var item = ids[_dragSource];
+        ids.RemoveAt(_dragSource);
         var insertAt = targetIndex > _dragSource ? targetIndex - 1 : targetIndex;
-        insertAt = Math.Clamp(insertAt, 0, reordered.Count);
-        reordered.Insert(insertAt, item);
+        insertAt = Math.Clamp(insertAt, 0, ids.Count);
+        ids.Insert(insertAt, item);
 
         OnDragEnd();
 
         if (OnFieldOrderChanged.HasDelegate)
-            await OnFieldOrderChanged.InvokeAsync(reordered);
+            await OnFieldOrderChanged.InvokeAsync(ids);
     }
 }

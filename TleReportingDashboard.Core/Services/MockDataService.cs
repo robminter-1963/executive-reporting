@@ -274,6 +274,20 @@ public class MockDataService : ISchemaService, IQueryService, IReportService, IS
         }
     }
 
+    public Task<List<string>> GetDistinctCategoriesAsync()
+    {
+        lock (_reportLock)
+        {
+            var cats = _savedReports
+                .Where(r => !string.IsNullOrWhiteSpace(r.Category))
+                .Select(r => r.Category!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return Task.FromResult(cats);
+        }
+    }
+
     public Task<List<ReportSchedule>> GetAllSchedulesAsync() =>
         Task.FromResult(new List<ReportSchedule>());
 

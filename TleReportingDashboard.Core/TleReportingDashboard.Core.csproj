@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!--
+    Core hosts every shared service, model, and configuration type used by
+    both the Web app (Blazor) and the Worker (Hangfire). Web-specific
+    things (Razor Components, Microsoft.Identity.Web, MudBlazor, the stub
+    auth handler) stay in TleReportingDashboard.Web; the Worker drops
+    its reference to Web entirely so its publish output stops carrying
+    the Web app's assets.
+
+    FrameworkReference Microsoft.AspNetCore.App lets services use the
+    shared-framework abstractions (IConfiguration, ILogger, IMemoryCache,
+    DI extensions, AuthenticationHandler) without dragging in individual
+    Microsoft.Extensions.* NuGet packages. Both consumers (Web SDK and
+    SDK-Web Worker) load this framework already, so the cost is zero.
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!--
+    Implicit usings to match what the Microsoft.NET.Sdk.Web SDK adds for
+    free in the Web project. The shared services were authored assuming
+    these were ambient (e.g., bare `IConfiguration` parameters with no
+    `using Microsoft.Extensions.Configuration`); declaring them here as
+    Using items keeps the moved files compiling without per-file edits.
+  -->
+  <ItemGroup>
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+    <Using Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.104.2" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.2" />
+    <PackageReference Include="Npgsql" Version="9.0.2" />
+  </ItemGroup>
+</Project>

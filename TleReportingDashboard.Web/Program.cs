@@ -146,6 +146,8 @@ try
         builder.Services.AddScoped<IQueryPipeline, SqlEmitter>();
         builder.Services.AddScoped<IQueryService, QueryService>();
         builder.Services.AddScoped<ICodeSetService, CodeSetService>();
+        builder.Services.AddScoped<INotificationService, NotificationService>();
+        builder.Services.AddSingleton<IThemeService, ThemeService>();
 
         builder.Services.AddScoped<ReportDbService>();
         builder.Services.AddScoped<IReportService>(sp => sp.GetRequiredService<ReportDbService>());
@@ -169,6 +171,8 @@ try
         builder.Services.AddSingleton<ISharingService>(sp => sp.GetRequiredService<MockDataService>());
         builder.Services.AddSingleton<IScheduleService>(sp => sp.GetRequiredService<MockDataService>());
         builder.Services.AddScoped<IUserPreferenceService, InMemoryUserPreferenceService>();
+        builder.Services.AddSingleton<INotificationService, InMemoryNotificationService>();
+        builder.Services.AddSingleton<IThemeService, InMemoryThemeService>();
         builder.Services.AddScoped<IMasterDashboardService, MasterDashboardService>();
         builder.Services.AddScoped<IGridTemplateService, GridTemplateService>();
         builder.Services.AddSingleton<IFieldReferenceService, NoopFieldReferenceService>();

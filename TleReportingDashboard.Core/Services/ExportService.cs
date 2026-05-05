@@ -34,26 +34,50 @@ public class ExportService : IExportService
                 if (!row.TryGetValue(column.FieldId, out var value) || value is null)
                     continue;
 
-                // Per-field Format, when set, writes the formatted string so the
-                // cell reads exactly what the user sees in the grid. Skips the
-                // type-based cell-value conversion in that branch. DataType is
-                // passed through so phone/date branches in FieldFormatter fire
-                // the same way they do in the grid (digit-count guard, default
-                // date format, etc.).
-                if (!string.IsNullOrWhiteSpace(column.Format))
-                    cell.Value = FieldFormatter.Format(value, column.Format, column.DataType);
-                else
+                // Currency and date cells ALWAYS get typed values so the
+                // column-level Excel number format (applied below) drives
+                // the display. Without this, a per-field column.Format
+                // string would pre-render the value as text and Excel
+                // would refuse to apply Currency/Date formatting,
+                // sorting, or summing on the column. Other types keep
+                // the original behavior: column.Format wins if set, else
+                // SetCellValue picks a type-appropriate cell value.
+                if (IsTypedAsCurrency(column.DataType) || IsTypedAsDate(column.DataType))
+                {
                     SetCellValue(cell, value, column.DataType);
+                }
+                else if (!string.IsNullOrWhiteSpace(column.Format))
+                {
+                    cell.Value = FieldFormatter.Format(value, column.Format, column.DataType);
+                }
+                else
+                {
+                    SetCellValue(cell, value, column.DataType);
+                }
             }
         }
 
-        // Apply currency format to currency columns
-        for (var colIdx = 0; colIdx < data.Columns.Count; colIdx++)
+        // Apply Excel typed formatting per column. Currency uses Excel's
+        // Currency category (dollar sign + red negatives); date uses the
+        // Date category (translates from a column.Format string when one
+        // is set, falls back to mm/dd/yyyy). Skipped when there are no
+        // data rows — Range() throws on empty ranges.
+        if (data.Rows.Count > 0)
         {
-            if (string.Equals(data.Columns[colIdx].DataType, "currency", StringComparison.OrdinalIgnoreCase))
+            for (var colIdx = 0; colIdx < data.Columns.Count; colIdx++)
             {
-                var dataRange = worksheet.Range(headerRow + 1, colIdx + 1, headerRow + data.Rows.Count, colIdx + 1);
-                dataRange.Style.NumberFormat.Format = "#,##0.00";
+                var column = data.Columns[colIdx];
+                var dataRange = worksheet.Range(headerRow + 1, colIdx + 1,
+                                                 headerRow + data.Rows.Count, colIdx + 1);
+                if (IsTypedAsCurrency(column.DataType))
+                {
+                    dataRange.Style.NumberFormat.Format = "$#,##0.00;[Red]-$#,##0.00";
+                }
+                else if (IsTypedAsDate(column.DataType))
+                {
+                    dataRange.Style.NumberFormat.Format =
+                        ExcelDateFormatFor(column.Format) ?? "mm/dd/yyyy";
+                }
             }
         }
 
@@ -110,6 +134,7 @@ public class ExportService : IExportService
                 break;
 
             case "date":
+            case "datetime":
                 if (value is DateTime dt)
                     cell.Value = dt;
                 else if (DateTime.TryParse(value.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
@@ -122,6 +147,38 @@ public class ExportService : IExportService
                 cell.Value = value.ToString();
                 break;
         }
+    }
+
+    private static bool IsTypedAsCurrency(string? dataType) =>
+        string.Equals(dataType, "currency", StringComparison.OrdinalIgnoreCase);
+
+    // Treat 'date' and 'datetime' the same here. SchemaBuilderService
+    // already normalizes most SQL date types to 'date', but the runtime
+    // does flow 'datetime' through occasionally — handle both so a single
+    // odd column doesn't break the typed-cell path.
+    private static bool IsTypedAsDate(string? dataType) =>
+        string.Equals(dataType, "date", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(dataType, "datetime", StringComparison.OrdinalIgnoreCase);
+
+    // Translates a per-field column.Format string (C# date pattern) into
+    // an Excel number-format pattern. Excel's date format codes are
+    // lowercase (yyyy / mm / dd), C#'s use uppercase MM for month — for
+    // date-only patterns the lowercase form is unambiguous, so a simple
+    // ToLower is safe. Bails to null (caller falls back to the default)
+    // when the format contains time components, since "mm" is ambiguous
+    // (month vs minute) once an hour token shows up — an admin-customized
+    // datetime pattern is better off using the Excel default than
+    // ending up with a minute-formatted month.
+    private static string? ExcelDateFormatFor(string? csharpFormat)
+    {
+        if (string.IsNullOrWhiteSpace(csharpFormat)) return null;
+        if (csharpFormat.Contains('H') || csharpFormat.Contains('h')
+            || csharpFormat.Contains(':') || csharpFormat.Contains('s')
+            || csharpFormat.Contains('t'))
+        {
+            return null;
+        }
+        return csharpFormat.ToLowerInvariant();
     }
 
     private static string FormatValue(object? value, string dataType)

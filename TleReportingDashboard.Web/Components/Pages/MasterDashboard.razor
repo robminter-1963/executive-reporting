@@ -5,6 +5,7 @@
 @inject ISharingService SharingService
 @inject IQueryService QueryService
 @inject IGridTemplateService GridTemplateService
+@inject IExportService ExportService
 @inject IUserPreferenceService PreferenceService
 @inject IUserManagementService UserManagement
 @inject IQueryScopeResolver ScopeResolver
@@ -20,6 +21,7 @@
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject IConfiguration Config
+@inject ILogger<MasterDashboard> Logger
 @implements IDisposable
 
 <PageTitle>@(_initialized ? $"{_dashboardTitle} - Executive Reporting Suite" : "Executive Reporting Suite")</PageTitle>
@@ -161,16 +163,17 @@
             </MudStack>
         </MudStack>
 
-        @if (_loading)
-        {
-            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
-        }
+        @* Page-level "loading dashboard config" indicator. Tile data
+           has its own per-tile QueryProgress below; this one only
+           covers the layout/section/tile-list bootstrap. *@
+        <QueryProgress Active="@_loading" />
 
         @* ── Tabs ── *@
         @if (_tabs.Any())
         {
             <MudTabs ActivePanelIndex="_activeTabIndex" ActivePanelIndexChanged="OnTabChanged"
-                     Elevation="0" Rounded ApplyEffectsToContainer>
+                     Elevation="0" Rounded ApplyEffectsToContainer
+                     Class="dashboard-tabs">
                 @foreach (var tab in _tabs)
                 {
                     var t = tab;
@@ -407,7 +410,7 @@
                                              @ondrop="@(async () => await OnTileDrop(idx))"
                                              @oncontextmenu="@(() => ShowTileQuery(tl))"
                                              @oncontextmenu:preventDefault="true">
-                                            <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 12px; height: 100%; display: flex; flex-direction: column; overflow: hidden; box-shadow: 7px 7px 9px rgba(0,0,0,0.20), 5px 5px 7px rgba(0,0,0,0.14);">
+                                            <MudPaper Elevation="0" Style="border: 1px solid var(--border-subtle, #E8EAED); border-radius: 12px; height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--surface-card, #FFFFFF); box-shadow: 7px 7px 9px rgba(0,0,0,0.20), 5px 5px 7px rgba(0,0,0,0.14);">
                                                 @* Tile header — drag handle in edit mode; title is bold and per-tile alignable *@
                                                 @{
                                                     var tileAlign = string.IsNullOrEmpty(tl.TitleAlign) ? "left" : tl.TitleAlign;
@@ -416,7 +419,7 @@
                                                      @ondragstart="@(() => _dragSource = idx)"
                                                      @ondragend="@(() => { _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0; })"
                                                      style="@(_editMode ? "cursor: grab;" : "")">
-                                                    <div style="display: flex; align-items: center; gap: 4px; padding: 6px 12px; border-bottom: 1px solid #E8EAED; background: #FFFFFF;">
+                                                    <div style="display: flex; align-items: center; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, #E8EAED); background: var(--dashboard-header-bg, #FFFFFF); color: var(--dashboard-header-text, #202124);">
                                                         @if (_editMode)
                                                         {
                                                             <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small"
@@ -483,6 +486,21 @@
                                                                                OnClick="@(() => ToggleChart(tl.Id))" />
                                                             </MudTooltip>
                                                         }
+                                                        @* Tile export — same dropdown UX as the Detail Viewer
+                                                           (Excel / CSV) but rendered as a compact icon button
+                                                           so it doesn't crowd the header on small tiles. The
+                                                           export bypasses the dashboard's aggregation and
+                                                           writes the underlying detail rows, matching the
+                                                           "All Records" view in the Detail Viewer. Disabled
+                                                           until the tile finishes loading data. *@
+                                                        @{
+                                                            var tileLocal = tl;
+                                                            var tileLoaded = _tileData.ContainsKey(tl.ReportId);
+                                                        }
+                                                        <ExportMenu IconOnly
+                                                                    OnExportExcel="@(() => ExportTileDetailExcel(tileLocal))"
+                                                                    OnExportCsv="@(() => ExportTileDetailCsv(tileLocal))"
+                                                                    Disabled="@(!tileLoaded)" />
                                                         @if (_editMode)
                                                         {
                                                             <MudTooltip Text="Remove tile">
@@ -505,13 +523,21 @@
                                                                        InitialHiddenColumns="td.HiddenColumns"
                                                                        TableCalcColumns="td.TableCalcColumns"
                                                                        ReadOnly="true" DetailFromDashboard="true" ReportId="tl.ReportId"
+                                                                       DashboardTabName="@(ActiveTab?.Label)"
                                                                        GridHeight="@($"{Math.Max(150, tl.Height - 120)}px")"
                                                                        Compact="true"
                                                                        HideChart="@(!_chartVisibleTiles.Contains(tl.Id))" />
                                                     }
                                                     else if (_tileLoading.Contains(tl.ReportId))
                                                     {
-                                                        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+                                                        @* Tile queries have tighter slowness thresholds than
+                                                           full reports — a 6-second tile feels worse than a
+                                                           6-second report viewer because the user is staring at
+                                                           a card the size of a postage stamp. *@
+                                                        <QueryProgress Active="true"
+                                                                       SlowThresholdSeconds="5"
+                                                                       VerySlowThresholdSeconds="12"
+                                                                       VerySlowMessage="@($"Tile fetch is slow — check the report's connection or filters.")" />
                                                     }
                                                     else
                                                     {
@@ -522,6 +548,21 @@
                                                         </MudText>
                                                     }
                                                 </div>
+                                                @* Tile footer band — small metadata strip at the bottom
+                                                   of every loaded tile. Shows row count + a refreshed-at
+                                                   stamp so users have a "data freshness" cue without
+                                                   leaving the dashboard. Background + text drive off the
+                                                   --dashboard-footer-* tokens; admins can re-paint it via
+                                                   Admin → Theme. Only renders when the tile actually has
+                                                   data — loading / error states keep the tile body
+                                                   uncluttered. *@
+                                                @if (_tileData.TryGetValue(tl.ReportId, out var tdFooter))
+                                                {
+                                                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 12px; border-top: 1px solid var(--border-subtle, #E8EAED); background: var(--dashboard-footer-bg, #FAFAFA); color: var(--dashboard-footer-text, #5F6368); font-size: 0.7rem;">
+                                                        <span>@tdFooter.Data.Rows.Count.ToString("N0") rows</span>
+                                                        <span>updated @FormatTileFooterTime(_tileLoadedAtUtc.GetValueOrDefault(tl.ReportId))</span>
+                                                    </div>
+                                                }
                                             </MudPaper>
                                             @if (_editMode)
                                             {
@@ -533,20 +574,14 @@
                             }
                             else if (!_loading)
                             {
-                                <MudPaper Class="pa-8 d-flex flex-column align-center justify-center mt-2" Elevation="0"
-                                          Style="border: 1px dashed #DADCE0; min-height: 200px;">
-                                    <MudIcon Icon="@Icons.Material.Filled.DashboardCustomize" Size="Size.Large" Color="Color.Default" />
-                                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
-                                        No reports on this tab yet.
-                                    </MudText>
-                                    @if (_editMode)
-                                    {
-                                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
-                                                   StartIcon="@Icons.Material.Filled.Add" OnClick="OpenAddDialog">
-                                            Add Report
-                                        </MudButton>
-                                    }
-                                </MudPaper>
+                                <EmptyState Icon="@Icons.Material.Filled.DashboardCustomize"
+                                            MinHeightPx="200"
+                                            ContainerClass="mt-2"
+                                            Heading="No tiles on this tab yet"
+                                            Body="@(_editMode ? "Add reports as tiles to start building this dashboard." : "Switch to edit mode to add reports as tiles, or pick a different tab.")"
+                                            CtaLabel="@(_editMode ? "Add report" : null)"
+                                            CtaIcon="@Icons.Material.Filled.Add"
+                                            OnCtaClick="OpenAddDialog" />
                             }
                         </ChildContent>
                     </MudTabPanel>
@@ -571,6 +606,14 @@
 </MudMainContent>
 
 <style>
+    /* Tab strip background — slightly darker than the page surface so
+       the tabs read as a distinct band rather than blending into the
+       toolbar above. Scoped via .dashboard-tabs so this doesn't bleed
+       into MudTabs anywhere else in the app. */
+    .dashboard-tabs .mud-tabs-toolbar {
+        background-color: var(--surface-strip, #E8EAED);
+    }
+
     .tile-resize-handle {
         position: absolute;
         right: 0;
@@ -751,6 +794,12 @@
     // shows tile content, but scoped one level deeper.
     private int _activeSectionId;
     private Dictionary<Guid, TileLoadResult> _tileData = new();
+    // Wall-clock UTC of each tile's most-recent successful load. Drives
+    // the "updated 5m ago" footer caption — populated alongside the
+    // _tileData write so the two stay in sync. Cleared when the tile
+    // fails or gets removed so the footer doesn't render against stale
+    // data.
+    private Dictionary<Guid, DateTime> _tileLoadedAtUtc = new();
     private Dictionary<Guid, string> _tileErrors = new();
     // Captured query state when a tile errors out at execution. Lets the
     // right-click "Show query" dialog still render the SQL that was sent
@@ -769,8 +818,32 @@
 
     private MasterDashboardTab? ActiveTab => _activeTabIndex >= 0 && _activeTabIndex < _tabs.Count ? _tabs[_activeTabIndex] : null;
 
+    // 5-minute idle threshold. Caller code reads this constant via the JS
+    // bridge so changing the timeout is a single edit.
+    private const int IdleRefreshThresholdMs = 5 * 60 * 1000;
+    private bool _idleWatcherStarted;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // Start the idle auto-refresh watcher once per page mount. The
+        // JS side debounces activity events, so the cost here is just
+        // one initial JS interop call. The watcher invokes
+        // OnIdleRefresh below after IdleRefreshThresholdMs of no
+        // activity (mouse / keyboard / scroll / touch).
+        if (firstRender)
+        {
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            try
+            {
+                await JS.InvokeVoidAsync("startIdleWatcher", _dotNetRef, IdleRefreshThresholdMs);
+                _idleWatcherStarted = true;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to start idle-refresh watcher — auto-refresh disabled for this session.");
+            }
+        }
+
         if (_editMode && _tiles.Any())
         {
             _dotNetRef ??= DotNetObjectReference.Create(this);
@@ -813,8 +886,37 @@
         }
     }
 
+    // Fired by idle-refresh.js after the configured threshold of no user
+    // activity. Re-runs the active section's tile queries so admins
+    // sitting on a dashboard see fresh numbers without manually
+    // reloading the page. Skips when:
+    //   * Edit mode is active (the admin is mid-layout-change; clobbering
+    //     unsaved edits with a re-fetch would be hostile)
+    //   * The page hasn't finished its initial bootstrap (_initialized)
+    //   * The user already navigated away (the JS watcher should have
+    //     stopped, but a race window during Dispose is possible)
+    [JSInvokable]
+    public async Task OnIdleRefresh()
+    {
+        if (_editMode || !_initialized) return;
+        try
+        {
+            await LoadActiveSectionTiles();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Idle auto-refresh failed.");
+        }
+    }
+
     public void Dispose()
     {
+        if (_idleWatcherStarted)
+        {
+            // Fire-and-forget; the circuit may already be torn down in
+            // which case the JS call no-ops harmlessly.
+            _ = JS.InvokeVoidAsync("stopIdleWatcher").AsTask().ContinueWith(_ => { });
+        }
         _dotNetRef?.Dispose();
     }
 
@@ -960,7 +1062,7 @@
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to load: {ex.Message}", Severity.Error);
+            Snackbar.Add(FriendlyError.FromException(ex, Logger, "loading dashboard"), Severity.Error);
         }
         finally
         {
@@ -1009,7 +1111,7 @@
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to load tiles: {ex.Message}", Severity.Error);
+            Snackbar.Add(FriendlyError.FromException(ex, Logger, "loading dashboard tiles"), Severity.Error);
         }
     }
 
@@ -1091,15 +1193,18 @@
             if (result is not null)
             {
                 _tileData[reportId] = result;
+                _tileLoadedAtUtc[reportId] = DateTime.UtcNow;
             }
             if (failure is not null)
             {
                 _tileErrors[reportId] = failure.Error;
                 _tileFailedQuery[reportId] = failure;
+                _tileLoadedAtUtc.Remove(reportId);
             }
             else if (error is not null)
             {
                 _tileErrors[reportId] = error;
+                _tileLoadedAtUtc.Remove(reportId);
             }
             _tileLoading.Remove(reportId);
         }
@@ -1118,6 +1223,9 @@
         var report = await ReportService.GetReportByIdAsync(reportId);
         if (report is null) return (null, null);
 
+        // Resolve fields from a linked grid template if present, otherwise
+        // fall back to the report's saved FieldIds. Template hidden-column
+        // list is also captured here for the merged-hidden union below.
         var fieldIds = new List<string>();
         List<string>? templateHiddenColumns = null;
         if (report.GridTemplateId.HasValue)
@@ -1135,37 +1243,15 @@
         }
         if (!fieldIds.Any()) return (null, null);
 
-        var filters = new Dictionary<string, object?>();
-        if (!string.IsNullOrWhiteSpace(report.Filters))
-            filters = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(report.Filters) ?? new();
-
+        // Pull the bits the tile renderer needs from column_state — these
+        // are NOT QueryRequest knobs so the factory doesn't surface them:
+        //   • DashboardConfig — the tile UI's chart/group/dimension config
+        //   • reportHiddenColumns — merged with template hidden below
+        //   • tableCalcColumns — passed to the rendered tile so calc-column
+        //     captions resolve and group-by lists include calc keys
         DashboardView.DashboardConfig? config = null;
-        List<string>? customFilterIds = null;
-        TleReportingDashboard.Web.Models.FilterGroup? advancedFilters = null;
-        // Feature-flag the advanced-filter pass-through so a rollback in
-        // appsettings also takes effect on the Master Dashboard, not just
-        // the Report Builder.
-        var advancedFiltersEnabled = Config.GetValue<bool>("Features:AdvancedFilters", false);
-
         List<string>? reportHiddenColumns = null;
         List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? tableCalcColumns = null;
-        // Saved sort state — tile execution must mirror the editor so
-        // dashboards reflect the admin's chosen ORDER BY. The editor's
-        // priority is: TableSort (multi, header-clicks) > Group By dropdown
-        // > Sort By dropdown > legacy TableSortField. The Sort By + Group
-        // By dropdowns persist as DetailSortFieldId / DetailGroupByFieldId
-        // even though they drive BOTH table-view and detail-view sort —
-        // the "detail" prefix is just historical naming.
-        List<TleReportingDashboard.Web.Models.TableSortSpec>? savedTableSort = null;
-        string? savedDetailGroupByFieldId = null;
-        string? savedDetailGroupByDirection = null;
-        string? savedDetailSortFieldId = null;
-        string? savedDetailSortDirection = null;
-        string? savedDetailSortThenByFieldId = null;
-        string? savedDetailSortThenByDirection = null;
-        string? savedLegacyTableSortField = null;
-        string? savedLegacyTableSortDirection = null;
-        bool savedDistinct = false;
         if (!string.IsNullOrWhiteSpace(report.ColumnState))
         {
             try
@@ -1173,146 +1259,15 @@
                 config = System.Text.Json.JsonSerializer.Deserialize<DashboardView.DashboardConfig>(
                     report.ColumnState, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 using var doc = System.Text.Json.JsonDocument.Parse(report.ColumnState);
-                if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
-                    customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
                 if (doc.RootElement.TryGetProperty("HiddenColumns", out var hcEl))
                     reportHiddenColumns = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcEl.GetRawText());
-                // Read every sort-relevant key the editor writes. Resolution
-                // happens further down so the priority chain stays in one
-                // place (see the editor's ResolveEffectiveSortField).
-                if (doc.RootElement.TryGetProperty("TableSortField", out var tsfEl))
-                    savedLegacyTableSortField = tsfEl.GetString();
-                if (doc.RootElement.TryGetProperty("TableSortDirection", out var tsdEl))
-                    savedLegacyTableSortDirection = tsdEl.GetString();
-                if (doc.RootElement.TryGetProperty("TableSort", out var tsEl)
-                    && tsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
-                {
-                    try
-                    {
-                        savedTableSort = System.Text.Json.JsonSerializer
-                            .Deserialize<List<TleReportingDashboard.Web.Models.TableSortSpec>>(tsEl.GetRawText());
-                    }
-                    catch { /* fall through to single-sort */ }
-                }
-                if (doc.RootElement.TryGetProperty("DetailGroupByFieldId", out var dgfEl))
-                    savedDetailGroupByFieldId = dgfEl.GetString();
-                if (doc.RootElement.TryGetProperty("DetailGroupByDirection", out var dgdEl))
-                    savedDetailGroupByDirection = dgdEl.GetString();
-                if (doc.RootElement.TryGetProperty("DetailSortFieldId", out var dsfEl))
-                    savedDetailSortFieldId = dsfEl.GetString();
-                if (doc.RootElement.TryGetProperty("DetailSortDirection", out var dsdEl))
-                    savedDetailSortDirection = dsdEl.GetString();
-                if (doc.RootElement.TryGetProperty("DetailSortThenByFieldId", out var dstfEl))
-                    savedDetailSortThenByFieldId = dstfEl.GetString();
-                if (doc.RootElement.TryGetProperty("DetailSortThenByDirection", out var dstdEl))
-                    savedDetailSortThenByDirection = dstdEl.GetString();
-                // Per-report SELECT DISTINCT toggle. Off when absent.
-                if (doc.RootElement.TryGetProperty("Distinct", out var distEl)
-                    && distEl.ValueKind == System.Text.Json.JsonValueKind.True)
-                    savedDistinct = true;
-                // Per-report SQL calc columns. Their values land in every
-                // row dict via the SELECT alias; the dashboard tile uses
-                // them as group-by candidates and the column header label.
                 if (doc.RootElement.TryGetProperty("TableCalculatedColumns", out var tcEl))
                 {
                     tableCalcColumns = System.Text.Json.JsonSerializer
                         .Deserialize<List<TleReportingDashboard.Web.Models.TableCalcColumnDef>>(tcEl.GetRawText());
                 }
-
-                // Advanced (ad-hoc) filters tree. Same back-compat shape
-                // handling as the Report Builder: new saves emit an
-                // object {op, items:[…]}; early experimental saves emit
-                // a flat array, which we wrap into a root AND-group.
-                if (advancedFiltersEnabled
-                    && doc.RootElement.TryGetProperty("AdvancedFilters", out var afEl))
-                {
-                    if (afEl.ValueKind == System.Text.Json.JsonValueKind.Object)
-                    {
-                        advancedFilters = System.Text.Json.JsonSerializer
-                            .Deserialize<TleReportingDashboard.Web.Models.FilterGroup>(
-                                afEl.GetRawText(),
-                                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                    }
-                    else if (afEl.ValueKind == System.Text.Json.JsonValueKind.Array)
-                    {
-                        var flat = System.Text.Json.JsonSerializer
-                            .Deserialize<List<TleReportingDashboard.Web.Models.FilterClause>>(afEl.GetRawText())
-                            ?? new();
-                        if (flat.Count > 0)
-                        {
-                            advancedFilters = new TleReportingDashboard.Web.Models.FilterGroup
-                            {
-                                Op = TleReportingDashboard.Web.Models.FilterGroupOps.And,
-                                Items = flat.Select(c => new TleReportingDashboard.Web.Models.FilterItem { Clause = c }).ToList()
-                            };
-                        }
-                    }
-                }
             }
             catch { }
-        }
-
-        // Include extra group-by fields from dashboard config.
-        void AddExtraIds(IEnumerable<string>? ids)
-        {
-            if (ids is null) return;
-            foreach (var extra in ids)
-                if (!fieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
-                    fieldIds.Add(extra);
-        }
-        AddExtraIds(config?.ExtraGroupByFieldIds);
-        AddExtraIds(config?.ExtraDimensionFieldIds);
-
-        // Resolve effective primary + secondary sort using the SAME priority
-        // chain the editor's ResolveEffectiveSortField applies, otherwise
-        // tile SQL drifts from what the admin sees in the editor:
-        //   1. TableSort (multi-sort, header-clicks)
-        //   2. DetailGroupByFieldId — Group By dropdown drives primary
-        //      with Sort By dropdown sliding into secondary.
-        //   3. DetailSortFieldId — Sort By dropdown alone.
-        //   4. Legacy TableSortField/Direction (older saves).
-        // Then By tiebreaker (DetailSortThenBy*) becomes secondary when
-        // there's a primary Sort By and no Group By in front of it.
-        string? sortField = null, sortDirection = null;
-        string? secondarySort = null, secondaryDirection = null;
-
-        if (savedTableSort is { Count: > 0 })
-        {
-            sortField = savedTableSort[0].Field;
-            sortDirection = savedTableSort[0].Direction;
-            secondarySort = savedTableSort.Count > 1 ? savedTableSort[1].Field : null;
-            secondaryDirection = savedTableSort.Count > 1 ? savedTableSort[1].Direction : null;
-        }
-        else if (!string.IsNullOrWhiteSpace(savedDetailGroupByFieldId)
-                 && !string.Equals(savedDetailGroupByDirection, "none", StringComparison.OrdinalIgnoreCase))
-        {
-            sortField = savedDetailGroupByFieldId;
-            sortDirection = string.Equals(savedDetailGroupByDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
-            // Sort By slides into secondary when distinct from the group field.
-            if (!string.IsNullOrWhiteSpace(savedDetailSortFieldId)
-                && !string.Equals(savedDetailSortFieldId, savedDetailGroupByFieldId, StringComparison.OrdinalIgnoreCase))
-            {
-                secondarySort = savedDetailSortFieldId;
-                secondaryDirection = string.Equals(savedDetailSortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
-            }
-        }
-        else if (!string.IsNullOrWhiteSpace(savedDetailSortFieldId))
-        {
-            sortField = savedDetailSortFieldId;
-            sortDirection = string.Equals(savedDetailSortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
-            // Then By tiebreaker (when distinct from primary).
-            if (!string.IsNullOrWhiteSpace(savedDetailSortThenByFieldId)
-                && !string.Equals(savedDetailSortThenByFieldId, savedDetailSortFieldId, StringComparison.OrdinalIgnoreCase))
-            {
-                secondarySort = savedDetailSortThenByFieldId;
-                secondaryDirection = string.Equals(savedDetailSortThenByDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "desc" : "asc";
-            }
-        }
-        else
-        {
-            // Legacy fallback for pre-multi-sort saves.
-            sortField = savedLegacyTableSortField;
-            sortDirection = savedLegacyTableSortDirection;
         }
 
         // Pre-fetch PK columns of the report's primary table so QueryBuilder
@@ -1340,36 +1295,34 @@
             catch { pkColumns = null; }
         }
 
-        var request = new QueryRequest
+        // Single source of truth for "QueryRequest from a SavedReport".
+        // Same factory the Worker, Report Viewer, and Detail Viewer use —
+        // every saved knob (filters with JsonElement unwrap, advanced
+        // filters, sort priority chain, distinct, calc SQL, etc.) lands
+        // automatically.
+        var request = TleReportingDashboard.Web.Services.QueryRequestFactory
+            .FromSavedReport(report, pageSize: 50000, fallbackSortColumns: pkColumns);
+
+        // Per-surface overrides:
+        //  • FieldIds — splice in the dashboard's ExtraGroupBy / ExtraDimension
+        //    fields (a per-render concern, not a saved-report knob), and use
+        //    the template-resolved set when one is linked.
+        //  • AdvancedFilters — gated by Features:AdvancedFilters so an
+        //    appsettings rollback also takes effect on the Master Dashboard.
+        void AddExtraIds(IEnumerable<string>? ids)
         {
-            FieldIds = fieldIds,
-            Filters = filters,
-            CustomFilterIds = customFilterIds,
-            AdvancedFilters = advancedFilters,
-            SortField = sortField,
-            SortDirection = sortDirection,
-            SecondarySortField = secondarySort,
-            SecondarySortDirection = secondaryDirection,
-            FallbackSortColumns = pkColumns is { Count: > 0 } ? pkColumns : null,
-            Distinct = savedDistinct,
-            Page = 1,
-            PageSize = 50000,
-            // Tile inherits the connection and primary table from the report it
-            // points at — keeps viewer + detail + dashboard in sync automatically.
-            ConnectionId = report.ConnectionId,
-            PrimaryTable = report.PrimaryTable,
-            // SQL-mode calc columns must reach the SELECT so the row dict
-            // carries their values for the tile's group-by / dimensions.
-            TableCalcSqlColumns = tableCalcColumns?
-                .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression) && !string.IsNullOrEmpty(c.Key))
-                .Select(c => new TleReportingDashboard.Web.Models.TableCalcSqlSelector
-                {
-                    Key = c.Key,
-                    SqlExpression = c.SqlExpression!,
-                    JoinIds = c.JoinIds
-                })
-                .ToList()
-        };
+            if (ids is null) return;
+            foreach (var extra in ids)
+                if (!fieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                    fieldIds.Add(extra);
+        }
+        AddExtraIds(config?.ExtraGroupByFieldIds);
+        AddExtraIds(config?.ExtraDimensionFieldIds);
+        request.FieldIds = fieldIds;
+
+        if (!Config.GetValue<bool>("Features:AdvancedFilters", false))
+            request.AdvancedFilters = null;
+
         request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, report.ConnectionId, report.PrimaryTable);
 
         // Union template-level and report-level hidden column lists so a
@@ -1648,10 +1601,14 @@
             _headerDropTargetIdx = -1;
             return;
         }
+        // Drop semantic: dragging RIGHT/DOWN drops AFTER the target section;
+        // dragging LEFT/UP drops BEFORE. Both collapse to "insert at the
+        // target's pre-removal index" — same reasoning as OnTileDrop. The
+        // earlier `targetIndex - 1` adjustment made dropping on the last
+        // section land the source second-to-last.
         var item = _sections[_sectionDragSource];
         _sections.RemoveAt(_sectionDragSource);
-        var insertAt = targetIndex > _sectionDragSource ? targetIndex - 1 : targetIndex;
-        insertAt = Math.Clamp(insertAt, 0, _sections.Count);
+        var insertAt = Math.Clamp(targetIndex, 0, _sections.Count);
         _sections.Insert(insertAt, item);
         for (var i = 0; i < _sections.Count; i++) _sections[i].SortOrder = i;
         _sectionDragSource = -1;
@@ -1774,6 +1731,7 @@
         _tiles.Remove(tile);
         _pendingRemovals.Add(tile);
         _tileData.Remove(tile.ReportId);
+        _tileLoadedAtUtc.Remove(tile.ReportId);
         Snackbar.Add($"{tile.ReportName} marked for removal. Click Save Layout to confirm.", Severity.Warning);
     }
 
@@ -1929,8 +1887,15 @@
         }
 
         _tiles.RemoveAt(_dragSource);
-        var insertAt = targetIndex > _dragSource ? targetIndex - 1 : targetIndex;
-        insertAt = Math.Clamp(insertAt, 0, _tiles.Count);
+        // Drop semantic: dragging RIGHT/DOWN drops AFTER the target tile;
+        // dragging LEFT/UP drops BEFORE. Both collapse to "insert at the
+        // target's pre-removal index" — the RemoveAt above already
+        // shifted everything past the source down by 1, which produces
+        // the "after target" position naturally for forward drags. The
+        // earlier `targetIndex - 1` over-correction made dropping on the
+        // last tile land the source second-to-last, with the previous
+        // last tile bumping back into place.
+        var insertAt = Math.Clamp(targetIndex, 0, _tiles.Count);
         _tiles.Insert(insertAt, sourceTile);
         _dragSource = -1; _dropTarget = -1; _dropTargetTabId = 0;
     }
@@ -2022,6 +1987,7 @@
             await MasterService.MoveTileToTabAsync(tile.Id, targetTabId, _userEmail);
             _tiles.RemoveAt(sourceIdx);
             _tileData.Remove(tile.ReportId);
+            _tileLoadedAtUtc.Remove(tile.ReportId);
             var targetLabel = _tabs.FirstOrDefault(x => x.Id == targetTabId)?.Label ?? "another tab";
             Snackbar.Add($"Moved \"{tile.ReportName}\" to {targetLabel}.", Severity.Success);
         }
@@ -2031,11 +1997,82 @@
         }
     }
 
+    // ── Tile export (matches Detail Viewer's "All Records" export) ──
+    // Tiles render aggregated views (group-by, chart, totals); admins
+    // periodically want the underlying detail rows out as a file. Same
+    // dropdown affordance as the Detail Viewer, same export pipeline,
+    // same filename shape. The data is whatever the tile already
+    // fetched — no extra round-trip — minus any columns the admin
+    // chose to hide on the dashboard config.
+    private async Task ExportTileDetailExcel(MasterDashboardTile tile)
+    {
+        if (!_tileData.TryGetValue(tile.ReportId, out var td)) return;
+        var data = BuildTileExportData(td);
+        var name = tile.ReportName ?? "Report";
+        var bytes = ExportService.ExportToExcel(data, name);
+        await JS.InvokeVoidAsync("downloadFile",
+            BuildTileExportFileName(tile, "xlsx"),
+            Convert.ToBase64String(bytes),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    }
+
+    private async Task ExportTileDetailCsv(MasterDashboardTile tile)
+    {
+        if (!_tileData.TryGetValue(tile.ReportId, out var td)) return;
+        var data = BuildTileExportData(td);
+        var bytes = ExportService.ExportToCsv(data);
+        await JS.InvokeVoidAsync("downloadFile",
+            BuildTileExportFileName(tile, "csv"),
+            Convert.ToBase64String(bytes),
+            "text/csv");
+    }
+
+    // Drops any columns the dashboard config marked hidden so the
+    // exported file matches what users see in the Detail Viewer.
+    // Mirrors DetailViewer.BuildExportData — same shape, same intent.
+    private static QueryResponse BuildTileExportData(TileLoadResult td)
+    {
+        if (td.HiddenColumns is null || td.HiddenColumns.Count == 0) return td.Data;
+        var hidden = new HashSet<string>(td.HiddenColumns, StringComparer.OrdinalIgnoreCase);
+        var visibleColumns = td.Data.Columns.Where(c => !hidden.Contains(c.FieldId)).ToList();
+        if (visibleColumns.Count == td.Data.Columns.Count) return td.Data;
+        return new QueryResponse
+        {
+            Columns = visibleColumns,
+            Rows = td.Data.Rows,
+            TotalCount = td.Data.TotalCount
+        };
+    }
+
+    private string BuildTileExportFileName(MasterDashboardTile tile, string ext)
+    {
+        var name = tile.ReportName ?? "Report";
+        var prefix = string.IsNullOrWhiteSpace(_dashboardTitle) ? string.Empty : $"{_dashboardTitle} - ";
+        return $"{prefix}{name}-Detail.{ext}";
+    }
+
     private record TileLoadResult(
         QueryResponse Data,
         DashboardView.DashboardConfig? Config,
         List<string>? HiddenColumns,
         List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? TableCalcColumns);
+
+    // Renders a wall-clock UTC stamp as a relative phrase ("just now",
+    // "5m ago", "2h ago"). Falls back to the absolute date for anything
+    // older than a week — past that, "10d ago" stops being useful and
+    // the actual date answers the freshness question better. Returns
+    // "—" for default(DateTime), which is what _tileLoadedAtUtc returns
+    // when no successful load has happened yet.
+    private static string FormatTileFooterTime(DateTime utc)
+    {
+        if (utc == default) return "—";
+        var delta = DateTime.UtcNow - utc;
+        if (delta.TotalSeconds < 30)  return "just now";
+        if (delta.TotalMinutes < 60)  return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours   < 24)  return $"{(int)delta.TotalHours}h ago";
+        if (delta.TotalDays    < 7)   return $"{(int)delta.TotalDays}d ago";
+        return utc.ToLocalTime().ToString("MMM d, yyyy");
+    }
 
     private record FailedTileQuery(
         string Sql,

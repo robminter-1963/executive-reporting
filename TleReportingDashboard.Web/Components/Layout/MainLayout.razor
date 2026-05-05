@@ -9,6 +9,8 @@
 @inject TleReportingDashboard.Web.Services.ICompanyRegistry CompanyRegistry
 @inject TleReportingDashboard.Web.Services.IAdminService AdminService
 @inject TleReportingDashboard.Web.Services.IAdminAccessService AdminAccess
+@inject TleReportingDashboard.Web.Services.INotificationService Notifications
+@inject TleReportingDashboard.Web.Services.IThemeService ThemeSvc
 @inject IWebHostEnvironment HostEnv
 @inject IConfiguration Configuration
 @inject ILogger<MainLayout> Logger
@@ -31,7 +33,18 @@
     }
 </style>
 
-<MudThemeProvider Theme="_theme" IsDarkMode="@PreferenceState.Current.IsDarkMode" />
+@* Theme tokens — loaded once during OnInitializedAsync from the
+   IThemeService and injected as a :root CSS-variable block here.
+   Chrome CSS across the app references these via var(--surface-page),
+   var(--text-primary), etc. Empty until the theme finishes loading;
+   any chrome reference falls back to whatever default is set on the
+   var(...) call (declared at the chrome's CSS, not here). *@
+@if (!string.IsNullOrEmpty(_themeCss))
+{
+    <style>@((MarkupString)_themeCss)</style>
+}
+
+<MudThemeProvider Theme="_theme" IsDarkMode="false" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
@@ -42,7 +55,7 @@
        Dense (48px) variant clipped them against the bar's borders. With
        full height the breadcrumb row still fits — Dense was a holdover
        from when the badge was a single line. *@
-    <MudAppBar Elevation="1" Fixed Style="z-index: 1300; background-color: #3C4043; color: #E8EAED;">
+    <MudAppBar Elevation="1" Fixed Style="z-index: 1300; background-color: var(--surface-toolbar, #3C4043); color: var(--text-on-toolbar, #E8EAED);">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Style="width: 100%;">
             @* Kiosk mode (detail view opened from a Master Dashboard tile): render
                the logo as a static element and hide the Help button so the only
@@ -51,7 +64,7 @@
             {
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <img src="ralis.webp" alt="Ralis" style="height: 32px;" />
-                    <span style="font-weight: 600; font-size: 1rem; color: #E8EAED;">Executive Reporting Suite</span>
+                    <span style="font-weight: 600; font-size: 1rem; color: var(--text-on-toolbar, #E8EAED);">Executive Reporting Suite</span>
                 </div>
             }
             else
@@ -67,14 +80,14 @@
                 {
                     <div style="cursor: pointer; display: flex; align-items: center; gap: 8px;" @onclick="@(() => Navigation.NavigateTo("/?all=1"))">
                         <img src="ralis.webp" alt="Ralis" style="height: 32px;" />
-                        <span style="font-weight: 600; font-size: 1rem; color: #E8EAED;">Executive Reporting Suite</span>
+                        <span style="font-weight: 600; font-size: 1rem; color: var(--text-on-toolbar, #E8EAED);">Executive Reporting Suite</span>
                     </div>
                 }
                 else
                 {
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <img src="ralis.webp" alt="Ralis" style="height: 32px;" />
-                        <span style="font-weight: 600; font-size: 1rem; color: #E8EAED;">Executive Reporting Suite</span>
+                        <span style="font-weight: 600; font-size: 1rem; color: var(--text-on-toolbar, #E8EAED);">Executive Reporting Suite</span>
                     </div>
                 }
             }
@@ -251,9 +264,84 @@
             }
             @if (!_kioskMode)
             {
+                @* Notifications bell. Click opens a dropdown with the most
+                   recent items; click on any item navigates to its link
+                   (if any) and marks it read. Unread count is read on
+                   every menu open and after the user marks all read.
+                   Polling cadence is intentionally simple — no SignalR
+                   push needed for an MVP. *@
+                <MudMenu @ref="_notificationMenu" AnchorOrigin="Origin.BottomRight"
+                         TransformOrigin="Origin.TopRight"
+                         Dense MaxHeight="480">
+                    <ActivatorContent>
+                        <MudTooltip Text="@($"Notifications{(_unreadCount > 0 ? $" ({_unreadCount} new)" : "")}")"
+                                    Placement="Placement.Bottom">
+                            <MudBadge Content="@_unreadCount" Color="Color.Error"
+                                      Overlap="true" Visible="@(_unreadCount > 0)"
+                                      Bordered="true">
+                                <MudIconButton Icon="@(_unreadCount > 0 ? Icons.Material.Filled.NotificationsActive : Icons.Material.Filled.Notifications)"
+                                               Size="Size.Small"
+                                               Style="color: #E8EAED;"
+                                               OnClick="ToggleNotificationMenu" />
+                            </MudBadge>
+                        </MudTooltip>
+                    </ActivatorContent>
+                    <ChildContent>
+                        @if (_notifications.Count == 0)
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary"
+                                     Style="padding: 16px; min-width: 320px; text-align: center;">
+                                You're all caught up.
+                            </MudText>
+                        }
+                        else
+                        {
+                            <div style="min-width: 360px; max-width: 440px;">
+                                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween"
+                                          Style="padding: 8px 12px; border-bottom: 1px solid #E8EAED;">
+                                    <MudText Typo="Typo.subtitle2">Notifications</MudText>
+                                    @if (_unreadCount > 0)
+                                    {
+                                        <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary"
+                                                   OnClick="MarkAllNotificationsRead">
+                                            Mark all read
+                                        </MudButton>
+                                    }
+                                </MudStack>
+                                @foreach (var n in _notifications)
+                                {
+                                    <MudMenuItem OnClick="@(() => OnNotificationClicked(n))">
+                                        <MudStack Row AlignItems="AlignItems.Start" Spacing="2"
+                                                  Style="@($"padding: 4px 0; opacity: {(n.IsRead ? 0.6 : 1)};")">
+                                            <MudIcon Icon="@NotificationIcon(n.Kind)" Size="Size.Small"
+                                                     Style="@($"color: {(n.IsRead ? "#9AA0A6" : "#1976D2")}; margin-top: 4px;")" />
+                                            <MudStack Spacing="0">
+                                                <MudText Typo="Typo.body2"
+                                                         Style="@($"font-weight: {(n.IsRead ? "400" : "600")}; line-height: 1.3;")">
+                                                    @n.Title
+                                                </MudText>
+                                                @if (!string.IsNullOrWhiteSpace(n.Body))
+                                                {
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                                             Style="white-space: normal; line-height: 1.3;">
+                                                        @n.Body
+                                                    </MudText>
+                                                }
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                                         Style="font-size: 0.65rem;">
+                                                    @FormatRelativeTime(n.CreatedAt)
+                                                </MudText>
+                                            </MudStack>
+                                        </MudStack>
+                                    </MudMenuItem>
+                                }
+                            </div>
+                        }
+                    </ChildContent>
+                </MudMenu>
                 <MudTooltip Text="Help" Placement="Placement.Bottom">
                     <MudIconButton Icon="@Icons.Material.Filled.HelpOutline" Size="Size.Small"
-                                   Style="color: #E8EAED;" OnClick="OpenHelp" />
+                                   Style="color: var(--text-on-toolbar, #E8EAED);" OnClick="OpenHelp" />
                 </MudTooltip>
             }
         </MudStack>
@@ -301,6 +389,21 @@
     private bool _kioskMode;
     private string _userName = string.Empty;
     private string _userEmail = string.Empty;
+
+    // Notifications bell state. _notifications holds the most recent N items
+    // for the dropdown; _unreadCount is shown as the badge. Both are
+    // refreshed every time the menu is opened so the user sees the freshest
+    // state without a SignalR push channel.
+    private MudMenu? _notificationMenu;
+    private List<NotificationRecord> _notifications = new();
+    private int _unreadCount;
+
+    // App-wide theme tokens, loaded once during init. Rendered as a
+    // :root CSS-variable block via the @if guard above. Empty during
+    // the brief window between mount and first ThemeSvc.GetAsync — any
+    // chrome CSS that references var(--…) before this lands falls back
+    // to whatever default was declared in the var(...) call.
+    private string? _themeCss;
     // How many companies the signed-in user can see. Drives whether the
     // master-dashboard breadcrumb shows an "All Companies" link — the breadcrumb
     // is only useful when there's actually another company to switch to.
@@ -375,6 +478,21 @@
         CurrentCompany.OnChange += OnCurrentCompanyChanged;
         Navigation.LocationChanged += OnLocationChanged;
         UpdateCurrentPage();
+
+        // Theme tokens load once per layout mount — the theme is global
+        // and changes are admin-driven, so refreshing at this cadence is
+        // fine. A future hook could subscribe to a ThemeSvc.OnChanged
+        // event to re-render every active circuit when an admin saves;
+        // for v1, the next page load picks up the new palette.
+        try
+        {
+            var theme = await ThemeSvc.GetAsync();
+            _themeCss = theme.ToCssBlock();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Theme load failed — chrome will use built-in defaults.");
+        }
 
         // Resolve env label once — appsettings.{env}.json is loaded at host
         // startup and won't change during the process lifetime. Fall back to
@@ -517,6 +635,11 @@
             // Now that _accessibleCompanyCount is settled, re-run the crumb
             // builder — the master-dashboard path depends on it.
             UpdateCurrentPage();
+
+            // Initial unread-count fetch so the bell badge renders correctly
+            // on first paint. Subsequent updates happen on menu-open.
+            try { _unreadCount = await Notifications.GetUnreadCountAsync(_userEmail); }
+            catch (Exception ex) { Logger.LogWarning(ex, "Initial unread-count fetch failed"); }
         }
         catch
         {
@@ -584,6 +707,76 @@
     {
         UpdateCurrentPage();
         InvokeAsync(StateHasChanged);
+    }
+
+    // Notifications: open menu → load fresh items + open. State refresh
+    // is wrapped so a service hiccup (DB blip, table missing pre-migration)
+    // doesn't break the menu — UI just shows the empty state.
+    private async Task ToggleNotificationMenu()
+    {
+        try
+        {
+            _notifications = await Notifications.GetForUserAsync(_userEmail, max: 15);
+            _unreadCount = _notifications.Count(n => !n.IsRead);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Notifications fetch failed for {Email}", _userEmail);
+            _notifications = new();
+            _unreadCount = 0;
+        }
+        if (_notificationMenu is not null)
+            await _notificationMenu.OpenMenuAsync(new MouseEventArgs());
+    }
+
+    private async Task OnNotificationClicked(NotificationRecord n)
+    {
+        // Mark read first so the badge updates immediately even if the
+        // navigation kicks the circuit (e.g. forceLoad routes).
+        if (!n.IsRead)
+        {
+            try { await Notifications.MarkReadAsync(n.Id); }
+            catch (Exception ex) { Logger.LogWarning(ex, "Mark-read failed for {Id}", n.Id); }
+            // Optimistic local update; next menu open re-fetches anyway.
+            var idx = _notifications.IndexOf(n);
+            if (idx >= 0) _notifications[idx] = n with { IsRead = true };
+            _unreadCount = _notifications.Count(x => !x.IsRead);
+        }
+        if (!string.IsNullOrEmpty(n.LinkUrl))
+        {
+            Navigation.NavigateTo(n.LinkUrl);
+        }
+    }
+
+    private async Task MarkAllNotificationsRead()
+    {
+        try { await Notifications.MarkAllReadAsync(_userEmail); }
+        catch (Exception ex) { Logger.LogWarning(ex, "Mark-all-read failed for {Email}", _userEmail); }
+        for (var i = 0; i < _notifications.Count; i++)
+            _notifications[i] = _notifications[i] with { IsRead = true };
+        _unreadCount = 0;
+    }
+
+    // Maps notification kind → icon. Unknown kinds get a generic bell so
+    // producers can add new kinds without a UI change (the icon is just a
+    // hint anyway; the title carries the actual message).
+    private static string NotificationIcon(string kind) => kind switch
+    {
+        NotificationKinds.ReportShared       => Icons.Material.Filled.Share,
+        NotificationKinds.ScheduleRan        => Icons.Material.Filled.Schedule,
+        NotificationKinds.ScheduleFailed     => Icons.Material.Filled.ErrorOutline,
+        NotificationKinds.AdminAnnouncement  => Icons.Material.Filled.Campaign,
+        _                                    => Icons.Material.Filled.Notifications
+    };
+
+    private static string FormatRelativeTime(DateTime utc)
+    {
+        var delta = DateTime.UtcNow - utc;
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24)   return $"{(int)delta.TotalHours}h ago";
+        if (delta.TotalDays < 7)     return $"{(int)delta.TotalDays}d ago";
+        return utc.ToLocalTime().ToString("MMM d, yyyy");
     }
 
     private async Task OpenHelp()

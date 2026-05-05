@@ -306,8 +306,12 @@
         var ids = items.Select(i => i.Id).ToList();
         var item = ids[_dragSource];
         ids.RemoveAt(_dragSource);
-        var insertAt = targetIndex > _dragSource ? targetIndex - 1 : targetIndex;
-        insertAt = Math.Clamp(insertAt, 0, ids.Count);
+        // Drop semantic: dragging RIGHT drops AFTER target, dragging LEFT
+        // drops BEFORE target — both collapse to "insert at target's
+        // pre-removal index". The earlier `targetIndex - 1` adjustment
+        // over-corrected for the RemoveAt shift and made dropping on
+        // the rightmost chip land the source second-to-last.
+        var insertAt = Math.Clamp(targetIndex, 0, ids.Count);
         ids.Insert(insertAt, item);
 
         OnDragEnd();

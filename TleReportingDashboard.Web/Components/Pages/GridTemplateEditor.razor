@@ -14,6 +14,44 @@
 
 <PageTitle>@(_isNew ? "New Grid Template" : _template.Name) - Executive Reporting Suite</PageTitle>
 
+<HeadContent>
+    <style>
+        /* Plain HTML table for the column-order list. Dense / hover styling
+           mirrors MudTable so the visual change vs. the prior version is
+           minimal — the difference is per-row drag-and-drop, which MudTable
+           can't surface because it owns the row element. */
+        .gte-order-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+        .gte-order-table thead th {
+            text-align: left;
+            font-weight: 600;
+            color: #5F6368;
+            padding: 6px 8px;
+            border-bottom: 1px solid #E0E0E0;
+        }
+        .gte-order-table tbody td {
+            padding: 4px 8px;
+            border-bottom: 1px solid #F1F3F4;
+            vertical-align: middle;
+        }
+        .gte-order-row { transition: background-color 80ms ease-in-out; }
+        .gte-order-row:hover { background-color: #F5F5F5; }
+        /* Source row while a drag is in progress — fades it so the
+           destination cue (blue top border on the drop target) reads
+           cleanly even when source and target are adjacent. */
+        .gte-row-dragging { opacity: 0.4; }
+        /* Drop-target indicator: thick blue top edge so the user can see
+           where the row will land when they release. The thick border
+           steals 2px from the row above — acceptable for a transient
+           visual that disappears on drop / drag-end. */
+        .gte-row-droptarget td:first-child { border-left: 3px solid #1976D2; }
+        .gte-row-droptarget td { border-top: 2px solid #1976D2; }
+    </style>
+</HeadContent>
+
 @if (_accessDenied)
 {
     <MudMainContent Style="padding: 16px;">
@@ -131,60 +169,66 @@
                 <MudStack Spacing="2">
                     <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Column Order & Visibility</MudText>
                     <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        Drag to reorder. Click the eye icon to hide a column from the grid (it stays in the query for dashboards).
+                        Drag a row by its handle to reorder. Click the eye icon to hide a column from the grid (it stays in the query for dashboards).
                     </MudText>
-                    <MudTable Items="_orderedFields" Dense Hover>
-                        <HeaderContent>
-                            <MudTh Style="width: 40px;">#</MudTh>
-                            <MudTh>Field</MudTh>
-                            <MudTh>Type</MudTh>
-                            <MudTh Style="width: 60px;">Visible</MudTh>
-                            <MudTh Style="width: 80px;">Move</MudTh>
-                        </HeaderContent>
-                        <RowTemplate>
-                            @{
-                                var idx = _orderedFields.IndexOf(context);
-                                var fld = context;
+                    @* Plain HTML table instead of MudTable so each <tr> can
+                       carry HTML5 drag-and-drop attributes directly. MudTable
+                       renders the row element internally, which makes per-
+                       row draggable / @ondragover wiring impossible without
+                       JS interop. The CSS keeps the dense / hover look. *@
+                    <table class="gte-order-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 36px;"></th>
+                                <th style="width: 40px;">#</th>
+                                <th>Field</th>
+                                <th>Type</th>
+                                <th style="width: 60px;">Visible</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @for (var i = 0; i < _orderedFields.Count; i++)
+                            {
+                                var idx = i;
+                                var fld = _orderedFields[idx];
+                                var src = FieldSource(fld);
+                                var rowClass = "gte-order-row"
+                                    + (_orderDragSource == idx ? " gte-row-dragging" : string.Empty)
+                                    + (_orderDropTarget == idx && _orderDragSource >= 0 && _orderDragSource != idx ? " gte-row-droptarget" : string.Empty);
+                                <tr class="@rowClass"
+                                    draggable="true"
+                                    @ondragstart="@(() => OnOrderDragStart(idx))"
+                                    @ondragend="OnOrderDragEnd"
+                                    @ondragover="@(() => { if (_orderDragSource >= 0) _orderDropTarget = idx; })"
+                                    @ondragover:preventDefault="true"
+                                    @ondrop="@(() => OnOrderDrop(idx))">
+                                    <td style="text-align: center;">
+                                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator"
+                                                 Size="Size.Small"
+                                                 Style="color: #5F6368; cursor: grab; vertical-align: middle;" />
+                                    </td>
+                                    <td>@(idx + 1)</td>
+                                    <td>
+                                        <div style="display: flex; flex-direction: column; line-height: 1.2;">
+                                            <span style="font-weight: 500; font-size: 0.875rem;">@fld.Label</span>
+                                            @if (!string.IsNullOrEmpty(src))
+                                            {
+                                                <span style="color: #5F6368; font-family: monospace; font-size: 0.7rem;">@src</span>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td><span style="font-size: 0.75rem; color: #5F6368;">@fld.DataType</span></td>
+                                    <td>
+                                        <MudIconButton Icon="@(_hiddenColumns.Contains(fld.Id) ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                                       Size="Size.Small"
+                                                       Color="@(_hiddenColumns.Contains(fld.Id) ? Color.Default : Color.Primary)"
+                                                       OnClick="() => ToggleVisibility(fld.Id)"
+                                                       title="@(_hiddenColumns.Contains(fld.Id) ? "Show column" : "Hide column")" />
+                                    </td>
+                                </tr>
                             }
-                            <MudTd>@(idx + 1)</MudTd>
-                            <MudTd>
-                                @* Inline "table.column" caption disambiguates
-                                   same-labeled fields without needing a hover.
-                                   Skipped when there's nothing to show. *@
-                                @{
-                                    var src = FieldSource(fld);
-                                }
-                                <MudStack Spacing="0" Style="line-height: 1.2;">
-                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@fld.Label</MudText>
-                                    @if (!string.IsNullOrEmpty(src))
-                                    {
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary"
-                                                 Style="font-family: monospace; font-size: 0.7rem;">
-                                            @src
-                                        </MudText>
-                                    }
-                                </MudStack>
-                            </MudTd>
-                            <MudTd><MudText Typo="Typo.caption">@fld.DataType</MudText></MudTd>
-                            <MudTd>
-                                <MudIconButton Icon="@(_hiddenColumns.Contains(fld.Id) ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
-                                               Size="Size.Small"
-                                               Color="@(_hiddenColumns.Contains(fld.Id) ? Color.Default : Color.Primary)"
-                                               OnClick="() => ToggleVisibility(fld.Id)"
-                                               title="@(_hiddenColumns.Contains(fld.Id) ? "Show column" : "Hide column")" />
-                            </MudTd>
-                            <MudTd>
-                                <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
-                                               Disabled="@(idx == 0)"
-                                               OnClick="() => MoveField(idx, -1)"
-                                               title="Move up" />
-                                <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
-                                               Disabled="@(idx == _orderedFields.Count - 1)"
-                                               OnClick="() => MoveField(idx, 1)"
-                                               title="Move down" />
-                            </MudTd>
-                        </RowTemplate>
-                    </MudTable>
+                        </tbody>
+                    </table>
                 </MudStack>
             </MudPaper>
         }
@@ -247,6 +291,13 @@
     private List<DomainGroup> _domains = new();
     private List<string> _selectedFieldIds = new();
     private List<FieldDefinition> _orderedFields = new();
+    // Drag-and-drop reorder state. _orderDragSource is the ordinal of the
+    // row currently being dragged; -1 = no drag in progress. _orderDropTarget
+    // is the ordinal of the row hovered as the drop landing spot. Both
+    // reset on drag-end / drop. Per-row CSS classes key off these to draw
+    // the source-fade and drop-target indicator.
+    private int _orderDragSource = -1;
+    private int _orderDropTarget = -1;
     private HashSet<string> _hiddenColumns = new();
     private string _defaultSortField = string.Empty;
     private string _defaultSortDir = "asc";
@@ -397,13 +448,47 @@
             _hiddenColumns.Add(fieldId);
     }
 
-    private void MoveField(int index, int direction)
+    // ── Column-order drag-and-drop ──
+    // HTML5 DnD wired directly on each <tr> (the plain table replaces the
+    // prior MudTable specifically so we can attach @ondragstart / @ondrop
+    // to the row element). The drop semantics:
+    //   * Dragging a row "down" past another inserts AFTER that row.
+    //   * Dragging "up" past another inserts BEFORE.
+    // Both collapse to a single rule: remove from source, insert at the
+    // target index, accounting for the index shift that removal causes
+    // when source < target.
+    private void OnOrderDragStart(int index)
     {
-        var newIndex = index + direction;
-        if (newIndex < 0 || newIndex >= _orderedFields.Count) return;
-        var item = _orderedFields[index];
-        _orderedFields.RemoveAt(index);
-        _orderedFields.Insert(newIndex, item);
+        _orderDragSource = index;
+        _orderDropTarget = index;
+    }
+
+    private void OnOrderDragEnd()
+    {
+        _orderDragSource = -1;
+        _orderDropTarget = -1;
+    }
+
+    private void OnOrderDrop(int targetIndex)
+    {
+        var source = _orderDragSource;
+        _orderDragSource = -1;
+        _orderDropTarget = -1;
+        if (source < 0 || source == targetIndex) return;
+        if (source >= _orderedFields.Count || targetIndex >= _orderedFields.Count) return;
+
+        var item = _orderedFields[source];
+        _orderedFields.RemoveAt(source);
+        // Drop semantic: dragging DOWN drops AFTER the target row;
+        // dragging UP drops BEFORE the target row. Both collapse to
+        // "insert at target's pre-removal index" — RemoveAt above
+        // already shifted everything below source up by one, which
+        // naturally produces the "after target" position for downward
+        // drags. A prior `targetIndex - 1` adjustment over-corrected
+        // for that shift and made it impossible to drop AT the last
+        // position by dropping on the last row.
+        var insertAt = Math.Clamp(targetIndex, 0, _orderedFields.Count);
+        _orderedFields.Insert(insertAt, item);
         _selectedFieldIds = _orderedFields.Select(f => f.Id).ToList();
     }
 

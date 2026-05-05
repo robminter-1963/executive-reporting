@@ -243,10 +243,28 @@
         _activeFilters.Add(filter);
     }
 
+    // Coalesce rapid-fire multi-select clicks into a single query.
+    // Without this, picking N items in a list dropdown fires N queries
+    // — the parent re-runs the report on every check/uncheck. The
+    // debounce keeps the dropdown UI live (filter.SelectedValues
+    // updates immediately so checkmarks render in real time) but
+    // delays the query emit until the user pauses for ~500ms.
+    private CancellationTokenSource? _multiDebounceCts;
+
     private async Task OnMultiSelectChanged(ActiveFilter filter, IEnumerable<string> values)
     {
         filter.SelectedValues = new HashSet<string>(values);
-        await EmitFilters();
+        StateHasChanged();
+
+        _multiDebounceCts?.Cancel();
+        _multiDebounceCts = new CancellationTokenSource();
+        var ct = _multiDebounceCts.Token;
+        try
+        {
+            await Task.Delay(500, ct);
+            await EmitFilters();
+        }
+        catch (TaskCanceledException) { /* superseded by a later click */ }
     }
 
     private async Task RemoveFilter(string fieldId)

@@ -14,15 +14,18 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @inject IJSRuntime JS
+@inject ILogger<ReportViewer> Logger
 
 <PageTitle>@(_reportName ?? "Report") - Executive Reporting Suite</PageTitle>
 
 <MudMainContent Style="padding: 16px;">
-    @if (_isLoading && _queryData is null)
-    {
-        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
-    }
+    @* Initial-load progress only when there's no prior data to show.
+       After the first successful run, the inline re-query progress
+       below sits inside MudStack so it doesn't push the whole page
+       around on every refresh. *@
+    <QueryProgress Active="@(_isLoading && _queryData is null)" />
 
     <MudStack Spacing="3">
         @* ── Top bar ── *@
@@ -60,15 +63,29 @@
                            Disabled="_isLoading">
                     Refresh
                 </MudButton>
+                @* Same dialog the Detail Viewer + Master Dashboard tile
+                   right-click use. Surfaces the exact SQL the saved
+                   report ran (plus bound parameters and any row-level
+                   scoping note) so admins can compare against what
+                   the Builder emits when troubleshooting. *@
+                <MudTooltip Text="Show the SQL that produced this view">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                               Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.Code"
+                               OnClick="ShowReportQuery"
+                               Disabled="@(_queryData?.Sql is null)">
+                        Show SQL
+                    </MudButton>
+                </MudTooltip>
                 <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
                             Disabled="@(_queryData is null || !_queryData.Rows.Any())" />
             </MudStack>
         </MudStack>
 
-        @if (_isLoading)
-        {
-            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
-        }
+        @* Re-query progress (sort / filter changes after the first
+           load). QueryProgress shows the elapsed timer + slow-query
+           warning so a 15-second sort change isn't a silent freeze. *@
+        <QueryProgress Active="@_isLoading" />
 
         @if (_queryData is not null && _queryData.Rows.Any())
         {
@@ -177,7 +194,6 @@
     private QueryResponse? _queryData;
     private DashboardView.DashboardConfig? _dashboardConfig;
     private List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? _tableCalcColumns;
-    private bool _distinct;
     private List<string> _appliedFilters = new();
     private Dictionary<string, string> _fieldLabelsById = new(StringComparer.OrdinalIgnoreCase);
     private string _userId = "anonymous";
@@ -196,6 +212,16 @@
     private List<string> _fieldIds = new();
     private Dictionary<string, object?> _filters = new();
     private List<string>? _customFilterIds;
+    // Saved advanced-filter tree (column_state.AdvancedFilters). Hydrated
+    // in LoadSavedReport; forwarded to QueryRequest.AdvancedFilters in
+    // RunReport so the Viewer's SQL matches the Builder's.
+    private TleReportingDashboard.Web.Models.FilterGroup? _advancedFilters;
+    // The raw SavedReport row, kept around so RunReport can hand it to
+    // QueryRequestFactory rather than reconstructing the request from the
+    // hydrated component fields. Per-surface concerns (extra group-by
+    // fields, fallback PK columns, scoping) are still layered on after
+    // the factory call.
+    private TleReportingDashboard.Web.Models.SavedReport? _savedReport;
 
     protected override async Task OnInitializedAsync()
     {
@@ -240,6 +266,7 @@
                 return;
             }
 
+            _savedReport = report;
             _reportName = report.Name;
             _connectionId = report.ConnectionId;
             _primaryTable = report.PrimaryTable;
@@ -302,6 +329,22 @@
                     }
                     if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
                         _customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
+                    // Advanced filters — the WHERE-tree the Builder
+                    // composes via the AdvancedFilterGroup component.
+                    // Saved into column_state.AdvancedFilters; pass on
+                    // to QueryRequest.AdvancedFilters at run time so
+                    // the Viewer's emitted SQL matches the Builder's.
+                    if (doc.RootElement.TryGetProperty("AdvancedFilters", out var afEl))
+                    {
+                        try
+                        {
+                            _advancedFilters = System.Text.Json.JsonSerializer
+                                .Deserialize<TleReportingDashboard.Web.Models.FilterGroup>(
+                                    afEl.GetRawText(),
+                                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        }
+                        catch { _advancedFilters = null; }
+                    }
                     // Per-report SQL calc columns. Hydrated for the read-only
                     // viewer so the table grid + dashboard tile both render
                     // calc columns and the dashboard tile's group-by labels
@@ -310,10 +353,6 @@
                     if (doc.RootElement.TryGetProperty("TableCalculatedColumns", out var tcEl))
                         _tableCalcColumns = System.Text.Json.JsonSerializer
                             .Deserialize<List<TleReportingDashboard.Web.Models.TableCalcColumnDef>>(tcEl.GetRawText());
-
-                    if (doc.RootElement.TryGetProperty("Distinct", out var distEl)
-                        && distEl.ValueKind == System.Text.Json.JsonValueKind.True)
-                        _distinct = true;
 
                     // Multi-column sort (primary first). Wins over the legacy
                     // single-field TableSortField/Direction when populated.
@@ -427,8 +466,9 @@
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
-            Snackbar.Add($"Failed to load report: {ex.Message}", Severity.Error);
+            var msg = FriendlyError.FromException(ex, Logger, "loading report");
+            _error = msg;
+            Snackbar.Add(msg, Severity.Error);
         }
         finally
         {
@@ -438,42 +478,13 @@
 
     private async Task RunReport()
     {
-        if (!_fieldIds.Any()) return;
+        if (_savedReport is null || !_fieldIds.Any()) return;
 
         _isLoading = true;
         StateHasChanged();
 
         try
         {
-            // Include extra group-by fields (legacy) + extra dimension fields.
-            var queryFieldIds = new List<string>(_fieldIds);
-            void AddIds(IEnumerable<string>? ids)
-            {
-                if (ids is null) return;
-                foreach (var extra in ids)
-                    if (!queryFieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
-                        queryFieldIds.Add(extra);
-            }
-            AddIds(_dashboardConfig?.ExtraGroupByFieldIds);
-            AddIds(_dashboardConfig?.ExtraDimensionFieldIds);
-
-            // Push the saved sort onto the SQL request so the viewer matches
-            // editor table-view ORDER BY. _initialSortTuples already holds
-            // the multi-sort (TableSort) with the legacy single-field as a
-            // fallback — reuse it instead of re-parsing ColumnState.
-            string? viewerSortField = null, viewerSortDir = null;
-            string? viewerSecondarySort = null, viewerSecondaryDir = null;
-            if (_initialSortTuples is { Count: > 0 } sortTuples)
-            {
-                viewerSortField = sortTuples[0].Item1;
-                viewerSortDir = sortTuples[0].Item2;
-                if (sortTuples.Count > 1)
-                {
-                    viewerSecondarySort = sortTuples[1].Item1;
-                    viewerSecondaryDir = sortTuples[1].Item2;
-                }
-            }
-
             // Pre-fetch primary-table PKs for the silent OFFSET tiebreaker.
             // Best-effort: failures fall through to the legacy default.
             List<string>? pkColumns = null;
@@ -496,37 +507,49 @@
                 catch { pkColumns = null; }
             }
 
-            var request = new QueryRequest
+            // Single source of truth for "QueryRequest from a SavedReport".
+            // Same factory the Worker, Master Dashboard tile, and Detail
+            // Viewer use — keeps every saved knob in lockstep.
+            var request = TleReportingDashboard.Web.Services.QueryRequestFactory
+                .FromSavedReport(_savedReport, pageSize: 50000, fallbackSortColumns: pkColumns);
+
+            // Per-surface overrides:
+            //  • FieldIds — Viewer may have resolved fields from a linked
+            //    grid template (factory parses report.FieldIds raw), and
+            //    we splice in dashboard ExtraGroupBy / ExtraDimension
+            //    fields the saved-report row doesn't carry.
+            //  • Sort — _initialSortTuples adds a richer fallback chain
+            //    (DetailGroupBy / DetailSort / legacy) on top of what the
+            //    factory derives from TableSort.
+            var queryFieldIds = new List<string>(_fieldIds);
+            void AddIds(IEnumerable<string>? ids)
             {
-                FieldIds = queryFieldIds,
-                Filters = new Dictionary<string, object?>(_filters),
-                CustomFilterIds = _customFilterIds,
-                SortField = viewerSortField,
-                SortDirection = viewerSortDir,
-                SecondarySortField = viewerSecondarySort,
-                SecondarySortDirection = viewerSecondaryDir,
-                FallbackSortColumns = pkColumns is { Count: > 0 } ? pkColumns : null,
-                Distinct = _distinct,
-                Page = 1,
-                PageSize = 50000,
-                ConnectionId = _connectionId,
-                PrimaryTable = _primaryTable,
-                TableCalcSqlColumns = _tableCalcColumns?
-                    .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression) && !string.IsNullOrEmpty(c.Key))
-                    .Select(c => new TleReportingDashboard.Web.Models.TableCalcSqlSelector
-                    {
-                        Key = c.Key,
-                        SqlExpression = c.SqlExpression!,
-                        JoinIds = c.JoinIds
-                    })
-                    .ToList()
-            };
+                if (ids is null) return;
+                foreach (var extra in ids)
+                    if (!queryFieldIds.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                        queryFieldIds.Add(extra);
+            }
+            AddIds(_dashboardConfig?.ExtraGroupByFieldIds);
+            AddIds(_dashboardConfig?.ExtraDimensionFieldIds);
+            request.FieldIds = queryFieldIds;
+
+            if (_initialSortTuples is { Count: > 0 } sortTuples)
+            {
+                request.SortField = sortTuples[0].Item1;
+                request.SortDirection = sortTuples[0].Item2;
+                if (sortTuples.Count > 1)
+                {
+                    request.SecondarySortField = sortTuples[1].Item1;
+                    request.SecondarySortDirection = sortTuples[1].Item2;
+                }
+            }
+
             request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _connectionId, _primaryTable);
             _queryData = await QueryService.ExecuteQueryAsync(request);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Query failed: {ex.Message}", Severity.Error);
+            Snackbar.Add(FriendlyError.FromException(ex, Logger, "running report query"), Severity.Error);
         }
         finally
         {
@@ -583,6 +606,34 @@
     // when a field's been removed from the schema since save.
     private string GetFieldLabel(string fieldId) =>
         _fieldLabelsById.TryGetValue(fieldId, out var label) ? label : fieldId;
+
+    // Same dialog the Detail Viewer + Master Dashboard tile right-click
+    // use. Surfaces the SQL + bound parameters + scoping note for
+    // troubleshooting "why are these rows different from what the
+    // Builder shows" — diff this output against the Builder's Show SQL
+    // to find the saved-vs-edited divergence.
+    private async Task ShowReportQuery()
+    {
+        if (_queryData?.Sql is null)
+        {
+            Snackbar.Add("Query hasn't finished loading yet.", Severity.Info);
+            return;
+        }
+        var parameters = new DialogParameters
+        {
+            { "Sql", _queryData.Sql },
+            { "Parameters", _queryData.Parameters },
+            { "ScopingNote", _queryData.ScopingNote },
+            { "ScopingForceNoMatch", _queryData.ScopingForceNoMatch }
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true
+        };
+        await DialogService.ShowAsync<ShowQueryDialog>($"SQL — {_reportName ?? "Report"}", parameters, options);
+    }
 
     private async Task ExportExcel()
     {

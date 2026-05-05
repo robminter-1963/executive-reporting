@@ -112,6 +112,12 @@
                     <AdminPromotionTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
+            @if (_allowedSections.Contains(AdminSections.Theme))
+            {
+                <MudTabPanel Text="Theme" Icon="@Icons.Material.Filled.Palette">
+                    <AdminThemeTab CurrentUserEmail="@_currentUserEmail" />
+                </MudTabPanel>
+            }
         </MudTabs>
     }
 </MudStack>

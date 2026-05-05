@@ -156,14 +156,18 @@
             return;
         }
 
-        // Indicator is always shown above the target row, so the item lands at targetIndex.
+        // Drop semantic: dragging DOWN drops AFTER the target; dragging UP
+        // drops BEFORE the target. The math collapses to "insert at the
+        // target's pre-removal index" — the RemoveAt above shifts indices
+        // above the source down by 1, which naturally produces the
+        // "after target" position when dragging down. The earlier
+        // `targetIndex - 1` adjustment over-corrected for that shift and
+        // made it impossible to drop AT the last position by dropping on
+        // the last row (the dropped item would land second-to-last).
         var item = _entries[_dragSource];
         _entries.RemoveAt(_dragSource);
 
-        // After removal, indices above the source shift down by 1.
-        var insertAt = targetIndex > _dragSource ? targetIndex - 1 : targetIndex;
-        insertAt = Math.Clamp(insertAt, 0, _entries.Count);
-
+        var insertAt = Math.Clamp(targetIndex, 0, _entries.Count);
         _entries.Insert(insertAt, item);
         _dragSource = -1; _dropTarget = -1;
     }

@@ -1,23 +1,57 @@
-<MudMenu Icon="@Icons.Material.Filled.Download" Variant="Variant.Outlined"
-         Color="Color.Default" Size="Size.Small" Label="Export"
-         AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
-         Disabled="@Disabled">
-    <MudMenuItem OnClick="() => OnExportExcel.InvokeAsync()">
-        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-            <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" />
-            <MudText Typo="Typo.body2">Excel (.xlsx)</MudText>
-        </MudStack>
-    </MudMenuItem>
-    <MudMenuItem OnClick="() => OnExportCsv.InvokeAsync()">
-        <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-            <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" />
-            <MudText Typo="Typo.body2">CSV</MudText>
-        </MudStack>
-    </MudMenuItem>
-</MudMenu>
+@* Two visual modes:
+   - Default: outlined "Export" button with leading download icon. Used in
+     full-page header bars (Detail Viewer, Report Viewer).
+   - IconOnly: compact icon-button. Used in space-constrained surfaces
+     like dashboard-tile headers where a labeled button would crowd the
+     other tile controls. Tooltip + dropdown content stay identical so
+     users get the same affordance regardless of size. *@
+@if (IconOnly)
+{
+    <MudTooltip Text="Export" Placement="Placement.Bottom">
+        <MudMenu Icon="@Icons.Material.Filled.Download"
+                 Size="Size.Small" Dense
+                 AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+                 Disabled="@Disabled">
+            <MudMenuItem OnClick="() => OnExportExcel.InvokeAsync()">
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                    <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" />
+                    <MudText Typo="Typo.body2">Excel (.xlsx)</MudText>
+                </MudStack>
+            </MudMenuItem>
+            <MudMenuItem OnClick="() => OnExportCsv.InvokeAsync()">
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                    <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" />
+                    <MudText Typo="Typo.body2">CSV</MudText>
+                </MudStack>
+            </MudMenuItem>
+        </MudMenu>
+    </MudTooltip>
+}
+else
+{
+    <MudMenu Icon="@Icons.Material.Filled.Download" Variant="Variant.Outlined"
+             Color="Color.Default" Size="Size.Small" Label="Export"
+             AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+             Disabled="@Disabled">
+        <MudMenuItem OnClick="() => OnExportExcel.InvokeAsync()">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" />
+                <MudText Typo="Typo.body2">Excel (.xlsx)</MudText>
+            </MudStack>
+        </MudMenuItem>
+        <MudMenuItem OnClick="() => OnExportCsv.InvokeAsync()">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" />
+                <MudText Typo="Typo.body2">CSV</MudText>
+            </MudStack>
+        </MudMenuItem>
+    </MudMenu>
+}
 
 @code {
     [Parameter] public EventCallback OnExportExcel { get; set; }
     [Parameter] public EventCallback OnExportCsv { get; set; }
     [Parameter] public bool Disabled { get; set; }
+    // Compact icon-button variant for tile headers and other tight spaces.
+    [Parameter] public bool IconOnly { get; set; }
 }

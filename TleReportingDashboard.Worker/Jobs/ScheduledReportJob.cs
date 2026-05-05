@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using TleReportingDashboard.Web.Models;
@@ -14,6 +15,8 @@ public sealed class ScheduledReportJob
     private readonly IQueryPipeline _queryPipeline;
     private readonly IExportService _exportService;
     private readonly IEmailService _emailService;
+    private readonly INotificationService _notifications;
+    private readonly ICompanyRegistry _companies;
     private readonly ILogger<ScheduledReportJob> _logger;
 
     public ScheduledReportJob(
@@ -21,6 +24,8 @@ public sealed class ScheduledReportJob
         IQueryPipeline queryPipeline,
         IExportService exportService,
         IEmailService emailService,
+        INotificationService notifications,
+        ICompanyRegistry companies,
         ILogger<ScheduledReportJob> logger)
     {
         _connectionString = configuration.GetConnectionString("ConfigDb")
@@ -28,12 +33,32 @@ public sealed class ScheduledReportJob
         _queryPipeline = queryPipeline ?? throw new ArgumentNullException(nameof(queryPipeline));
         _exportService = exportService ?? throw new ArgumentNullException(nameof(exportService));
         _emailService = emailService ?? throw new ArgumentNullException(nameof(emailService));
+        _notifications = notifications ?? throw new ArgumentNullException(nameof(notifications));
+        _companies = companies ?? throw new ArgumentNullException(nameof(companies));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task ExecuteAsync(Guid scheduleId)
+    // Backward-compat overload — kept so any recurring job already
+    // registered with the 1-arg signature (i.e., serialized in
+    // HangFire.Hash before this change) keeps deserializing on its
+    // next fire. SchedulerSyncService overwrites every registration
+    // to the 2-arg version on the next poll, so this overload only
+    // matters for the brief window after deploy.
+    public Task ExecuteAsync(Guid scheduleId) =>
+        ExecuteAsync(scheduleId, string.Empty);
+
+    // [DisplayName] makes the Hangfire dashboard render the friendly
+    // displayName instead of "ScheduledReportJob.ExecuteAsync(...)".
+    // {1} is the second argument; SchedulerSyncService passes the
+    // saved report's Name when it registers the recurring job, so the
+    // dashboard reads "Scheduled run: Pipeline Report" instead of the
+    // raw method signature.
+    [DisplayName("Scheduled run: {1}")]
+    public async Task ExecuteAsync(Guid scheduleId, string displayName)
     {
-        _logger.LogInformation("Starting scheduled report execution for ScheduleId={ScheduleId}", scheduleId);
+        _logger.LogInformation(
+            "Starting scheduled report execution for ScheduleId={ScheduleId} ({DisplayName})",
+            scheduleId, string.IsNullOrWhiteSpace(displayName) ? "no label" : displayName);
 
         var schedule = await GetScheduleAsync(scheduleId);
         if (schedule is null)
@@ -70,14 +95,43 @@ public sealed class ScheduledReportJob
 
             var htmlBody = BuildEmailBody(savedReport.Name, queryResponse.TotalCount, schedule.IncludePreview);
 
+            // Prefix the subject with the report's company name so a single
+            // inbox handling schedules across multiple companies can be
+            // sorted/scanned at a glance. Best-effort lookup — if the
+            // registry can't resolve the id (deleted / inactive company),
+            // ship the bare schedule subject instead of failing the run.
+            var subject = await PrefixSubjectWithCompanyAsync(savedReport.CompanyId, schedule.Subject);
+
             await _emailService.SendReportEmailAsync(
                 schedule.OwnerEmail,
-                schedule.Subject,
+                subject,
                 htmlBody,
                 attachmentBytes,
                 attachmentFileName);
 
             await UpdateScheduleStatusAsync(scheduleId, "Success", 0, schedule.IsActive);
+
+            // Drop a notification into the recipient's bell-icon inbox so
+            // they have an in-app surface confirming the run completed.
+            // Fire-and-forget — the email already went out, a failed
+            // notification shouldn't poison the success path.
+            try
+            {
+                await _notifications.CreateAsync(
+                    userEmail:         schedule.OwnerEmail,
+                    kind:              NotificationKinds.ScheduleRan,
+                    title:             $"\"{savedReport.Name}\" scheduled report ran",
+                    body:              $"Sent to {schedule.OwnerEmail} with {queryResponse.TotalCount:N0} rows.",
+                    linkUrl:           $"/viewer/{savedReport.Id}",
+                    relatedEntityType: "schedule",
+                    relatedEntityId:   scheduleId.ToString());
+            }
+            catch (Exception nex)
+            {
+                _logger.LogWarning(nex,
+                    "Schedule ran but notification dispatch failed for ScheduleId={ScheduleId}",
+                    scheduleId);
+            }
 
             _logger.LogInformation(
                 "Scheduled report completed successfully: ScheduleId={ScheduleId}, Report={ReportName}",
@@ -90,7 +144,9 @@ public sealed class ScheduledReportJob
                 scheduleId, schedule.ConsecutiveFailures + 1);
 
             var failures = schedule.ConsecutiveFailures + 1;
-            var errorMessage = ex.Message.Length > 200 ? ex.Message[..200] : ex.Message;
+            // Bare ex.Message — UpdateScheduleStatusAsync prepends "Failed: "
+            // and clamps the whole string to the column's actual width.
+            var errorMessage = ex.Message;
             var isActive = schedule.IsActive;
 
             if (failures >= MaxConsecutiveFailuresBeforeDeactivation)
@@ -101,6 +157,27 @@ public sealed class ScheduledReportJob
                     scheduleId, failures);
 
                 await SendFailureNotificationAsync(schedule, failures);
+
+                // Mirror the email with an in-app notification so the
+                // owner sees the deactivation when they next sign in,
+                // even if their inbox filters out the SMTP message.
+                try
+                {
+                    await _notifications.CreateAsync(
+                        userEmail:         schedule.OwnerEmail,
+                        kind:              NotificationKinds.ScheduleFailed,
+                        title:             "Scheduled report deactivated",
+                        body:              $"\"{schedule.Subject}\" was deactivated after {failures} consecutive failures. Last error: {errorMessage}",
+                        linkUrl:           $"/viewer/{schedule.ReportId}",
+                        relatedEntityType: "schedule",
+                        relatedEntityId:   scheduleId.ToString());
+                }
+                catch (Exception nex)
+                {
+                    _logger.LogWarning(nex,
+                        "Schedule deactivation notification failed for ScheduleId={ScheduleId}",
+                        scheduleId);
+                }
             }
 
             await UpdateScheduleStatusAsync(scheduleId, $"Failed: {errorMessage}", failures, isActive);
@@ -138,8 +215,12 @@ public sealed class ScheduledReportJob
     {
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
+        // primary_table MUST be in the SELECT — SqlEmitter throws
+        // "Primary Table is required" if QueryRequest.PrimaryTable is
+        // null. Without this column the saved report's value is lost
+        // even when set correctly via the Builder UI.
         await using var cmd = new SqlCommand(
-            "SELECT id, name, owner_id, owner_email, field_ids, filters, aggregations, column_state, connection_id FROM EMPOWER.RPT_saved_reports WHERE id = @Id", conn);
+            "SELECT id, name, owner_id, owner_email, field_ids, filters, aggregations, column_state, connection_id, primary_table, company_id FROM EMPOWER.RPT_saved_reports WHERE id = @Id", conn);
         cmd.Parameters.Add(new SqlParameter("@Id", reportId));
         await using var r = await cmd.ExecuteReaderAsync();
         if (!await r.ReadAsync()) return null;
@@ -153,12 +234,32 @@ public sealed class ScheduledReportJob
             Filters = r.IsDBNull(5) ? null : r.GetString(5),
             Aggregations = r.IsDBNull(6) ? null : r.GetString(6),
             ColumnState = r.IsDBNull(7) ? null : r.GetString(7),
-            ConnectionId = r.IsDBNull(8) ? null : r.GetGuid(8)
+            ConnectionId = r.IsDBNull(8) ? null : r.GetGuid(8),
+            PrimaryTable = r.IsDBNull(9) ? null : r.GetString(9),
+            CompanyId = r.IsDBNull(10) ? Guid.Empty : r.GetGuid(10)
         };
     }
 
+    // Hard cap matches the post-migration column width (NVARCHAR(500)).
+    // Acts as a safety net for environments that haven't run the
+    // 2026-05-04 widen migration yet — without this, a long error
+    // message blows up the UPDATE with "String or binary data would
+    // be truncated" (MSSQL refuses to silently truncate by default).
+    // Picking the smaller of the post-migration width and any caller-
+    // supplied long status keeps writes safe regardless of the row
+    // schema actually deployed.
+    private const int LastRunStatusMaxLength = 500;
+
     private async Task UpdateScheduleStatusAsync(Guid scheduleId, string status, int consecutiveFailures, bool isActive)
     {
+        // Truncate defensively; the column is NVARCHAR(500) post-
+        // migration. If the env still has the old NVARCHAR(50) and a
+        // long string lands here, we'd still fail — but that case is
+        // caught by the migration that ships in this same change.
+        var safeStatus = status?.Length > LastRunStatusMaxLength
+            ? status[..LastRunStatusMaxLength]
+            : status;
+
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
         await using var cmd = new SqlCommand(@"
@@ -168,7 +269,7 @@ public sealed class ScheduledReportJob
                 consecutive_failures = @Failures,
                 is_active = @IsActive
             WHERE id = @Id", conn);
-        cmd.Parameters.Add(new SqlParameter("@Status", status));
+        cmd.Parameters.Add(new SqlParameter("@Status", (object?)safeStatus ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@Failures", consecutiveFailures));
         cmd.Parameters.Add(new SqlParameter("@IsActive", isActive));
         cmd.Parameters.Add(new SqlParameter("@Id", scheduleId));
@@ -177,38 +278,55 @@ public sealed class ScheduledReportJob
 
     // ── Helpers ──
 
+    private async Task<string> PrefixSubjectWithCompanyAsync(Guid companyId, string subject)
+    {
+        if (companyId == Guid.Empty) return subject;
+        try
+        {
+            var company = await _companies.GetByIdAsync(companyId);
+            return string.IsNullOrWhiteSpace(company?.Name)
+                ? subject
+                : $"{company.Name} - {subject}";
+        }
+        catch (Exception ex)
+        {
+            // Company resolution shouldn't break the email — log + fall
+            // through to the unprefixed subject so the run still delivers.
+            _logger.LogWarning(ex,
+                "Couldn't resolve company {CompanyId} for subject prefix; sending bare subject",
+                companyId);
+            return subject;
+        }
+    }
+
     private static QueryRequest BuildQueryRequest(SavedReport savedReport)
     {
+        // Empty-fields validation is Worker-specific — interactive
+        // surfaces show an empty grid and let the user fix it. The
+        // Worker fails the run instead so the schedule's last_run_status
+        // surfaces the misconfiguration.
         if (string.IsNullOrWhiteSpace(savedReport.FieldIds))
         {
             throw new InvalidOperationException(
                 $"SavedReport {savedReport.Id} has no field configuration (FieldIds is empty).");
         }
 
-        var fieldIds = JsonSerializer.Deserialize<List<string>>(savedReport.FieldIds) ?? [];
-        if (fieldIds.Count == 0)
+        // QueryRequestFactory captures every saved-report knob in one
+        // place — field_ids, filters (JsonElement-safe), aggregations,
+        // primary_table, connection_id, plus all column_state knobs
+        // (Distinct, Sort, CustomFilterIds, AdvancedFilters, TableCalcs).
+        // Adding a new saved knob is a one-line change in the factory;
+        // every consumer (Viewer / Master Dashboard tile / Detail Viewer /
+        // this Worker) picks it up automatically.
+        var request = QueryRequestFactory.FromSavedReport(savedReport, QueryRequest.MaxPageSize);
+
+        if (request.FieldIds is null || request.FieldIds.Count == 0)
         {
             throw new InvalidOperationException(
                 $"SavedReport {savedReport.Id} has an empty field list — cannot generate report.");
         }
 
-        var filters = !string.IsNullOrWhiteSpace(savedReport.Filters)
-            ? JsonSerializer.Deserialize<Dictionary<string, object?>>(savedReport.Filters) ?? new()
-            : new();
-
-        var aggregations = !string.IsNullOrWhiteSpace(savedReport.Aggregations)
-            ? JsonSerializer.Deserialize<Dictionary<string, string>>(savedReport.Aggregations)
-            : null;
-
-        return new QueryRequest
-        {
-            FieldIds = fieldIds,
-            Filters = filters,
-            Aggregations = aggregations,
-            Page = 1,
-            PageSize = QueryRequest.MaxPageSize,
-            ConnectionId = savedReport.ConnectionId
-        };
+        return request;
     }
 
     // Mirrors what a user sees in the viewer: drops columns hidden in the saved
@@ -311,4 +429,5 @@ public sealed class ScheduledReportJob
         var sanitized = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
         return sanitized.Length > 100 ? sanitized[..100] : sanitized;
     }
+
 }

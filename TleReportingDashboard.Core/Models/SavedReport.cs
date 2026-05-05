@@ -9,6 +9,12 @@ public class SavedReport
     // can be told apart. Empty/null falls back to Name in every consumer
     // — no backfill needed for existing reports.
     public string? InternalName { get; set; }
+    // Optional admin-curated grouping for the Report Library — drives a
+    // filter dropdown there + a chip on each report row. Free-text so
+    // admins aren't locked into a fixed taxonomy; the Builder offers an
+    // autocomplete fed by existing values to nudge consistency without
+    // enforcing it. Null = uncategorized.
+    public string? Category { get; set; }
     public string OwnerId { get; set; } = string.Empty; // Entra object ID
     public string OwnerEmail { get; set; } = string.Empty;
     // Owning company. Authorization for Phase 3+ is "user has access to this

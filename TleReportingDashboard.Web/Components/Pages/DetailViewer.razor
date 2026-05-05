@@ -18,6 +18,7 @@
 @inject IJSRuntime JS
 @inject IConfiguration Config
 @inject ICompanyRegistry CompanyRegistry
+@inject ILogger<DetailViewer> Logger
 
 <PageTitle>@_title - Executive Reporting Suite</PageTitle>
 
@@ -40,8 +41,9 @@
         .grouped-detail-table thead th {
             position: sticky;
             top: 0;
-            background: #f7f7f7;
-            border-bottom: 1px solid #DADCE0;
+            background: var(--table-header-bg, #F7F7F7);
+            color: var(--text-primary, #202124);
+            border-bottom: 1px solid var(--border-default, #DADCE0);
             padding: 6px 8px;
             text-align: left;
             font-weight: 600;
@@ -52,17 +54,19 @@
             text-align: right;
         }
         .grouped-detail-table tr.group-header td {
-            background: #FFEFD5;
+            background: var(--detail-group-header-bg, #FFEFD5);
+            color: var(--detail-group-header-text, #202124);
             font-weight: 700;
             padding: 6px 8px;
         }
         .grouped-detail-table tr.detail-row td {
-            border-top: 1px solid #F1F3F4;
+            border-top: 1px solid var(--border-subtle, #F1F3F4);
             padding: 4px 8px;
         }
         .grouped-detail-table tr.group-footer td {
-            background: beige;
-            border-top: 1px solid #DADCE0;
+            background: var(--detail-group-footer-bg, #F5F5DC);
+            color: var(--detail-group-footer-text, #202124);
+            border-top: 1px solid var(--border-default, #DADCE0);
             border-bottom: 2px solid #BDC1C6;
             font-weight: 600;
             padding: 5px 8px;
@@ -70,13 +74,13 @@
 
         /* Grand-total row pinned to the bottom of the scroll container so
            it stays visible regardless of how far down the admin has
-           scrolled. Text switched to near-black for contrast against the
-           lighter grey background. */
+           scrolled. Background + text drive off theme tokens so admins
+           can re-paint them via Admin → Theme. */
         .grouped-detail-table tfoot tr.grand-total td {
             position: sticky;
             bottom: 0;
-            background: #f7f7f7;
-            color: #202124;
+            background: var(--detail-grand-total-bg, #F7F7F7);
+            color: var(--detail-grand-total-text, #202124);
             font-weight: 700;
             padding: 8px;
             border-top: 2px solid #5F6368;
@@ -85,13 +89,14 @@
 </HeadContent>
 
 <MudMainContent Style="padding: 0;">
-    @if (_isLoading)
-    {
-        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
-    }
+    @* Drill-down detail loads can be expensive (no pagination on the
+       grouped output), so the elapsed timer matters here even more
+       than on the report list. QueryProgress upgrades to a slow-query
+       warning past the configured threshold. *@
+    <QueryProgress Active="@_isLoading" />
 
     <MudStack Spacing="3">
-        <MudPaper Elevation="0" Style="padding: 4px 16px; border-bottom: 1px solid #E8EAED;">
+        <MudPaper Elevation="0" Style="padding: 4px 16px; border-bottom: 1px solid var(--border-subtle, #E8EAED);">
             <MudStack Spacing="2">
                 @* Active company's logo — rendered statically (no link)
                    above the description + export row, so users always
@@ -307,6 +312,14 @@
     // level (ERR_CONNECTION_RESET), query strings don't.
     [SupplyParameterFromQuery(Name = "group")]
     public string? GroupKey { get; set; }
+    // Optional dashboard-tab label, set when the user opened the detail
+    // view from a tile on a Master Dashboard tab. Prepended to _title so
+    // the heading reads "TabName - ReportName" — gives admins the
+    // context of which tab they drilled in from when several tabs share
+    // similarly-named tiles. Plain query param (no encoding semantics
+    // beyond the standard URL-decode that happens automatically).
+    [SupplyParameterFromQuery(Name = "tab")]
+    public string? DashboardTabName { get; set; }
 
     private string _title = "Detail";
     private string _companyName = string.Empty;
@@ -325,7 +338,6 @@
     // Per-report SQL calc columns. Hydrated from ColumnState so the
     // detail query SELECTs them and rows carry their values for the grid.
     private List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? _tableCalcColumns;
-    private bool _distinct;
     private string? _tableSortField;
     private string? _tableSortDirection;
     // Multi-column sort read from the report's ColumnState. Same semantics as
@@ -338,12 +350,6 @@
     private List<string>? _columnOrder;
     private Dictionary<string, int>? _columnWidths;
     private List<string>? _hiddenColumns;
-    private List<string>? _customFilterIds;
-    // Advanced (ad-hoc) filter tree hydrated from the report's ColumnState.
-    // Applied to the detail query so drill-down rows match the top-level
-    // report's filtering. Null when the feature flag is off or the report
-    // has no advanced filters configured.
-    private TleReportingDashboard.Web.Models.FilterGroup? _advancedFilters;
     // Detail-view grouping, set in Report Builder and persisted on the report.
     // When _detailGroupByFieldId is set, render uses a custom grouped table
     // with inline header + sub-total rows instead of the MudDataGrid. Direction
@@ -413,7 +419,14 @@
                 }
             }
 
-            _title = report.Name;
+            // Prepend the originating dashboard tab when the user came
+            // from a Master Dashboard tile — admins drilling in from
+            // similarly-named tiles across several tabs benefit from the
+            // tab context in the heading. Falls back to plain report name
+            // for the Report-Viewer-launched detail flow.
+            _title = string.IsNullOrWhiteSpace(DashboardTabName)
+                ? report.Name
+                : $"{DashboardTabName.Trim()} - {report.Name}";
             _connectionId = report.ConnectionId;
             _primaryTable = report.PrimaryTable;
 
@@ -456,48 +469,15 @@
                         _detailSortFieldId = dsfEl.GetString();
                     if (doc.RootElement.TryGetProperty("DetailSortDirection", out var dsdEl))
                         _detailSortDirection = dsdEl.GetString() ?? "asc";
-                    if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
-                        _customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
-                    // Per-report SQL calc columns. Hydrated so the detail
-                    // query SELECTs them as `<expr> AS <key>` and rows
-                    // carry the calc values; without this the drill-down
-                    // grid drops every calc column.
+                    // Per-report SQL calc columns. Hydrated so the drill-down
+                    // grid renders calc-column captions and group-by lists
+                    // include calc keys. The factory parses these again
+                    // for the QueryRequest's TableCalcSqlColumns —
+                    // duplication is intentional; this hydration is for
+                    // the rendering layer, factory's is for the SELECT.
                     if (doc.RootElement.TryGetProperty("TableCalculatedColumns", out var tcEl))
                         _tableCalcColumns = System.Text.Json.JsonSerializer
                             .Deserialize<List<TleReportingDashboard.Web.Models.TableCalcColumnDef>>(tcEl.GetRawText());
-                    if (doc.RootElement.TryGetProperty("Distinct", out var distEl)
-                        && distEl.ValueKind == System.Text.Json.JsonValueKind.True)
-                        _distinct = true;
-
-                    // Advanced (ad-hoc) filters tree. Feature-flagged so a
-                    // rollback in appsettings hides them consistently across
-                    // editor + dashboard + drill-down. Back-compat reader
-                    // wraps the early flat-array shape into a root AND-group.
-                    if (Config.GetValue<bool>("Features:AdvancedFilters", false)
-                        && doc.RootElement.TryGetProperty("AdvancedFilters", out var afEl))
-                    {
-                        if (afEl.ValueKind == System.Text.Json.JsonValueKind.Object)
-                        {
-                            _advancedFilters = System.Text.Json.JsonSerializer
-                                .Deserialize<TleReportingDashboard.Web.Models.FilterGroup>(
-                                    afEl.GetRawText(),
-                                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                        }
-                        else if (afEl.ValueKind == System.Text.Json.JsonValueKind.Array)
-                        {
-                            var flat = System.Text.Json.JsonSerializer
-                                .Deserialize<List<TleReportingDashboard.Web.Models.FilterClause>>(afEl.GetRawText())
-                                ?? new();
-                            if (flat.Count > 0)
-                            {
-                                _advancedFilters = new TleReportingDashboard.Web.Models.FilterGroup
-                                {
-                                    Op = TleReportingDashboard.Web.Models.FilterGroupOps.And,
-                                    Items = flat.Select(c => new TleReportingDashboard.Web.Models.FilterItem { Clause = c }).ToList()
-                                };
-                            }
-                        }
-                    }
 
                     // Multi-column sort (primary first). Wins over the legacy
                     // single-field TableSortField/Direction when populated.
@@ -606,10 +586,6 @@
                 fieldIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(report.FieldIds) ?? new();
             }
 
-            var filters = new Dictionary<string, object?>();
-            if (!string.IsNullOrWhiteSpace(report.Filters))
-                filters = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(report.Filters) ?? new();
-
             if (!fieldIds.Any()) { _error = "Report has no fields."; return; }
 
             // Include extra group-by fields (legacy) + extra dimension fields.
@@ -640,11 +616,45 @@
             }
             catch { /* non-fatal — if the catalog lookup fails, run unstripped */ }
 
-            // Sort precedence: group-by field first (rows cluster per bucket),
-            // detail default second (each bucket internally ordered). When
-            // no group-by is set, detail default becomes the primary sort.
-            // When neither is set, QueryBuilder falls back to its usual
-            // first-field default to keep OFFSET/FETCH legal.
+            // Pre-fetch primary-table PKs so QueryBuilder can append silent
+            // tiebreakers — same OFFSET-stability path the editor uses.
+            // Best-effort: failures fall through to the legacy fallback.
+            List<string>? pkColumns = null;
+            if (!string.IsNullOrWhiteSpace(_primaryTable))
+            {
+                try
+                {
+                    var bare = _primaryTable;
+                    var asIdx = bare.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+                    if (asIdx > 0) bare = bare[..asIdx].Trim();
+                    var dot = bare.IndexOf('.');
+                    string? schema = dot > 0 ? bare[..dot] : null;
+                    var table = dot > 0 ? bare[(dot + 1)..] : bare;
+                    // Effective lookup folds in admin-flagged IsUnique
+                    // fields so accounts that can't read information_schema
+                    // still get a stable OFFSET tiebreaker.
+                    var schemaFields = await SchemaService.GetFieldConfigsAsync(_connectionId);
+                    pkColumns = await SchemaBrowser.GetEffectivePrimaryKeyColumnsAsync(_connectionId, schema, table, schemaFields);
+                }
+                catch { pkColumns = null; }
+            }
+
+            // Single source of truth for "QueryRequest from a SavedReport".
+            // Same factory the Worker, Report Viewer, and Master Dashboard
+            // tile use — keeps every saved knob in lockstep.
+            var request = TleReportingDashboard.Web.Services.QueryRequestFactory
+                .FromSavedReport(report, pageSize: 50000, fallbackSortColumns: pkColumns);
+
+            // Per-surface overrides:
+            //  • FieldIds — aggregate-stripped (detail wants raw rows) and
+            //    template-resolved + ExtraGroupBy/Dimension splice-in.
+            //  • Sort — detail view orders by Group By dropdown then Sort By
+            //    dropdown, NOT TableSort header-clicks. Override the factory's
+            //    default to preserve drill-down semantics.
+            //  • AdvancedFilters — gated by Features:AdvancedFilters so an
+            //    appsettings rollback also takes effect on the drill-down.
+            request.FieldIds = fieldIds;
+
             string? primarySort = null, primaryDir = null;
             string? secondarySort = null, secondaryDir = null;
             if (!string.IsNullOrEmpty(_detailGroupByFieldId)
@@ -669,58 +679,14 @@
                 primarySort = _detailSortFieldId;
                 primaryDir = _detailSortDirection == "desc" ? "desc" : "asc";
             }
+            request.SortField = primarySort;
+            request.SortDirection = primaryDir;
+            request.SecondarySortField = secondarySort;
+            request.SecondarySortDirection = secondaryDir;
 
-            // Pre-fetch primary-table PKs so QueryBuilder can append silent
-            // tiebreakers — same OFFSET-stability path the editor uses.
-            // Best-effort: failures fall through to the legacy fallback.
-            List<string>? pkColumns = null;
-            if (!string.IsNullOrWhiteSpace(_primaryTable))
-            {
-                try
-                {
-                    var bare = _primaryTable;
-                    var asIdx = bare.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
-                    if (asIdx > 0) bare = bare[..asIdx].Trim();
-                    var dot = bare.IndexOf('.');
-                    string? schema = dot > 0 ? bare[..dot] : null;
-                    var table = dot > 0 ? bare[(dot + 1)..] : bare;
-                    // Effective lookup folds in admin-flagged IsUnique
-                    // fields so accounts that can't read information_schema
-                    // still get a stable OFFSET tiebreaker.
-                    var schemaFields = await SchemaService.GetFieldConfigsAsync(_connectionId);
-                    pkColumns = await SchemaBrowser.GetEffectivePrimaryKeyColumnsAsync(_connectionId, schema, table, schemaFields);
-                }
-                catch { pkColumns = null; }
-            }
+            if (!Config.GetValue<bool>("Features:AdvancedFilters", false))
+                request.AdvancedFilters = null;
 
-            var request = new QueryRequest
-            {
-                FieldIds = fieldIds,
-                Filters = filters,
-                PrimaryTable = _primaryTable,
-                CustomFilterIds = _customFilterIds,
-                AdvancedFilters = _advancedFilters,
-                Page = 1,
-                PageSize = 50000,
-                ConnectionId = _connectionId,
-                SortField = primarySort,
-                SortDirection = primaryDir,
-                SecondarySortField = secondarySort,
-                SecondarySortDirection = secondaryDir,
-                FallbackSortColumns = pkColumns is { Count: > 0 } ? pkColumns : null,
-                Distinct = _distinct,
-                // SQL-mode calc columns must be in the SELECT for the
-                // drill-down grid to render them.
-                TableCalcSqlColumns = _tableCalcColumns?
-                    .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression) && !string.IsNullOrEmpty(c.Key))
-                    .Select(c => new TleReportingDashboard.Web.Models.TableCalcSqlSelector
-                    {
-                        Key = c.Key,
-                        SqlExpression = c.SqlExpression!,
-                        JoinIds = c.JoinIds
-                    })
-                    .ToList()
-            };
             request.Scoping = await ScopeResolver.ResolveAsync(userEmail, _connectionId, _primaryTable);
             var fullData = await QueryService.ExecuteQueryAsync(request);
 
@@ -770,7 +736,7 @@
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            _error = FriendlyError.FromException(ex, Logger, "loading drill-down detail");
         }
         finally
         {

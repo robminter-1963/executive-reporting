@@ -24,37 +24,6 @@
         }
         else
         {
-            @* ── Display Mode ── *@
-            <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
-                <MudStack Spacing="2">
-                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Display</MudText>
-
-                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
-                        <MudStack Spacing="0">
-                            <MudText Typo="Typo.body1">Theme</MudText>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                Switch between Light and Dark mode
-                            </MudText>
-                        </MudStack>
-                        <MudToggleGroup T="bool" Value="_pref.IsDarkMode" ValueChanged="OnThemeChanged"
-                                        Outlined Color="Color.Primary" Size="Size.Small">
-                            <MudToggleItem T="bool" Value="false">
-                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                                    <MudIcon Icon="@Icons.Material.Filled.LightMode" Size="Size.Small" />
-                                    <span>Light</span>
-                                </MudStack>
-                            </MudToggleItem>
-                            <MudToggleItem T="bool" Value="true">
-                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                                    <MudIcon Icon="@Icons.Material.Filled.DarkMode" Size="Size.Small" />
-                                    <span>Dark</span>
-                                </MudStack>
-                            </MudToggleItem>
-                        </MudToggleGroup>
-                    </MudStack>
-                </MudStack>
-            </MudPaper>
-
             @* ── Page Sizes ── *@
             <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
                 <MudStack Spacing="2">
@@ -153,13 +122,6 @@
             await JS.InvokeVoidAsync("history.back");
         else
             Navigation.NavigateTo("/reports");
-    }
-
-    private void OnThemeChanged(bool isDark)
-    {
-        _pref.IsDarkMode = isDark;
-        // Apply immediately so the user sees the change
-        PreferenceState.SetDarkMode(isDark);
     }
 
     private void OnPageSizeChanged(int size)

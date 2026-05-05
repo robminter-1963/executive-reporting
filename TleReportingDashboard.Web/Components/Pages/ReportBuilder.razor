@@ -107,6 +107,21 @@
                                   Adornment="Adornment.Start"
                                   AdornmentIcon="@Icons.Material.Filled.Tag" />
                 </MudTooltip>
+                @* Category — free-text but pre-fills with previously-used
+                   values via MudAutocomplete. Drives the Library's filter
+                   chip + dropdown. Empty = uncategorized (still listed,
+                   just under "All categories" with no chip). *@
+                <MudTooltip Text="Optional grouping for the Report Library. Type a new category or pick an existing one. Leave blank for 'Uncategorized'.">
+                    <MudAutocomplete T="string" @bind-Value="_loadedCategory"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     Style="max-width: 200px; font-size: 0.85rem;"
+                                     Placeholder="Category"
+                                     SearchFunc="SearchCategories"
+                                     CoerceText="false" CoerceValue="true"
+                                     ResetValueOnEmptyText
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.Category" />
+                </MudTooltip>
             </MudStack>
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
                 @* ── Connection picker ── Editable for new reports only.
@@ -591,6 +606,7 @@
                         <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px;">
                             Group By
                         </MudText>
+                        <HelpHint Text="Affects the drill-down (Detail View) only — the Table and Dashboard views ignore it. Picks a column to cluster rows by; group headers and footers render between row blocks. Pair with a sort to get a stable order." />
                         <MudSelect T="string" Value="_detailGroupByFieldId ?? string.Empty"
                                    ValueChanged="OnDetailGroupByChanged"
                                    ToStringFunc="@DetailGroupLabelFor"
@@ -629,6 +645,7 @@
                         <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px; margin-left: 16px;">
                             Sort By
                         </MudText>
+                        <HelpHint Text="The primary sort column. Suffixes: (-) means the column is unique — safe for paginated reports. (+) means the column is added to ORDER BY but won't show in the grid. (*) is a calculated table column. For LOOKUP-typed fields, ORDER BY uses the lookup's stored sort rank, not the raw value." />
                         <MudSelect T="string" Value="_detailSortFieldId ?? string.Empty"
                                    ValueChanged="OnDetailSortChanged"
                                    ToStringFunc="@DetailSortLabelFor"
@@ -694,6 +711,7 @@
                         <MudText Typo="Typo.overline" Color="Color.Secondary" Style="letter-spacing: 0.5px; margin-left: 16px;">
                             Then By
                         </MudText>
+                        <HelpHint Text="Tiebreaker sort. Required for stable pagination when the primary Sort By isn't unique — without it, two rows with the same Status can swap pages on a Postgres OFFSET query. Pick a unique column (marked '(-)') to lock row order." />
                         <MudSelect T="string" Value="_detailSortThenByFieldId ?? string.Empty"
                                    ValueChanged="OnDetailSortThenByChanged"
                                    ToStringFunc="@DetailSortThenByLabelFor"
@@ -1002,6 +1020,13 @@
     // Falls back to _loadedReportName when blank — only useful for variants
     // that share a public Name (e.g. one Pipeline per loan type).
     private string? _loadedInternalName;
+    // Optional grouping shown as a chip + filter in the Report Library.
+    // Empty = uncategorized.
+    private string? _loadedCategory;
+    // Cache of distinct categories already in use across the system.
+    // Powers the Category autocomplete suggestions; refreshed lazily when
+    // the autocomplete first searches and again after each save.
+    private List<string>? _knownCategories;
 
     // Active companies — used to group the Connection dropdown and resolve
     // each connection's owning company for the label.
@@ -1230,6 +1255,7 @@
             _loadedReportId = report.Id;
             _loadedReportName = report.Name;
             _loadedInternalName = report.InternalName;
+            _loadedCategory = report.Category;
             _currentConfig.ConnectionId = report.ConnectionId;
             _currentConfig.PrimaryTable = report.PrimaryTable;
             // Reload the field catalog to match this report's connection.
@@ -2324,6 +2350,27 @@
             _currentConfig.CustomFilterIds.Add(filterId);
     }
 
+    // ── Category autocomplete ──
+    // Lazy-loaded distinct categories from the report service. The
+    // autocomplete invokes SearchCategories on every keystroke; the
+    // first call populates the cache, subsequent calls filter it
+    // in-memory. Cache is invalidated implicitly on next reload of
+    // the page — there's no save-side broadcast, but the worst case
+    // is an admin saving "Operations" and another admin briefly not
+    // seeing it in their suggestions until they refresh. Acceptable
+    // for what's effectively a UX nudge toward consistency.
+    private async Task<IEnumerable<string>> SearchCategories(string? value, CancellationToken ct)
+    {
+        if (_knownCategories is null)
+        {
+            try { _knownCategories = await ReportService.GetDistinctCategoriesAsync(); }
+            catch { _knownCategories = new List<string>(); }
+        }
+        if (string.IsNullOrWhiteSpace(value)) return _knownCategories;
+        return _knownCategories
+            .Where(c => c.Contains(value, StringComparison.OrdinalIgnoreCase));
+    }
+
     // ── Run Query ──
 
     private async Task OnConnectionChanged(Guid? newId)
@@ -2677,7 +2724,13 @@
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Query failed: {ex.Message}", Severity.Error);
+            // Builder is admin-only — keep the raw ex.Message in
+            // _lastQueryError (the inline banner) so admins can debug
+            // schema/SQL issues directly. The snackbar gets the friendly
+            // version so the surface area for stack-trace leaks shrinks
+            // without losing the diagnostic detail admins actually need.
+            var friendly = FriendlyError.FromException(ex, Logger, "running builder query");
+            Snackbar.Add(friendly, Severity.Error);
             // Surface the error as a persistent inline banner AND restore
             // the last-good data so the table/dashboard tabs stay rendered.
             // Editing the broken filter/field/sort and re-running is the
@@ -2924,6 +2977,9 @@
                     existing.InternalName = string.IsNullOrWhiteSpace(_loadedInternalName)
                         ? null
                         : _loadedInternalName.Trim();
+                    existing.Category = string.IsNullOrWhiteSpace(_loadedCategory)
+                        ? null
+                        : _loadedCategory.Trim();
                     existing.FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds);
                     existing.Filters = _currentConfig.Filters.Any()
                         ? System.Text.Json.JsonSerializer.Serialize(_currentConfig.Filters)
@@ -2958,6 +3014,9 @@
                 InternalName = string.IsNullOrWhiteSpace(_loadedInternalName)
                     ? null
                     : _loadedInternalName.Trim(),
+                Category = string.IsNullOrWhiteSpace(_loadedCategory)
+                    ? null
+                    : _loadedCategory.Trim(),
                 OwnerId = _userId,
                 OwnerEmail = _userEmail,
                 FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds),

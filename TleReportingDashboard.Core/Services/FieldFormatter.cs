@@ -70,7 +70,16 @@ public static class FieldFormatter
             var raw = NormalizePhoneRaw(value.ToString() ?? string.Empty);
             var mask = string.IsNullOrWhiteSpace(format) ? DefaultPhoneMask : format;
             if (!IsMask(mask)) return raw;
-            if (CountDigits(raw) < CountChar(mask, '9')) return raw;
+            var digitCount = CountDigits(raw);
+            // Underflow guard — see header comment above the dataType
+            // branch. Overflow guard: anything beyond a 10-digit US
+            // number is almost certainly international, an extension-
+            // appended value, or a malformed export — none of which a
+            // 10-digit US mask can format correctly. Returning the raw
+            // value preserves the data instead of silently truncating
+            // to the first 10 digits.
+            if (digitCount < CountChar(mask, '9')) return raw;
+            if (digitCount > 10) return raw;
             return ApplyMask(raw, mask);
         }
 

@@ -64,7 +64,7 @@
    below the global bar by default — no z-index or padding fights. *@
 <div class="rl-page">
 
-<MudPaper Elevation="1" Square Style="background: #FFFFFF; border-bottom: 1px solid #DADCE0; padding: 8px 16px; flex: 0 0 auto;">
+<MudPaper Elevation="1" Square Style="background: var(--surface-card, #FFFFFF); border-bottom: 1px solid var(--border-default, #DADCE0); padding: 8px 16px; flex: 0 0 auto;">
     <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width: 100%;">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
             <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
@@ -154,6 +154,23 @@
                 <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
             }
         </MudSelect>
+        @* Category filter — populated from distinct values across the
+           reports the user can see. Hidden when no reports have a
+           category yet so the toolbar isn't cluttered with a dead
+           dropdown. Sentinel value "" is "Uncategorized". *@
+        @if (_availableCategories.Count > 0)
+        {
+            <MudSelect T="string?" @bind-Value="_selectedCategory"
+                       Label="Category" Variant="Variant.Outlined" Margin="Margin.Dense"
+                       Style="min-width: 200px;">
+                <MudSelectItem T="string?" Value="@((string?)null)">All categories</MudSelectItem>
+                <MudSelectItem T="string?" Value="@(string.Empty)">— Uncategorized —</MudSelectItem>
+                @foreach (var cat in _availableCategories)
+                {
+                    <MudSelectItem T="string?" Value="@cat">@cat</MudSelectItem>
+                }
+            </MudSelect>
+        }
     </MudStack>
 
     @* ── Tabs ── *@
@@ -169,7 +186,9 @@
                 <MudTable Items="@FilteredMyReports" Hover Striped Dense FixedHeader
                           T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
                           Height="100%"
-                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
+                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged"
+                          CurrentPage="@CurrentPageFor(MyReportsTab)"
+                          CurrentPageChanged="@(p => SetCurrentPageFor(MyReportsTab, p))">
                     <HeaderContent>
                         <MudTh>Name</MudTh>
                         @if (_isAdminView)
@@ -191,9 +210,41 @@
                                otherwise just the public Name. When the two
                                differ, surface the public Name as a small
                                caption so admins know which label users see. *@
-                            <MudText Typo="Typo.body2" Style="font-weight: 500;">
-                                @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
-                            </MudText>
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                    @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
+                                </MudText>
+                                @if (!string.IsNullOrWhiteSpace(context.Category))
+                                {
+                                    @* Category chip — same visual treatment as
+                                       the Fields chip, info color so categories
+                                       jump out as distinct from quantity meta. *@
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
+                                             Style="height: 18px; font-size: 0.65rem;"
+                                             Icon="@Icons.Material.Filled.Category">
+                                        @context.Category
+                                    </MudChip>
+                                }
+                                @if (context.GridTemplateId.HasValue)
+                                {
+                                    @* Templated chip — flags reports whose column
+                                       layout / sort / hidden flags inherit from a
+                                       Grid Template. Editing the template updates
+                                       every linked report on next render, so this
+                                       marker tells admins "changes here may affect
+                                       a shared layout downstream." Tooltip carries
+                                       the explanation; the visible chip stays
+                                       compact to coexist with Category. *@
+                                    <MudTooltip Text="Linked to a grid template — column layout, widths, hidden flags, and sort come from the template. Edit the template to change every linked report at once."
+                                                Placement="Placement.Top">
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Tertiary"
+                                                 Style="height: 18px; font-size: 0.65rem;"
+                                                 Icon="@Icons.Material.Filled.GridView">
+                                            Templated
+                                        </MudChip>
+                                    </MudTooltip>
+                                }
+                            </MudStack>
                             @if (!string.IsNullOrWhiteSpace(context.InternalName)
                                  && !string.Equals(context.InternalName, context.Name, StringComparison.Ordinal))
                             {
@@ -303,20 +354,21 @@
             }
             else if (!_isLoading)
             {
-                <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
-                          Style="border: 1px dashed #DADCE0; min-height: 240px;">
-                    <MudIcon Icon="@Icons.Material.Filled.NoteAdd" Size="Size.Large" Color="Color.Default" />
-                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
-                        @(_isAdminView ? "No reports exist for the current filters." : "You haven't created any reports yet.")
-                    </MudText>
-                    @if (!_isAdminView)
-                    {
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
-                                   OnClick="@(() => Navigation.NavigateTo("/builder"))">
-                            Create Your First Report
-                        </MudButton>
-                    }
-                </MudPaper>
+                @if (_isAdminView)
+                {
+                    <EmptyState Icon="@Icons.Material.Filled.FilterAltOff"
+                                Heading="No reports match your filters"
+                                Body="Try clearing the company filter or search box. Admin view shows reports across every user and company you have access to." />
+                }
+                else
+                {
+                    <EmptyState Icon="@Icons.Material.Filled.NoteAdd"
+                                Heading="You haven't created any reports yet"
+                                Body="Reports turn raw connection data into something readable. Pick fields, filters, and sorting in the builder and save the result here."
+                                CtaLabel="Create your first report"
+                                CtaIcon="@Icons.Material.Filled.Add"
+                                OnCtaClick="@(() => Navigation.NavigateTo("/builder"))" />
+                }
             }
         </MudTabPanel>
 
@@ -327,7 +379,9 @@
                 <MudTable Items="@FilteredSharedReports" Hover Striped Dense FixedHeader
                           T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
                           Height="100%"
-                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
+                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged"
+                          CurrentPage="@CurrentPageFor(SharedReportsTab)"
+                          CurrentPageChanged="@(p => SetCurrentPageFor(SharedReportsTab, p))">
                     <HeaderContent>
                         <MudTh>Name</MudTh>
                         <MudTh>Connection</MudTh>
@@ -415,13 +469,9 @@
             }
             else if (!_isLoading)
             {
-                <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
-                          Style="border: 1px dashed #DADCE0; min-height: 240px;">
-                    <MudIcon Icon="@Icons.Material.Filled.PeopleAlt" Size="Size.Large" Color="Color.Default" />
-                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
-                        No reports have been shared with you yet.
-                    </MudText>
-                </MudPaper>
+                <EmptyState Icon="@Icons.Material.Filled.PeopleAlt"
+                            Heading="No shared reports yet"
+                            Body="When a teammate shares a report with you, it'll show up here. You can also share your own from the My Reports tab." />
             }
         </MudTabPanel>
 
@@ -432,7 +482,9 @@
                 <MudTable Items="@FilteredRecent" Hover Striped Dense FixedHeader
                           T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
                           Height="100%"
-                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
+                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged"
+                          CurrentPage="@CurrentPageFor(RecentReportsTab)"
+                          CurrentPageChanged="@(p => SetCurrentPageFor(RecentReportsTab, p))">
                     <HeaderContent>
                         <MudTh>Name</MudTh>
                         <MudTh>Connection</MudTh>
@@ -528,13 +580,9 @@
             }
             else if (!_isLoading)
             {
-                <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
-                          Style="border: 1px dashed #DADCE0; min-height: 240px;">
-                    <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Large" Color="Color.Default" />
-                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
-                        No recently run reports.
-                    </MudText>
-                </MudPaper>
+                <EmptyState Icon="@Icons.Material.Filled.History"
+                            Heading="Nothing here yet"
+                            Body="Reports you've opened recently will appear here, so the ones you use most are always one click away." />
             }
         </MudTabPanel>
     </MudTabs>
@@ -569,7 +617,31 @@
     // RPT_user_preferences.report_library_company_id so the pick survives
     // browser restarts, new devices, and any session reset.
     private Guid? _selectedCompanyId;
+    // Category filter — null = "all", "" = uncategorized, anything else =
+    // exact-match category name. Not persisted (in-session only) — admins
+    // bouncing between tabs probably don't want a sticky category lock.
+    private string? _selectedCategory;
+    // Distinct categories drawn from the reports actually loaded for this
+    // user. Recomputed inside ReloadAsync after the report lists are set.
+    private List<string> _availableCategories = new();
     private int _libraryPageSize = 15;
+
+    // Stable indices for the three tabs that have their own MudTable
+    // pager. Must match the tab order in the Razor markup; if a tab is
+    // ever added between these, bump the constants AND update the tab
+    // panel order so the saved page state still maps correctly.
+    private const int MyReportsTab     = 0;
+    private const int SharedReportsTab = 1;
+    private const int RecentReportsTab = 2;
+
+    // Restore-on-render helpers for the per-tab CurrentPage binding.
+    // Stored in NavState so navigating to Builder/Viewer and back
+    // returns the user to the page they were editing from.
+    private int CurrentPageFor(int tabIdx) =>
+        NavState.PageByTab.TryGetValue(tabIdx, out var p) ? p : 0;
+
+    private void SetCurrentPageFor(int tabIdx, int p) =>
+        NavState.PageByTab[tabIdx] = p;
 
     // Admin-only toggle. When true, the My Reports tab loads every user's
     // reports via GetAllReportsAsync and renders an Owner column. Mirrored
@@ -604,16 +676,29 @@
         string.IsNullOrWhiteSpace(r.InternalName) ? r.Name : r.InternalName!;
 
     private IEnumerable<SavedReport> FilteredMyReports =>
-        ApplySearch(ApplyCompany(_myReports).OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase));
+        ApplySearch(ApplyCategory(ApplyCompany(_myReports)).OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase));
 
     private IEnumerable<SavedReport> FilteredSharedReports =>
-        ApplySearch(ApplyCompany(_sharedWithMe).OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase));
+        ApplySearch(ApplyCategory(ApplyCompany(_sharedWithMe)).OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase));
 
     private IEnumerable<SavedReport> FilteredRecent =>
-        ApplySearch(ApplyCompany(_myReports
-                .Where(r => r.LastRunAt.HasValue))
+        ApplySearch(ApplyCategory(ApplyCompany(_myReports
+                .Where(r => r.LastRunAt.HasValue)))
             .OrderByDescending(r => r.LastRunAt)
             .Take(10));
+
+    // Category filter rules:
+    //   null  → pass-through (no filter applied)
+    //   ""    → only rows whose Category is null/empty (Uncategorized)
+    //   value → exact case-insensitive match on Category
+    private IEnumerable<SavedReport> ApplyCategory(IEnumerable<SavedReport> reports)
+    {
+        if (_selectedCategory is null) return reports;
+        if (_selectedCategory.Length == 0)
+            return reports.Where(r => string.IsNullOrWhiteSpace(r.Category));
+        return reports.Where(r =>
+            string.Equals(r.Category, _selectedCategory, StringComparison.OrdinalIgnoreCase));
+    }
 
     private IEnumerable<SavedReport> ApplySearch(IEnumerable<SavedReport> reports)
     {
@@ -640,7 +725,37 @@
     private async Task OnCompanyChanged(Guid? newId)
     {
         _selectedCompanyId = newId;
+        // Filter changed → row count likely shrinks. A saved page index
+        // can land the user on an empty page, so reset paging across all
+        // three tables. Same logic applies to search and category
+        // changes; those go through @bind-Value so we hook them via
+        // OnParametersSet below.
+        ResetPagingForAllTabs();
         await PersistSelectedCompanyAsync();
+    }
+
+    // Snapshot of the last filter values we used to detect changes
+    // inside OnParametersSet (Blazor doesn't fire a callback for
+    // @bind-Value setters; this is the standard workaround).
+    private string _searchTextLast = string.Empty;
+    private string? _selectedCategoryLast;
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        if (_searchText != _searchTextLast || _selectedCategory != _selectedCategoryLast)
+        {
+            _searchTextLast = _searchText;
+            _selectedCategoryLast = _selectedCategory;
+            ResetPagingForAllTabs();
+        }
+    }
+
+    private void ResetPagingForAllTabs()
+    {
+        NavState.PageByTab[MyReportsTab]     = 0;
+        NavState.PageByTab[SharedReportsTab] = 0;
+        NavState.PageByTab[RecentReportsTab] = 0;
     }
 
     // Best-effort preference save; a write failure shouldn't block the UI.
@@ -769,6 +884,27 @@
             var schedules = await schedulesTask;
             _scheduledReportIds = schedules.Where(s => s.IsActive).Select(s => s.ReportId).ToHashSet();
             _nextRunByReport = ComputeNextRuns(schedules);
+
+            // Recompute available categories from everything the user can see
+            // here (their own + shared). Sorted alphabetically; case-folded
+            // dedupe so "Operations" and "operations" don't both show.
+            _availableCategories = _myReports
+                .Concat(_sharedWithMe)
+                .Select(r => r.Category)
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(c => c!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            // If the previously-picked category vanished (e.g., its only
+            // backing report just got deleted), drop the pin so the user
+            // doesn't end up looking at an empty filtered list with no
+            // visible cause.
+            if (_selectedCategory is { Length: > 0 } pinned
+                && !_availableCategories.Contains(pinned, StringComparer.OrdinalIgnoreCase))
+            {
+                _selectedCategory = null;
+            }
         }
         catch (Exception ex)
         {

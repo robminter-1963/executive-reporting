@@ -264,11 +264,12 @@ public sealed partial class SqlEmitter : IQueryPipeline
         if (preambles.Count > 0)
             sb.AppendLine($"WITH {string.Join(",\n", preambles)}");
 
-        // SELECT with row-limit guardrail. Dialect decides whether the
-        // limit goes here as `TOP(@MaxRows)` (SQL Server) or at the end
-        // of the query as `LIMIT @MaxRows` (Postgres).
-        sb.Append("SELECT ").Append(dialect.BuildRowLimitPrefix("@MaxRows"));
-        parameters.Add(dialect.CreateParameter("@MaxRows", guardrails.MaxRows));
+        // SELECT. The row-cap guardrail is honored by clamping the
+        // OFFSET/FETCH page size to guardrails.MaxRows further down —
+        // SQL Server forbids combining TOP with OFFSET in the same
+        // query (error 10741), so we can't use the dialect's TOP
+        // prefix here.
+        sb.Append("SELECT ");
         sb.AppendLine(string.Join(", ", aggregation.SelectExpressions));
 
         // FROM
@@ -378,9 +379,14 @@ public sealed partial class SqlEmitter : IQueryPipeline
         // ORDER BY
         AppendOrderBy(sb, request, resolvedFields, lookups);
 
-        // Pagination: OFFSET/FETCH
+        // Pagination: OFFSET/FETCH. Clamp at the absolute MaxPageSize,
+        // then again at guardrails.MaxRows so a scheduled-export pageSize
+        // of QueryRequest.MaxPageSize never exceeds the admin-configured
+        // row cap. (Don't clamp at guardrails.PageSize — that's the UI
+        // default page size for interactive paging, not the upper bound.)
         var pageSize = Math.Clamp(request.PageSize, 1, QueryRequest.MaxPageSize);
-        pageSize = Math.Min(pageSize, guardrails.PageSize > 0 ? guardrails.PageSize : pageSize);
+        if (guardrails.MaxRows > 0)
+            pageSize = Math.Min(pageSize, guardrails.MaxRows);
         var page = Math.Max(request.Page, 1);
         var offset = (page - 1) * pageSize;
 
@@ -391,12 +397,6 @@ public sealed partial class SqlEmitter : IQueryPipeline
         sb.AppendLine("FETCH NEXT @_pageSize ROWS ONLY");
         parameters.Add(dialect.CreateParameter("@_offset", offset));
         parameters.Add(dialect.CreateParameter("@_pageSize", pageSize));
-
-        // Dialect-specific row-limit suffix. No-op for SQL Server (the
-        // cap goes in TOP); Postgres appends LIMIT @MaxRows.
-        var suffix = dialect.BuildRowLimitSuffix("@MaxRows");
-        if (!string.IsNullOrEmpty(suffix))
-            sb.AppendLine(suffix.TrimStart());
 
         return (sb.ToString(), parameters);
     }
@@ -418,6 +418,7 @@ public sealed partial class SqlEmitter : IQueryPipeline
             .DistinctBy(f => f.Id)
             .ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
 
+        var filterIndex = 0;
         foreach (var filter in filters)
         {
             if (filter.Value is null)
@@ -453,10 +454,47 @@ public sealed partial class SqlEmitter : IQueryPipeline
                 ValidateIdentifier(filterField.SourceColumn, $"Filter field '{baseFieldId}' SourceColumn");
             }
 
-            var paramName = $"@filter_{filter.Key.Replace(".", "_").Replace(" ", "_")}";
-            whereClauses.Add($"{filterField.GetSqlExpression()} {op} {paramName}");
-            parameters.Add(dialect.CreateParameter(paramName, filter.Value));
+            var column = filterField.GetSqlExpression();
+
+            // Multi-select code-set filters arrive as List<string> (HeaderFilters
+            // serializes them that way, and QueryRequestFactory unwraps JSON
+            // arrays to the same shape). Expand to "<col> IN (@p0, @p1, …)" so
+            // SqlClient binds each value as its own parameter — passing a
+            // List<string> as a single parameter throws "no mapping exists".
+            var valueList = ExtractStringList(filter.Value);
+            if (valueList is not null && valueList.Count > 0)
+            {
+                var inParams = new List<string>(valueList.Count);
+                for (var i = 0; i < valueList.Count; i++)
+                {
+                    var p = $"@filter_{filterIndex}_{i}";
+                    inParams.Add(p);
+                    parameters.Add(dialect.CreateParameter(p, valueList[i]));
+                }
+                whereClauses.Add($"{column} IN ({string.Join(", ", inParams)})");
+            }
+            else
+            {
+                var paramName = $"@filter_{filter.Key.Replace(".", "_").Replace(" ", "_")}";
+                whereClauses.Add($"{column} {op} {paramName}");
+                parameters.Add(dialect.CreateParameter(paramName, filter.Value));
+            }
+            filterIndex++;
         }
+    }
+
+    // Recognises the three shapes a multi-value filter can arrive in:
+    //   • List<string> — what HeaderFilters writes for live UI state
+    //   • IEnumerable<string> — defensive (HashSet<string>, etc.)
+    //   • JsonElement array — when a saved Filters dict is read with
+    //     System.Text.Json directly, before QueryRequestFactory's unwrap
+    private static List<string>? ExtractStringList(object? value)
+    {
+        if (value is List<string> list) return list;
+        if (value is IEnumerable<string> enumerable) return enumerable.ToList();
+        if (value is System.Text.Json.JsonElement el && el.ValueKind == System.Text.Json.JsonValueKind.Array)
+            return el.EnumerateArray().Select(e => e.GetString() ?? string.Empty).Where(s => s.Length > 0).ToList();
+        return null;
     }
 
     private static void AppendOrderBy(

@@ -1,0 +1,115 @@
+@implements IDisposable
+@using MudBlazor
+
+@* Reusable progress affordance for any in-flight query.
+   Replaces the bare MudProgressLinear we used to scatter around the
+   app. Shows three stages keyed off elapsed seconds:
+       0 → Slow:        primary blue bar + "Running… X.Xs"
+       Slow → VerySlow: amber bar + "Still running… X.Xs"
+       VerySlow+:       red bar + "Slow query — Xs. Check the connection or schema config."
+   Stops ticking the moment Active flips to false (parent toggles that
+   when the query returns / errors), so finished queries don't keep
+   spinning a phantom timer. *@
+
+@if (Active)
+{
+    <MudProgressLinear Color="@_color" Indeterminate Class="@CssClass" />
+    @if (ShowLabel)
+    {
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="mt-1">
+            <MudIcon Icon="@_icon" Size="Size.Small" Style="@($"color: {_iconColor};")" />
+            <MudText Typo="Typo.caption" Style="@($"color: {_textColor};")">
+                @_statusLabel
+            </MudText>
+        </MudStack>
+    }
+}
+
+@code {
+    [Parameter] public bool Active { get; set; }
+    // Caller can override the slow / very-slow thresholds. Defaults
+    // are tuned for typical dashboard report queries — sub-second is
+    // typical, 8s says "something's off", 20s is well into "slow".
+    [Parameter] public int SlowThresholdSeconds { get; set; } = 8;
+    [Parameter] public int VerySlowThresholdSeconds { get; set; } = 20;
+    // Hide the elapsed-time line entirely (e.g. tiny tile overlays
+    // where the bar alone is enough). Bar still renders.
+    [Parameter] public bool ShowLabel { get; set; } = true;
+    // Optional message override for the very-slow stage; useful when
+    // a specific page wants different copy ("Tile fetch is slow…").
+    [Parameter] public string? VerySlowMessage { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    private DateTime _startedUtc;
+    private double _elapsedSeconds;
+    private System.Threading.Timer? _timer;
+    private bool _wasActive;
+
+    private Color _color =>
+        _elapsedSeconds >= VerySlowThresholdSeconds ? Color.Error :
+        _elapsedSeconds >= SlowThresholdSeconds     ? Color.Warning :
+        Color.Primary;
+
+    private string _icon =>
+        _elapsedSeconds >= SlowThresholdSeconds
+            ? Icons.Material.Filled.WarningAmber
+            : Icons.Material.Filled.HourglassTop;
+
+    private string _iconColor =>
+        _elapsedSeconds >= VerySlowThresholdSeconds ? "#D32F2F" :
+        _elapsedSeconds >= SlowThresholdSeconds     ? "#F9A825" :
+        "#5F6368";
+
+    private string _textColor =>
+        _elapsedSeconds >= VerySlowThresholdSeconds ? "#D32F2F" :
+        _elapsedSeconds >= SlowThresholdSeconds     ? "#B45309" :
+        "#5F6368";
+
+    private string _statusLabel
+    {
+        get
+        {
+            var t = $"{_elapsedSeconds:F1}s";
+            if (_elapsedSeconds >= VerySlowThresholdSeconds)
+                return VerySlowMessage
+                    ?? $"Slow query — {t}. Connection or schema config may be the cause.";
+            if (_elapsedSeconds >= SlowThresholdSeconds)
+                return $"Still running… {t}";
+            return $"Running… {t}";
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Edge-trigger off the Active boolean: spin the timer up on
+        // false→true, tear it down on true→false. The parent doesn't
+        // need to call any methods — flipping the parameter is enough.
+        if (Active && !_wasActive) Start();
+        else if (!Active && _wasActive) Stop();
+        _wasActive = Active;
+    }
+
+    private void Start()
+    {
+        _startedUtc = DateTime.UtcNow;
+        _elapsedSeconds = 0;
+        // 500ms tick is fast enough that one decimal place stays
+        // smooth, slow enough to keep render churn negligible. The
+        // dispatcher hop is required because System.Threading.Timer
+        // fires on a thread-pool thread, but Blazor render needs
+        // SynchronizationContext.
+        _timer = new System.Threading.Timer(_ =>
+        {
+            _elapsedSeconds = (DateTime.UtcNow - _startedUtc).TotalSeconds;
+            _ = InvokeAsync(StateHasChanged);
+        }, null, TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(500));
+    }
+
+    private void Stop()
+    {
+        _timer?.Dispose();
+        _timer = null;
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

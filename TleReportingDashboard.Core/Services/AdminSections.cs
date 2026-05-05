@@ -21,6 +21,7 @@ public static class AdminSections
     public const string SchemaHistory = "schema_history";
     public const string SchemaBuilder = "schema_builder";
     public const string Promotion     = "promotion";
+    public const string Theme         = "theme";
 
     // Ordered as they appear in the Admin tab strip; the Roles tab editor
     // uses the same order so the checkbox grid mirrors the live UI.
@@ -34,6 +35,7 @@ public static class AdminSections
         (SchemaHistory, "Schema History"),
         (SchemaBuilder, "Schema Builder"),
         (Promotion,     "Promotion"),
+        (Theme,         "Theme"),
     };
 
     public static bool IsValid(string? key) =>

@@ -1,0 +1,50 @@
+@using MudBlazor
+
+@* Small "?" affordance for contextual help.
+   Place next to any label / control whose meaning isn't obvious from
+   the field name alone — sort scope, distinct, virtual primary tables,
+   lookup joins, etc. Hovering shows the supplied tooltip; the goal is
+   to shrink the "what does this do?" support funnel without bloating
+   the UI with permanently-visible hint text.
+
+   Optional Doc / DocAnchor params turn the icon into a clickable link
+   to the long-form Help page. Keep tooltip Text short (2 sentences max);
+   if the explanation is longer, point at the doc instead. *@
+
+@if (string.IsNullOrEmpty(Doc))
+{
+    <MudTooltip Text="@Text" Placement="@Placement" Arrow>
+        <MudIcon Icon="@Icons.Material.Filled.HelpOutline"
+                 Size="@Size"
+                 Style="@($"color: {IconColor}; cursor: help; vertical-align: middle;")" />
+    </MudTooltip>
+}
+else
+{
+    <MudTooltip Text="@($"{Text}  (click for more)")" Placement="@Placement" Arrow>
+        <MudLink Href="@HrefForDoc" Target="_blank" Underline="Underline.None"
+                 Style="display: inline-flex; align-items: center;">
+            <MudIcon Icon="@Icons.Material.Filled.HelpOutline"
+                     Size="@Size"
+                     Style="@($"color: {IconColor}; cursor: help; vertical-align: middle;")" />
+        </MudLink>
+    </MudTooltip>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Text { get; set; } = string.Empty;
+    [Parameter] public Placement Placement { get; set; } = Placement.Right;
+    [Parameter] public Size Size { get; set; } = Size.Small;
+    // Muted slate-grey so the icon registers as informational without
+    // competing visually with primary-color affordances.
+    [Parameter] public string IconColor { get; set; } = "#9AA0A6";
+    // Optional Help-page slug. When set the icon becomes a link that
+    // opens the Help page (in a new tab) anchored to DocAnchor.
+    [Parameter] public string? Doc { get; set; }
+    [Parameter] public string? DocAnchor { get; set; }
+
+    private string HrefForDoc =>
+        string.IsNullOrEmpty(Doc) ? "#"
+        : string.IsNullOrEmpty(DocAnchor) ? $"/help#{Doc}"
+        : $"/help#{Doc}-{DocAnchor}";
+}

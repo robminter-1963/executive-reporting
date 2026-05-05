@@ -17,15 +17,15 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TleReportingDashboard.ServiceDefaults\TleReportingDashboard.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\TleReportingDashboard.Core\TleReportingDashboard.Core.csproj" />
   </ItemGroup>
 
+  <!-- Web-only packages. ClosedXML / SqlClient / Npgsql moved to Core; Web
+       picks them up transitively through the project reference above. -->
   <ItemGroup>
-    <PackageReference Include="ClosedXML" Version="0.104.2" />
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.2" />
     <PackageReference Include="Microsoft.Identity.Web" Version="4.7.0" />
     <PackageReference Include="Microsoft.Identity.Web.UI" Version="4.7.0" />
     <PackageReference Include="MudBlazor" Version="9.3.0" />
-    <PackageReference Include="Npgsql" Version="9.0.2" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
   </ItemGroup>

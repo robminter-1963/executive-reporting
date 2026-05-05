@@ -55,59 +55,31 @@
         }
         else if (_templates.Any())
         {
-            <MudTable Items="_templates" Hover Striped Dense>
-                <HeaderContent>
-                    <MudTh>Name</MudTh>
-                    <MudTh>Connection</MudTh>
-                    <MudTh>Description</MudTh>
-                    <MudTh>Fields</MudTh>
-                    <MudTh>Shared</MudTh>
-                    <MudTh>Owner</MudTh>
-                    <MudTh>Updated</MudTh>
-                    <MudTh Style="text-align: right;">Actions</MudTh>
-                </HeaderContent>
-                <RowTemplate>
-                    <MudTd DataLabel="Name">
-                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Connection">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Description">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.Description ?? "—")</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Fields">
-                        <MudText Typo="Typo.body2">@GetFieldCount(context) fields</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Shared">
-                        @if (context.IsShared)
-                        {
-                            <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Color="Color.Success" />
-                        }
-                    </MudTd>
-                    <MudTd DataLabel="Owner">
-                        <MudText Typo="Typo.caption">@context.OwnerEmail</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Updated">
-                        <MudText Typo="Typo.caption">@context.UpdatedAt.ToString("MMM dd, yyyy")</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Actions" Style="text-align: right;">
-                        <MudStack Row Spacing="0" Style="display: inline-flex !important;">
-                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
-                                           Color="Color.Primary"
-                                           OnClick="() => EditTemplate(context)"
-                                           Disabled="@(context.OwnerId != _userId)" title="Edit" />
-                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
-                                           Color="Color.Default"
-                                           OnClick="() => CloneTemplate(context)" title="Clone" />
-                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
-                                           Color="Color.Error"
-                                           OnClick="() => DeleteTemplate(context)"
-                                           Disabled="@(context.OwnerId != _userId)" title="Delete" />
-                        </MudStack>
-                    </MudTd>
-                </RowTemplate>
-            </MudTable>
+            @* Tabs group templates by their connection's owning company.
+               "All" stays first as the default landing tab so admins
+               looking for a specific template by name don't have to
+               guess which company-tab to open. Per-company tabs label
+               with a count for quick eyeballing. *@
+            <MudTabs @bind-ActivePanelIndex="_activeTabIndex"
+                     Elevation="0" Rounded ApplyEffectsToContainer Class="pa-0">
+                <MudTabPanel Text="@($"All ({_templates.Count})")"
+                             Icon="@Icons.Material.Filled.ViewList">
+                    @TemplateTable(_templates, showCompanyColumn: true)
+                </MudTabPanel>
+                @foreach (var co in _companies)
+                {
+                    var companyId = co.Id;
+                    var companyTemplates = TemplatesForCompany(companyId).ToList();
+                    @* Hide companies with no templates so the strip
+                       stays manageable. Admins can still see the company
+                       in "All" if they need to verify it's empty. *@
+                    if (companyTemplates.Count == 0) continue;
+                    <MudTabPanel Text="@($"{co.Name} ({companyTemplates.Count})")"
+                                 Icon="@Icons.Material.Filled.Business">
+                        @TemplateTable(companyTemplates, showCompanyColumn: false)
+                    </MudTabPanel>
+                }
+            </MudTabs>
         }
         else
         {
@@ -129,6 +101,13 @@
     private bool _accessDenied;
     private List<GridTemplate> _templates = new();
     private Dictionary<Guid, string> _connectionNames = new();
+    // Connection → owning company id. Built alongside _connectionNames so
+    // the per-company tab strip can filter templates by their connection's
+    // company without a second round-trip per render.
+    private Dictionary<Guid, Guid> _connectionCompanyById = new();
+    // Active companies, alphabetized. Drives the per-company tab strip.
+    private List<CompanySummary> _companies = new();
+    private int _activeTabIndex; // 0 = "All", 1+ = per-company tabs
 
     private IDisposable? _editorScope;
 
@@ -155,14 +134,24 @@
         // company so templates belonging to any connection can be labeled
         // correctly — the hardcoded "TLE only" load was leaving templates
         // on other companies' connections rendering as raw IDs.
+        // The same loop also captures the connection→company map and the
+        // sorted company list so the per-company tab strip below can
+        // partition templates without a second round-trip per render.
         try
         {
             _connectionNames = new();
-            foreach (var comp in await CompanyRegistry.GetActiveAsync())
+            _connectionCompanyById = new();
+            _companies = (await CompanyRegistry.GetActiveAsync())
+                .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            foreach (var comp in _companies)
             {
                 var conns = await ConnectionAdminSvc.GetByCompanyAsync(comp.Id);
                 foreach (var c in conns)
+                {
                     _connectionNames[c.Id] = c.Name;
+                    _connectionCompanyById[c.Id] = comp.Id;
+                }
             }
         }
         catch { /* non-fatal — column shows id/"—" instead */ }
@@ -191,6 +180,103 @@
         connectionId.HasValue && _connectionNames.TryGetValue(connectionId.Value, out var name)
             ? name
             : "—";
+
+    // Filters _templates to those whose connection belongs to the given
+    // company. Templates with a missing connection (legacy / orphaned)
+    // fall out of every per-company tab and only show in "All".
+    private IEnumerable<GridTemplate> TemplatesForCompany(Guid companyId) =>
+        _templates.Where(t =>
+            t.ConnectionId is Guid cid
+            && _connectionCompanyById.TryGetValue(cid, out var cc)
+            && cc == companyId);
+
+    // Per-company template counts so the tab labels show "Acme (4)" —
+    // gives admins a sense of distribution at a glance and lets them
+    // spot empty tabs without clicking through.
+    private int TemplateCountForCompany(Guid companyId) =>
+        TemplatesForCompany(companyId).Count();
+
+    // Shared table renderer used by both the "All" tab (with a Company
+    // column for cross-company context) and per-company tabs (where the
+    // column is redundant and just costs horizontal space). Inlined as
+    // a RenderFragment so both call sites stay in sync — the only
+    // structural difference between the two is one column.
+    private RenderFragment TemplateTable(IEnumerable<GridTemplate> items, bool showCompanyColumn) => __builder =>
+    {
+        <MudTable Items="items" Hover Striped Dense T="GridTemplate">
+            <HeaderContent>
+                <MudTh>Name</MudTh>
+                @if (showCompanyColumn)
+                {
+                    <MudTh>Company</MudTh>
+                }
+                <MudTh>Connection</MudTh>
+                <MudTh>Description</MudTh>
+                <MudTh>Fields</MudTh>
+                <MudTh>Shared</MudTh>
+                <MudTh>Owner</MudTh>
+                <MudTh>Updated</MudTh>
+                <MudTh Style="text-align: right;">Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Name">
+                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                </MudTd>
+                @if (showCompanyColumn)
+                {
+                    <MudTd DataLabel="Company">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@GetCompanyName(context.ConnectionId)</MudText>
+                    </MudTd>
+                }
+                <MudTd DataLabel="Connection">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
+                </MudTd>
+                <MudTd DataLabel="Description">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.Description ?? "—")</MudText>
+                </MudTd>
+                <MudTd DataLabel="Fields">
+                    <MudText Typo="Typo.body2">@GetFieldCount(context) fields</MudText>
+                </MudTd>
+                <MudTd DataLabel="Shared">
+                    @if (context.IsShared)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Color="Color.Success" />
+                    }
+                </MudTd>
+                <MudTd DataLabel="Owner">
+                    <MudText Typo="Typo.caption">@context.OwnerEmail</MudText>
+                </MudTd>
+                <MudTd DataLabel="Updated">
+                    <MudText Typo="Typo.caption">@context.UpdatedAt.ToString("MMM dd, yyyy")</MudText>
+                </MudTd>
+                <MudTd DataLabel="Actions" Style="text-align: right;">
+                    <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                       Color="Color.Primary"
+                                       OnClick="() => EditTemplate(context)"
+                                       Disabled="@(context.OwnerId != _userId)" title="Edit" />
+                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                                       Color="Color.Default"
+                                       OnClick="() => CloneTemplate(context)" title="Clone" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                       Color="Color.Error"
+                                       OnClick="() => DeleteTemplate(context)"
+                                       Disabled="@(context.OwnerId != _userId)" title="Delete" />
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    };
+
+    // Resolve a connection's owning company name. Returns "—" when the
+    // connection isn't on the active list (deleted / inactive) so the
+    // row keeps rendering with a clear "unknown" marker.
+    private string GetCompanyName(Guid? connectionId)
+    {
+        if (connectionId is not Guid cid) return "—";
+        if (!_connectionCompanyById.TryGetValue(cid, out var coId)) return "—";
+        return _companies.FirstOrDefault(c => c.Id == coId)?.Name ?? "—";
+    }
 
     private int GetFieldCount(GridTemplate t)
     {

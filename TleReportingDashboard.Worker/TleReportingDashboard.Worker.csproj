@@ -5,14 +5,20 @@
     <Nullable>enable</Nullable>
     <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
+
+  <!-- Worker references Core (the shared services + models) but NOT
+       Web — the published output drops MudBlazor / Microsoft.Identity.Web /
+       Razor compilation / wwwroot, all of which the Worker never uses. -->
   <ItemGroup>
     <ProjectReference Include="..\TleReportingDashboard.ServiceDefaults\TleReportingDashboard.ServiceDefaults.csproj" />
-    <ProjectReference Include="..\TleReportingDashboard.Web\TleReportingDashboard.Web.csproj" />
+    <ProjectReference Include="..\TleReportingDashboard.Core\TleReportingDashboard.Core.csproj" />
   </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Hangfire.AspNetCore" Version="1.8.20" />
     <PackageReference Include="Hangfire.SqlServer" Version="1.8.20" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
   </ItemGroup>
 </Project>

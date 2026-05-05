@@ -1,0 +1,75 @@
+@using MudBlazor
+
+@* Reusable empty-state panel.
+   Replaces the dozen+ ad-hoc "No records / haven't created any X yet"
+   one-liners scattered across pages. Standardizes:
+       icon → heading → body → optional CTA button
+   Visual treatment matches the dashed-border letterbox already used by
+   ReportLibrary, so existing instances can switch to this without a
+   visible regression. *@
+
+<MudPaper Class="@($"pa-8 d-flex flex-column align-center justify-center {ContainerClass}".Trim())"
+          Elevation="0"
+          Style="@($"border: 1px dashed #DADCE0; min-height: {MinHeightPx}px; {ContainerStyle}")">
+    <MudIcon Icon="@Icon" Size="@IconSize" Color="@IconColor"
+             Style="@($"color: {IconHexColor};")" />
+    @if (!string.IsNullOrWhiteSpace(Heading))
+    {
+        <MudText Typo="Typo.h6" Style="font-weight: 600; margin-top: 8px;">@Heading</MudText>
+    }
+    @if (!string.IsNullOrWhiteSpace(Body))
+    {
+        <MudText Typo="Typo.body2" Color="Color.Secondary"
+                 Style="text-align: center; max-width: 480px; margin-top: 4px;">
+            @Body
+        </MudText>
+    }
+    @if (BodyContent is not null)
+    {
+        <div style="margin-top: 8px;">@BodyContent</div>
+    }
+    @if (!string.IsNullOrWhiteSpace(CtaLabel))
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+                   StartIcon="@CtaIcon"
+                   OnClick="OnCtaClick">
+            @CtaLabel
+        </MudButton>
+    }
+</MudPaper>
+
+@code {
+    // Big icon at the top of the panel — defaults to a generic "no data"
+    // glyph; callers usually override with something more specific like
+    // NoteAdd, Inbox, FilterAltOff, etc.
+    [Parameter] public string Icon { get; set; } = Icons.Material.Filled.Inbox;
+    [Parameter] public Size IconSize { get; set; } = Size.Large;
+    [Parameter] public Color IconColor { get; set; } = Color.Default;
+    // Optional explicit hex override; if set, takes precedence over IconColor.
+    // Useful for muted-grey looks (#9AA0A6) without fighting the theme.
+    [Parameter] public string? IconHexColor { get; set; } = "#9AA0A6";
+
+    // Heading is optional — set when there's a clear short label like
+    // "No reports yet"; omit if the body line carries the whole message.
+    [Parameter] public string? Heading { get; set; }
+
+    // One-line explanation of what the user is looking at and why it's empty.
+    [Parameter] public string? Body { get; set; }
+
+    // Escape hatch for callers that need richer empty-state copy than
+    // a plain string can express (markdown-ish rendering, links, etc.).
+    [Parameter] public RenderFragment? BodyContent { get; set; }
+
+    // CTA wiring — when both label and click handler are supplied, a
+    // primary-color button renders below the body text. Skip both for
+    // a passive empty state (e.g. "no data matches the filters" — there's
+    // no action to take).
+    [Parameter] public string? CtaLabel { get; set; }
+    [Parameter] public string? CtaIcon { get; set; }
+    [Parameter] public EventCallback OnCtaClick { get; set; }
+
+    // Sizing knobs — defaults match the legacy ReportLibrary empty state.
+    [Parameter] public int MinHeightPx { get; set; } = 240;
+    [Parameter] public string? ContainerClass { get; set; }
+    [Parameter] public string? ContainerStyle { get; set; }
+}

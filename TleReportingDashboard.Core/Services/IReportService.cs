@@ -17,4 +17,10 @@ public interface IReportService
     Task<SavedReport> SaveReportAsync(SavedReport report);
     Task<SavedReport> UpdateReportAsync(SavedReport report);
     Task DeleteReportAsync(Guid id, string userId);
+    // Distinct, sorted list of category values used by any existing report.
+    // Powers the Builder's autocomplete and the Library's filter dropdown.
+    // Empty list when no reports have a category yet — UI degrades to a
+    // free-text input. Returns reports across every owner / company since
+    // categories are global (admins curate them as a shared taxonomy).
+    Task<List<string>> GetDistinctCategoriesAsync();
 }

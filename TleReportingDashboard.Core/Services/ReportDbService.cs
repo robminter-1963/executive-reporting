@@ -87,8 +87,8 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         // ShowOnMaster-flagged report would be invisible there.
         await using var cmd = new SqlCommand(
             @"INSERT INTO EMPOWER.RPT_saved_reports
-              (id, name, internal_name, owner_id, owner_email, field_ids, filters, aggregations, column_state, grid_template_id, connection_id, company_id, primary_table, last_run_at, created_at, updated_at)
-              VALUES (@Id, @Name, @InternalName, @OwnerId, @OwnerEmail, @FieldIds, @Filters, @Aggregations, @ColumnState, @GridTemplateId, @ConnectionId,
+              (id, name, internal_name, category, owner_id, owner_email, field_ids, filters, aggregations, column_state, grid_template_id, connection_id, company_id, primary_table, last_run_at, created_at, updated_at)
+              VALUES (@Id, @Name, @InternalName, @Category, @OwnerId, @OwnerEmail, @FieldIds, @Filters, @Aggregations, @ColumnState, @GridTemplateId, @ConnectionId,
                       (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
                       @PrimaryTable, @LastRunAt, @CreatedAt, @UpdatedAt)", conn);
         AddReportParams(cmd, report);
@@ -109,7 +109,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         // without a separate maintenance step.
         await using var cmd = new SqlCommand(
             @"UPDATE EMPOWER.RPT_saved_reports SET
-              name = @Name, internal_name = @InternalName, field_ids = @FieldIds, filters = @Filters, aggregations = @Aggregations,
+              name = @Name, internal_name = @InternalName, category = @Category, field_ids = @FieldIds, filters = @Filters, aggregations = @Aggregations,
               column_state = @ColumnState, grid_template_id = @GridTemplateId, connection_id = @ConnectionId,
               company_id = (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
               primary_table = @PrimaryTable,
@@ -121,6 +121,37 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         _cache.Invalidate("ReportDbService:Reports:");
         _cache.Invalidate("MasterDashboardService:");
         return report;
+    }
+
+    public async Task<List<string>> GetDistinctCategoriesAsync()
+    {
+        await using var conn = await OpenConnectionAsync();
+        // The IX_saved_reports_category filtered index makes this a cheap
+        // index-only scan even at 10k+ reports. ORDER BY in SQL so the
+        // caller doesn't re-sort.
+        await using var cmd = new SqlCommand(
+            @"SELECT DISTINCT category
+                FROM EMPOWER.RPT_saved_reports
+               WHERE category IS NOT NULL AND LTRIM(RTRIM(category)) <> ''
+            ORDER BY category;", conn);
+        var result = new List<string>();
+        try
+        {
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                if (!reader.IsDBNull(0))
+                    result.Add(reader.GetString(0));
+            }
+        }
+        catch (SqlException ex) when (ex.Number == 207) // Invalid column name
+        {
+            // Migration hasn't run on this DB yet; return empty so the UI
+            // falls through to a free-text input. Logged at debug — admin
+            // applies the migration to enable the feature.
+            _logger.LogDebug(ex, "category column not present yet — returning empty list.");
+        }
+        return result;
     }
 
     public async Task DeleteReportAsync(Guid id, string userId)
@@ -339,6 +370,9 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
                 // TryGet so envs that haven't run the internal_name migration
                 // yet keep working — null falls back to Name in every consumer.
                 InternalName = TryGetOptionalString(reader, "internal_name"),
+                // TryGet so envs that haven't applied the category migration
+                // yet keep working — null falls back to "uncategorized" everywhere.
+                Category = TryGetOptionalString(reader, "category"),
                 OwnerId = reader.GetString(reader.GetOrdinal("owner_id")),
                 OwnerEmail = reader.GetString(reader.GetOrdinal("owner_email")),
                 CompanyId = reader.GetGuid(reader.GetOrdinal("company_id")),
@@ -439,6 +473,8 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@Name", r.Name));
         cmd.Parameters.Add(new SqlParameter("@InternalName",
             string.IsNullOrWhiteSpace(r.InternalName) ? DBNull.Value : (object)r.InternalName));
+        cmd.Parameters.Add(new SqlParameter("@Category",
+            string.IsNullOrWhiteSpace(r.Category) ? DBNull.Value : (object)r.Category));
         cmd.Parameters.Add(new SqlParameter("@OwnerId", r.OwnerId));
         cmd.Parameters.Add(new SqlParameter("@OwnerEmail", r.OwnerEmail));
         cmd.Parameters.Add(new SqlParameter("@FieldIds", r.FieldIds));

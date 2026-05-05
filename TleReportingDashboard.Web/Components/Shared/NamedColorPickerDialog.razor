@@ -1,0 +1,188 @@
+@using TleReportingDashboard.Web.Services
+@using MudBlazor
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Palette" />
+            <MudText Typo="Typo.h6">Pick a color</MudText>
+            @if (CurrentHex is not null)
+            {
+                <MudSpacer />
+                <div style="@($"width: 28px; height: 20px; border-radius: 3px; border: 1px solid #DADCE0; background: {CurrentHex};")" title="Current"></div>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-family: monospace;">
+                    @(_currentName ?? CurrentHex)
+                </MudText>
+            }
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 480px;">
+            <MudTextField @bind-Value="_searchText"
+                          Placeholder="Search by name (e.g. blue, mint, fire)..."
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          DebounceInterval="100"
+                          Clearable />
+            @* Scrollable list. Tile-grid layout puts ~3 colors per row
+               on a 480px-wide dialog so 147 entries fit in a moderate
+               scrollable area. Each tile shows a swatch, the CSS
+               name, and the hex — admins can recognize a color by
+               any of the three. Highlighted state on the currently-
+               selected entry so admins see what's set without
+               scrolling. *@
+            <div class="ncp-grid">
+                @foreach (var c in Filtered)
+                {
+                    var hex = c.Hex;
+                    var name = c.Name;
+                    var isSelected = string.Equals(hex, CurrentHex, StringComparison.OrdinalIgnoreCase);
+                    var rowClass = "ncp-row" + (isSelected ? " ncp-row-selected" : string.Empty);
+                    <button type="button" class="@rowClass" @onclick="@(() => Pick(hex))" title="@($"{name} ({hex})")">
+                        <span class="ncp-swatch" style="@($"background: {hex};")"></span>
+                        <span class="ncp-meta">
+                            <span class="ncp-name">@name</span>
+                            <span class="ncp-hex">@hex</span>
+                        </span>
+                    </button>
+                }
+            </div>
+            @if (!Filtered.Any())
+            {
+                <MudAlert Severity="Severity.Info" Dense>
+                    No CSS named color matches "<strong>@_searchText</strong>". Type a different name fragment, or pick a similar color from the full list (clear the search).
+                </MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        @* Custom hex entry — admins can type any color, named or not.
+           Apply confirms; the dialog closes returning the typed hex. *@
+        <MudTextField @bind-Value="_customHex"
+                      Placeholder="#RRGGBB"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="max-width: 140px; font-family: monospace;" />
+        <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                   Disabled="@(!IsValidHex(_customHex))"
+                   OnClick="ApplyCustom">
+            Apply hex
+        </MudButton>
+        <MudSpacer />
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .ncp-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 4px;
+        max-height: 480px;
+        overflow-y: auto;
+        padding: 4px;
+        border: 1px solid #E8EAED;
+        border-radius: 4px;
+        background: #FAFAFA;
+    }
+    .ncp-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        background: #FFFFFF;
+        border: 1px solid #E8EAED;
+        border-radius: 4px;
+        cursor: pointer;
+        text-align: left;
+        font-family: inherit;
+        transition: background-color 60ms ease-in-out, border-color 60ms ease-in-out;
+    }
+    .ncp-row:hover {
+        background-color: #F1F3F4;
+        border-color: #DADCE0;
+    }
+    .ncp-row-selected {
+        border-color: #1A73E8 !important;
+        background-color: #E8F0FE !important;
+    }
+    .ncp-swatch {
+        width: 28px;
+        height: 28px;
+        flex-shrink: 0;
+        border: 1px solid #DADCE0;
+        border-radius: 3px;
+    }
+    .ncp-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+    .ncp-name {
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #202124;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .ncp-hex {
+        font-family: monospace;
+        font-size: 0.65rem;
+        color: #5F6368;
+    }
+</style>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    // Hex of the color the editor currently shows for this token.
+    // Drives the selected-row highlight + the title-bar preview.
+    [Parameter] public string? CurrentHex { get; set; }
+    // Optional label shown in the dialog title so admins remember
+    // which token they're editing (e.g. "Surface — Page background").
+    [Parameter] public string? Label { get; set; }
+
+    private string _searchText = string.Empty;
+    private string _customHex = string.Empty;
+    private string? _currentName;
+
+    private IEnumerable<(string Name, string Hex)> Filtered =>
+        string.IsNullOrWhiteSpace(_searchText)
+            ? CssNamedColors.All
+            : CssNamedColors.All.Where(c =>
+                c.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase));
+
+    protected override void OnInitialized()
+    {
+        _customHex = CurrentHex ?? string.Empty;
+        _currentName = CurrentHex is null ? null : CssNamedColors.NameForHex(CurrentHex);
+    }
+
+    private void Pick(string hex) => MudDialog.Close(DialogResult.Ok(hex));
+
+    private void ApplyCustom()
+    {
+        var v = _customHex.Trim();
+        if (!IsValidHex(v)) return;
+        // Normalize: ensure leading "#" + uppercase the hex digits so
+        // values round-trip through AppTheme JSON without case drift.
+        if (!v.StartsWith('#')) v = "#" + v;
+        v = "#" + v[1..].ToUpperInvariant();
+        MudDialog.Close(DialogResult.Ok(v));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    // Loose hex validation: accepts "#RRGGBB" or "RRGGBB" (case-
+    // insensitive). Skips the 3-digit short form because the AppTheme
+    // model stores 6-digit canonical hexes — admins who type a short
+    // form are nudged toward the full one by the disabled Apply button.
+    private static bool IsValidHex(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return false;
+        var v = s.TrimStart('#');
+        if (v.Length != 6) return false;
+        foreach (var ch in v)
+        {
+            if (!Uri.IsHexDigit(ch)) return false;
+        }
+        return true;
+    }
+}

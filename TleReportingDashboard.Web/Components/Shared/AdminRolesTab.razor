@@ -45,7 +45,12 @@
             <HeaderContent>
                 <MudTh>Name</MudTh>
                 <MudTh>Description</MudTh>
-                <MudTh Style="width: 160px;">Scope</MudTh>
+                <MudTh Style="width: 160px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                        Scope
+                        <HelpHint Text="Row-level filter applied to every report a user with this role runs. 'All records' = no filter. 'Only their own' = WHERE owner = the user's external id. 'Only for their team' = WHERE owner IN (user's team members) using Team Builder config." />
+                    </MudStack>
+                </MudTh>
                 <MudTh Style="width: 100px;">Active</MudTh>
                 <MudTh Style="width: 160px;">Updated</MudTh>
                 <MudTh Style="width: 120px;"></MudTh>

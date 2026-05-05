@@ -1,5 +1,7 @@
 @inject ISharingService SharingService
+@inject INotificationService Notifications
 @inject ISnackbar Snackbar
+@inject ILogger<ShareDialog> Logger
 
 <MudDialog>
     <TitleContent>
@@ -159,12 +161,32 @@
 
             var saved = await SharingService.ShareReportAsync(share);
             _shares.Add(saved);
+
+            // Notify the recipient. Fire-and-forget — share itself succeeded,
+            // a failed notification shouldn't roll back the share. Logged on
+            // failure so admins can audit.
+            try
+            {
+                await Notifications.CreateAsync(
+                    userEmail:          _newShareEmail.Trim(),
+                    kind:               NotificationKinds.ReportShared,
+                    title:              $"\"{ReportName}\" was shared with you",
+                    body:               $"You now have {_newSharePermission} access. Open it from the Report Library or follow the link.",
+                    linkUrl:            $"/viewer/{ReportId}",
+                    relatedEntityType:  "report",
+                    relatedEntityId:    ReportId.ToString());
+            }
+            catch (Exception nex)
+            {
+                Logger.LogWarning(nex, "Share saved but notification dispatch failed for {Email}", _newShareEmail);
+            }
+
             _newShareEmail = string.Empty;
             _newSharePermission = "viewer";
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Share failed: {ex.Message}", Severity.Error);
+            Snackbar.Add(FriendlyError.FromException(ex, Logger, "sharing report"), Severity.Error);
         }
         finally
         {

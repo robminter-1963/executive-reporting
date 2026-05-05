@@ -1,0 +1,291 @@
+@using TleReportingDashboard.Web.Services
+@using MudBlazor
+@inject IThemeService ThemeSvc
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ILogger<AdminThemeTab> Logger
+
+<MudStack Spacing="3" Class="pa-2">
+    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Style="max-width: 720px;">
+            Tune the app-wide color palette. Changes save to a single
+            <code>RPT_app_theme</code> row and apply to every user on
+            their next page load. Click any swatch to open the picker;
+            <strong>Reset to defaults</strong> reverts every token to the
+            seeded values without saving.
+        </MudText>
+        <MudStack Row Spacing="1">
+            <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                       StartIcon="@Icons.Material.Filled.RestartAlt"
+                       OnClick="ResetToDefaults">
+                Reset to defaults
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Save"
+                       Disabled="@_saving"
+                       OnClick="Save">
+                @(_saving ? "Saving..." : "Save")
+            </MudButton>
+        </MudStack>
+    </MudStack>
+
+    @if (_loading)
+    {
+        <QueryProgress Active="true" />
+    }
+    else
+    {
+        @* Group the 14 tokens visually so the admin understands what
+           each one paints. Each group is its own MudPaper card with a
+           heading + a flex row of swatches. *@
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
+            <MudText Typo="Typo.subtitle2" Style="margin-bottom: 8px;">Surfaces</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-bottom: 12px;">
+                Backgrounds for the page, top app bar, tiles/cards, and secondary strips (tab strips, section headers).
+            </MudText>
+            <div class="theme-token-grid">
+                @TokenSwatch("Page background",     _theme.SurfacePage,     v => _theme.SurfacePage = v)
+                @TokenSwatch("Top app bar",         _theme.SurfaceToolbar,  v => _theme.SurfaceToolbar = v)
+                @TokenSwatch("Tile / card",         _theme.SurfaceCard,     v => _theme.SurfaceCard = v)
+                @TokenSwatch("Strip (tabs, etc.)",  _theme.SurfaceStrip,    v => _theme.SurfaceStrip = v)
+            </div>
+        </MudPaper>
+
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
+            <MudText Typo="Typo.subtitle2" Style="margin-bottom: 8px;">Text</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-bottom: 12px;">
+                Body text on light surfaces (primary), captions and labels (secondary), placeholders and hints (muted), and text + icons sitting inside the dark app bar.
+            </MudText>
+            <div class="theme-token-grid">
+                @TokenSwatch("Primary",            _theme.TextPrimary,    v => _theme.TextPrimary = v)
+                @TokenSwatch("Secondary",          _theme.TextSecondary,  v => _theme.TextSecondary = v)
+                @TokenSwatch("Muted",              _theme.TextMuted,      v => _theme.TextMuted = v)
+                @TokenSwatch("On top app bar",     _theme.TextOnToolbar,  v => _theme.TextOnToolbar = v)
+            </div>
+        </MudPaper>
+
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
+            <MudText Typo="Typo.subtitle2" Style="margin-bottom: 8px;">Borders &amp; dividers</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-bottom: 12px;">
+                Card borders and dashed empty-state outlines (default), and lighter inline dividers (subtle).
+            </MudText>
+            <div class="theme-token-grid">
+                @TokenSwatch("Default",            _theme.BorderDefault, v => _theme.BorderDefault = v)
+                @TokenSwatch("Subtle",             _theme.BorderSubtle,  v => _theme.BorderSubtle = v)
+            </div>
+        </MudPaper>
+
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
+            <MudText Typo="Typo.subtitle2" Style="margin-bottom: 8px;">Accents</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-bottom: 12px;">
+                Brand color (primary buttons, links, drag indicators) plus the three semantic state colors. Status chips that map to data states keep their built-in colors regardless.
+            </MudText>
+            <div class="theme-token-grid">
+                @TokenSwatch("Primary",            _theme.AccentPrimary, v => _theme.AccentPrimary = v)
+                @TokenSwatch("Success",            _theme.AccentSuccess, v => _theme.AccentSuccess = v)
+                @TokenSwatch("Warning",            _theme.AccentWarning, v => _theme.AccentWarning = v)
+                @TokenSwatch("Error",              _theme.AccentError,   v => _theme.AccentError = v)
+            </div>
+        </MudPaper>
+
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
+            <MudText Typo="Typo.subtitle2" Style="margin-bottom: 8px;">Data tables</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-bottom: 12px;">
+                The header band, row striping, and hover tint shared by every grid in the app — Report Library, Report Viewer, Detail View, admin tables.
+            </MudText>
+            <div class="theme-token-grid">
+                @TokenSwatch("Header band",        _theme.TableHeaderBg,   v => _theme.TableHeaderBg = v)
+                @TokenSwatch("Row hover",          _theme.TableRowHover,   v => _theme.TableRowHover = v)
+                @TokenSwatch("Striped row",        _theme.TableRowStriped, v => _theme.TableRowStriped = v)
+            </div>
+        </MudPaper>
+
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
+            <MudText Typo="Typo.subtitle2" Style="margin-bottom: 8px;">Master Dashboard — tile chrome</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-bottom: 12px;">
+                Each tile's chrome — the title band at the top (report name + tile-level controls) and the metadata strip at the bottom (row count + freshness stamp). Independent from the data grid INSIDE the tile, which has its own pair below.
+            </MudText>
+            <div class="theme-token-grid">
+                @TokenSwatch("Header bg",          _theme.DashboardHeaderBg,   v => _theme.DashboardHeaderBg = v)
+                @TokenSwatch("Header text",        _theme.DashboardHeaderText, v => _theme.DashboardHeaderText = v)
+                @TokenSwatch("Footer bg",          _theme.DashboardFooterBg,   v => _theme.DashboardFooterBg = v)
+                @TokenSwatch("Footer text",        _theme.DashboardFooterText, v => _theme.DashboardFooterText = v)
+            </div>
+        </MudPaper>
+
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
+            <MudText Typo="Typo.subtitle2" Style="margin-bottom: 8px;">Master Dashboard — tile data grid</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-bottom: 12px;">
+                The data table rendered inside each tile. Header band paints the sortable column-header row; footer band paints the sticky totals row at the bottom. Defaults match the legacy <code>lightblue</code> / <code>cornsilk</code> palette.
+            </MudText>
+            <div class="theme-token-grid">
+                @TokenSwatch("Grid header bg",      _theme.DashboardGridHeaderBg,   v => _theme.DashboardGridHeaderBg = v)
+                @TokenSwatch("Grid header text",    _theme.DashboardGridHeaderText, v => _theme.DashboardGridHeaderText = v)
+                @TokenSwatch("Grid footer bg",      _theme.DashboardGridFooterBg,   v => _theme.DashboardGridFooterBg = v)
+                @TokenSwatch("Grid footer text",    _theme.DashboardGridFooterText, v => _theme.DashboardGridFooterText = v)
+            </div>
+        </MudPaper>
+
+        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
+            <MudText Typo="Typo.subtitle2" Style="margin-bottom: 8px;">Detail view — group &amp; total rows</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block; margin-bottom: 12px;">
+                The drill-down Detail View groups rows by a chosen field and renders a header band, group footer (subtotal) band, and a sticky grand-total row at the bottom. Each band has its own background and text color so admins can keep heavy-data screens readable.
+            </MudText>
+            <div class="theme-token-grid">
+                @TokenSwatch("Group header bg",        _theme.DetailGroupHeaderBg,   v => _theme.DetailGroupHeaderBg = v)
+                @TokenSwatch("Group header text",      _theme.DetailGroupHeaderText, v => _theme.DetailGroupHeaderText = v)
+                @TokenSwatch("Group footer bg",        _theme.DetailGroupFooterBg,   v => _theme.DetailGroupFooterBg = v)
+                @TokenSwatch("Group footer text",      _theme.DetailGroupFooterText, v => _theme.DetailGroupFooterText = v)
+                @TokenSwatch("Grand total bg",         _theme.DetailGrandTotalBg,    v => _theme.DetailGrandTotalBg = v)
+                @TokenSwatch("Grand total text",       _theme.DetailGrandTotalText,  v => _theme.DetailGrandTotalText = v)
+            </div>
+        </MudPaper>
+
+        <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+            Theme changes apply on the next page load. Refresh your browser after saving to see them; other signed-in users see the new palette on their next navigation.
+        </MudAlert>
+    }
+</MudStack>
+
+<style>
+    .theme-token-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 12px;
+    }
+    .theme-token-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 12px;
+        border: 1px solid #E8EAED;
+        border-radius: 4px;
+        background: #FAFAFA;
+    }
+    .theme-token-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+    .theme-token-label { font-size: 0.85rem; font-weight: 500; color: #202124; }
+    .theme-token-hex   { font-family: monospace; font-size: 0.7rem; color: #5F6368; }
+
+    /* Plain HTML button styled as a color swatch tile. Background
+       drives off the inline `style` attribute (set per-token to the
+       current hex). Hover lifts the border to hint clickability. */
+    .theme-token-swatch-btn {
+        width: 44px;
+        height: 32px;
+        padding: 0;
+        border: 1px solid #DADCE0;
+        border-radius: 4px;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: border-color 80ms ease-in-out, transform 80ms ease-in-out;
+    }
+    .theme-token-swatch-btn:hover {
+        border-color: #1A73E8;
+        transform: scale(1.05);
+    }
+    .theme-token-swatch-btn:active {
+        transform: scale(0.97);
+    }
+    .theme-token-swatch-btn:focus-visible {
+        outline: 2px solid #1A73E8;
+        outline-offset: 2px;
+    }
+</style>
+
+@code {
+    [Parameter] public string CurrentUserEmail { get; set; } = string.Empty;
+
+    private AppTheme _theme = AppTheme.Default();
+    private bool _loading = true;
+    private bool _saving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _theme = await ThemeSvc.GetAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Theme load failed in admin tab — showing defaults.");
+            _theme = AppTheme.Default();
+        }
+        _loading = false;
+    }
+
+    // RenderFragment helper so each token row stays a one-liner in the
+    // markup. The MudColorPicker is keyed off the live token value;
+    // ValueChanged routes back through the supplied setter so each
+    // swatch update mutates the right field on _theme.
+    private RenderFragment TokenSwatch(string label, string value, Action<string> setter) => __builder =>
+    {
+        // Each tile is a button that opens the named-color picker
+        // dialog. The dialog returns the picked hex (named or custom);
+        // setter mutates the right field on _theme and StateHasChanged
+        // refreshes the swatch + hex caption. Resolving the CSS name
+        // for the current hex (when one matches) gives the user a
+        // recognizable label — "DodgerBlue" reads better than "#1E90FF".
+        var name = CssNamedColors.NameForHex(value);
+        <div class="theme-token-card">
+            <div class="theme-token-meta">
+                <span class="theme-token-label">@label</span>
+                <span class="theme-token-hex">@(name is null ? value : $"{name} ({value})")</span>
+            </div>
+            <button type="button" class="theme-token-swatch-btn"
+                    style="@($"background: {value};")"
+                    title="@($"Click to change — currently {(name is null ? value : $"{name} ({value})")}")"
+                    @onclick="@(() => OpenColorPicker(label, value, setter))">
+            </button>
+        </div>
+    };
+
+    private async Task OpenColorPicker(string label, string current, Action<string> setter)
+    {
+        var dialogParams = new DialogParameters<NamedColorPickerDialog>
+        {
+            { x => x.CurrentHex, current },
+            { x => x.Label, label }
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+        var dialog = await DialogService.ShowAsync<NamedColorPickerDialog>($"Pick — {label}", dialogParams, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        if (result.Data is string picked && !string.IsNullOrWhiteSpace(picked))
+        {
+            setter(picked);
+            StateHasChanged();
+        }
+    }
+
+    private async Task Save()
+    {
+        _saving = true;
+        try
+        {
+            await ThemeSvc.SaveAsync(_theme, CurrentUserEmail);
+            Snackbar.Add("Theme saved. Refresh your browser to see the new palette.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(FriendlyError.FromException(ex, Logger, "saving theme"), Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // Reverts the editor to AppTheme.Default() WITHOUT saving — admins
+    // confirm with Save if they actually want to commit. Lets them
+    // preview the seed palette in the swatches first.
+    private void ResetToDefaults()
+    {
+        _theme = AppTheme.Default();
+    }
+}

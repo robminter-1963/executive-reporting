@@ -738,8 +738,9 @@
         position: sticky;
         top: 0;
         z-index: 2;
-        background: lightblue;
-        border-bottom: 1px solid #DADCE0;
+        background: var(--dashboard-grid-header-bg, lightblue);
+        color: var(--dashboard-grid-header-text, #202124);
+        border-bottom: 1px solid var(--border-default, #DADCE0);
         padding: 4px 8px;
         font-weight: 600;
         white-space: nowrap;
@@ -807,11 +808,17 @@
         border: none;
     }
     .dash-footer-row {
-        background: cornsilk;
-        border-top: 2px solid #DADCE0;
+        background: var(--dashboard-grid-footer-bg, cornsilk);
+        color: var(--dashboard-grid-footer-text, #202124);
+        border-top: 2px solid var(--border-default, #DADCE0);
         cursor: pointer;
     }
     .dash-footer-row:hover td {
+        /* Slightly-darker tint of the footer bg for hover. The tint
+           stays hardcoded since deriving a "darker N%" from an
+           arbitrary admin-set color requires JS color math; admins
+           who change the footer bg get a usable hover via the base
+           color landing on a slightly lighter shade. */
         background: #F2EAC0;
     }
     .dash-footer-cell {
@@ -820,8 +827,9 @@
         white-space: nowrap;
         position: sticky;
         bottom: 0;
-        background: cornsilk;
-        border-top: 2px solid #DADCE0;
+        background: var(--dashboard-grid-footer-bg, cornsilk);
+        color: var(--dashboard-grid-footer-text, #202124);
+        border-top: 2px solid var(--border-default, #DADCE0);
     }
     .dash-footer-cell .totals-menu-anchor {
         position: absolute;
@@ -856,6 +864,12 @@
     // page breadcrumb shows the user came from the Master Dashboard instead of
     // the Report Library.
     [Parameter] public bool DetailFromDashboard { get; set; }
+    // Label of the Master Dashboard tab this view is rendered on. Forwarded
+    // as a `?tab=...` query param when the user drills into the detail
+    // view, so the detail page heading reads "TabName - ReportName".
+    // Null/empty when the view isn't on a tabbed dashboard (Report Viewer
+    // path) or when the tab has no label.
+    [Parameter] public string? DashboardTabName { get; set; }
     // Field ids to suppress from any grid the view renders (drill-down
     // detail, fallback table). Merged template + report hidden lists,
     // computed upstream. Null means "no hides" — same as empty list.
@@ -1418,6 +1432,15 @@
             // the user actually came from (Master Dashboard vs Report Viewer).
             if (DetailFromDashboard)
                 url += url.Contains('?') ? "&from=dashboard" : "?from=dashboard";
+            // Tab name lets the detail page render "TabName - ReportName".
+            // Encoded so values with spaces / punctuation (e.g. "Q1 / 2026")
+            // round-trip through the URL cleanly.
+            if (!string.IsNullOrWhiteSpace(DashboardTabName))
+            {
+                url += url.Contains('?')
+                    ? "&tab=" + Uri.EscapeDataString(DashboardTabName)
+                    : "?tab=" + Uri.EscapeDataString(DashboardTabName);
+            }
             await JS.InvokeVoidAsync("open", url, "_blank");
             return;
         }
@@ -1969,10 +1992,15 @@
             _dashDragSource = -1; _dashDropTarget = -1;
             return;
         }
+        // Drop semantic: dragging RIGHT drops AFTER the target column;
+        // dragging LEFT drops BEFORE. Both collapse to "insert at the
+        // target's pre-removal index" — same reasoning as the other
+        // drag-drop reorder sites. The earlier `targetIndex - 1`
+        // over-correction made dropping on the rightmost column land
+        // the source second-to-last.
         var item = _dashColumnOrder[_dashDragSource];
         _dashColumnOrder.RemoveAt(_dashDragSource);
-        var insertAt = targetIndex > _dashDragSource ? targetIndex - 1 : targetIndex;
-        insertAt = Math.Clamp(insertAt, 0, _dashColumnOrder.Count);
+        var insertAt = Math.Clamp(targetIndex, 0, _dashColumnOrder.Count);
         _dashColumnOrder.Insert(insertAt, item);
         _dashDragSource = -1; _dashDropTarget = -1;
     }

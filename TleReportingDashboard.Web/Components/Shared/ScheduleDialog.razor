@@ -1,4 +1,7 @@
 @using TleReportingDashboard.Web.Services
+@using TleReportingDashboard.Web.Models
+@inject IReportService ReportService
+@inject ITeamSourceService TeamSource
 
 <MudDialog>
     <TitleContent>
@@ -20,22 +23,124 @@
                           RequiredError="Subject is required."
                           Placeholder="e.g. Weekly Loan Pipeline Report" />
 
-            @* ── Recipients (SSRS-style) ── *@
+            @* ── Recipients ── *@
             <MudDivider />
             <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Recipients</MudText>
-            <MudText Typo="Typo.caption" Color="Color.Secondary">
-                Separate multiple addresses with semicolons (;). The owner (@UserEmail) is always on TO.
-            </MudText>
 
-            <MudTextField @bind-Value="_recipients" Label="To (additional)" Variant="Variant.Outlined"
-                          Margin="Margin.Dense"
-                          Placeholder="alice@ralisservices.com; bob@ralisservices.com" />
+            <MudRadioGroup T="ScheduleKind" @bind-Value="_kind">
+                <MudRadio T="ScheduleKind" Value="ScheduleKind.Individual" Color="Color.Primary">
+                    <strong>Individual</strong> — one personalized, scope-filtered copy per team member
+                </MudRadio>
+                <MudRadio T="ScheduleKind" Value="ScheduleKind.Distribution" Color="Color.Primary">
+                    <strong>Distribution</strong> — one email to a shared mailbox / dist-list address
+                </MudRadio>
+            </MudRadioGroup>
 
-            <MudTextField @bind-Value="_ccRecipients" Label="Cc" Variant="Variant.Outlined"
-                          Margin="Margin.Dense" />
+            @if (_kind == ScheduleKind.Individual)
+            {
+                @* Individual: pick a Team Builder team on the report's
+                   connection. The Worker fan-out resolves each member's
+                   email + role at fire time and applies their per-role
+                   scope rule, so admins on the team get the unfiltered
+                   view and self-scoped agents get their own loans. *@
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Each team member receives a personalized export filtered by their role's scope rule.
+                    Members not registered as app users on the report's connection are skipped with a logged warning.
+                </MudText>
 
-            <MudTextField @bind-Value="_bccRecipients" Label="Bcc" Variant="Variant.Outlined"
-                          Margin="Margin.Dense" />
+                @if (_reportConnectionId is null)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense>
+                        This report has no connection set, so a team can't be picked. Save the report with a connection first.
+                    </MudAlert>
+                }
+                else if (_loadingTeams)
+                {
+                    <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
+                        <MudProgressCircular Indeterminate Size="Size.Small" />
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Loading teams…</MudText>
+                    </MudStack>
+                }
+                else if (_availableTeams.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Dense>
+                        No teams returned by this connection's Team Builder configuration.
+                        Configure <strong>Teams SQL</strong> in Admin → Team Builder.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudSelect T="int?" @bind-Value="_teamId" Label="Team"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
+                        @foreach (var t in _availableTeams)
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)t.TeamId)">
+                                @(t.TeamName ?? $"team {t.TeamId}")
+                                @(string.IsNullOrEmpty(t.TeamType) ? "" : $" · {t.TeamType}")
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    @if (_teamId is not null)
+                    {
+                        <MudButton Variant="Variant.Text" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.People"
+                                   OnClick="ToggleMembersPreview">
+                            @(_showMembers ? "Hide members" : "Preview members")
+                        </MudButton>
+                        @if (_showMembers)
+                        {
+                            @if (_loadingMembers)
+                            {
+                                <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
+                                    <MudProgressCircular Indeterminate Size="Size.Small" />
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">Loading members…</MudText>
+                                </MudStack>
+                            }
+                            else if (!string.IsNullOrEmpty(_membersError))
+                            {
+                                <MudAlert Severity="Severity.Error" Dense>@_membersError</MudAlert>
+                            }
+                            else if (MembersForSelected().Count == 0)
+                            {
+                                <MudAlert Severity="Severity.Info" Dense>
+                                    No members returned for this team — the schedule will fail at fire time.
+                                </MudAlert>
+                            }
+                            else
+                            {
+                                <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; max-height: 200px; overflow-y: auto;">
+                                    <MudTable Items="MembersForSelected()" Dense T="TeamMemberRecord" Class="pa-0">
+                                        <HeaderContent>
+                                            <MudTh Style="width: 200px;">Login</MudTh>
+                                            <MudTh>Name</MudTh>
+                                        </HeaderContent>
+                                        <RowTemplate>
+                                            <MudTd><code>@context.MemberExtId</code></MudTd>
+                                            <MudTd>@(string.IsNullOrEmpty(context.MemberName) ? "—" : context.MemberName)</MudTd>
+                                        </RowTemplate>
+                                    </MudTable>
+                                </MudPaper>
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                @* Distribution: one shared address. The mail server fans
+                   out to its members; we never see the member list. No
+                   per-recipient scoping applies — the saved report's own
+                   filters are the only filtering. *@
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    The saved report's filters are the only filtering applied. Scope rules cannot be applied to a shared mailbox.
+                </MudText>
+
+                <MudTextField @bind-Value="_distEmail" Label="Distribution email"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Required RequiredError="Distribution email is required."
+                              Placeholder="loanteam@ralisservices.com" />
+            }
 
             @* ── Trigger ── *@
             <MudDivider />
@@ -187,9 +292,32 @@
     [Parameter] public ReportSchedule? ExistingSchedule { get; set; }
 
     private string _subject = string.Empty;
+    // Deprecated string fields preserved so an existing schedule round-
+    // trips its old values back into the DB without loss while the
+    // codebase finishes migrating to Kind+Team / Kind+DistEmail. Not
+    // surfaced in the UI any more.
     private string _recipients = string.Empty;
     private string _ccRecipients = string.Empty;
     private string _bccRecipients = string.Empty;
+
+    // Kind + per-kind state. Defaults: Individual, since the most common
+    // request driving this feature is "send each agent their own loans."
+    private ScheduleKind _kind = ScheduleKind.Individual;
+    private int? _teamId;
+    private string _distEmail = string.Empty;
+
+    // Loaded once on init from the saved report so the team picker can
+    // query Team Builder for that connection without making the caller
+    // pass it in.
+    private Guid? _reportConnectionId;
+    private List<TeamRecord> _availableTeams = new();
+    private bool _loadingTeams;
+
+    // Lazy members preview state — same pattern as the Team Builder tab.
+    private bool _showMembers;
+    private bool _loadingMembers;
+    private List<TeamMemberRecord>? _allMembers;
+    private string? _membersError;
 
     private string _type = "Daily";
     private int _interval = 1;
@@ -210,9 +338,11 @@
         !string.IsNullOrWhiteSpace(_subject)
         && _time.HasValue
         && (_type != "Weekly" || _daysOfWeek.Count > 0)
-        && (_type != "Monthly" || _monthlyMode == "Ordinal" || _daysOfMonth.Count > 0);
+        && (_type != "Monthly" || _monthlyMode == "Ordinal" || _daysOfMonth.Count > 0)
+        && (_kind != ScheduleKind.Individual || (_reportConnectionId is not null && _teamId is not null))
+        && (_kind != ScheduleKind.Distribution || !string.IsNullOrWhiteSpace(_distEmail));
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         if (ExistingSchedule is not null)
         {
@@ -224,6 +354,9 @@
             _includePreview = ExistingSchedule.IncludePreview;
             _startDate = ExistingSchedule.StartDate;
             _endDate = ExistingSchedule.EndDate;
+            _kind = ExistingSchedule.Kind;
+            _teamId = ExistingSchedule.TeamId;
+            _distEmail = ExistingSchedule.DistEmail ?? string.Empty;
 
             var pattern = SchedulePattern.FromJson(ExistingSchedule.SchedulePatternJson);
             _type = pattern.Type;
@@ -238,6 +371,72 @@
                 _monthlyDayOfWeek = pattern.MonthlyDayOfWeek ?? DayOfWeek.Monday;
             }
         }
+
+        // Pull the report's connection so the team picker has a target
+        // for QueryTeamsAsync. Falls back to the existing schedule's
+        // saved team_connection_id when the report has been re-pointed
+        // since the schedule was last saved (rare but possible).
+        var report = await ReportService.GetReportByIdAsync(ReportId);
+        _reportConnectionId = report?.ConnectionId
+                              ?? ExistingSchedule?.TeamConnectionId;
+
+        if (_reportConnectionId is Guid cid)
+        {
+            await LoadTeamsAsync(cid);
+        }
+    }
+
+    private async Task LoadTeamsAsync(Guid connectionId)
+    {
+        _loadingTeams = true;
+        try
+        {
+            _availableTeams = await TeamSource.QueryTeamsAsync(connectionId);
+        }
+        catch
+        {
+            // Couldn't load teams (bad SQL, source unreachable, etc.).
+            // Leave the list empty — the conditional UI surfaces the
+            // empty state. Surfacing the raw error here would confuse
+            // schedule-authoring; admins debug Team Builder on its own
+            // tab.
+            _availableTeams = new();
+        }
+        finally
+        {
+            _loadingTeams = false;
+        }
+    }
+
+    private async Task ToggleMembersPreview()
+    {
+        _showMembers = !_showMembers;
+        if (!_showMembers || _allMembers is not null) return;
+        if (_reportConnectionId is not Guid cid) return;
+
+        _loadingMembers = true;
+        _membersError = null;
+        try
+        {
+            _allMembers = await TeamSource.QueryMembersAsync(cid);
+        }
+        catch (Exception ex)
+        {
+            _membersError = ex.Message;
+        }
+        finally
+        {
+            _loadingMembers = false;
+        }
+    }
+
+    private List<TeamMemberRecord> MembersForSelected()
+    {
+        if (_teamId is not int tid || _allMembers is null) return new();
+        return _allMembers
+            .Where(m => m.TeamId == tid)
+            .OrderBy(m => m.MemberName ?? m.MemberExtId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private void ToggleDayOfWeek(DayOfWeek d)
@@ -281,6 +480,10 @@
             };
 
         schedule.Subject = _subject;
+        // Carry the deprecated string fields through so a round-trip
+        // through this dialog doesn't drop them. New schedules leave
+        // them null; edits of older schedules preserve whatever was
+        // there. The Worker no longer reads them.
         schedule.Recipients = string.IsNullOrWhiteSpace(_recipients) ? null : _recipients.Trim();
         schedule.CcRecipients = string.IsNullOrWhiteSpace(_ccRecipients) ? null : _ccRecipients.Trim();
         schedule.BccRecipients = string.IsNullOrWhiteSpace(_bccRecipients) ? null : _bccRecipients.Trim();
@@ -290,6 +493,22 @@
         schedule.EndDate = _endDate;
         schedule.AttachmentFormat = _attachmentFormat;
         schedule.IncludePreview = _includePreview;
+
+        // Kind-specific fields. Clear the unused side so a kind switch
+        // doesn't leave stale values behind on either path.
+        schedule.Kind = _kind;
+        if (_kind == ScheduleKind.Individual)
+        {
+            schedule.TeamId = _teamId;
+            schedule.TeamConnectionId = _reportConnectionId;
+            schedule.DistEmail = null;
+        }
+        else
+        {
+            schedule.TeamId = null;
+            schedule.TeamConnectionId = null;
+            schedule.DistEmail = string.IsNullOrWhiteSpace(_distEmail) ? null : _distEmail.Trim();
+        }
 
         MudDialog?.Close(DialogResult.Ok(schedule));
     }

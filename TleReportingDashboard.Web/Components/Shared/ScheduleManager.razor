@@ -33,6 +33,30 @@
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
                                     @DescribeTrigger(schedule)
                                 </MudText>
+                                @* Kind-aware target line. Individual schedules show
+                                   the team; Distribution shows the dist email. We
+                                   still render the legacy semicolon-list chips
+                                   beneath them so a schedule that pre-dates the
+                                   kind migration (string fields populated, kind
+                                   defaulted) still tells the admin where the
+                                   email is going. *@
+                                @if (schedule.Kind == ScheduleKind.Individual && schedule.TeamId is int tid)
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Primary">
+                                        <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Style="vertical-align: middle;" />
+                                        Individual — team @tid (one personalized copy per member)
+                                    </MudText>
+                                }
+                                else if (schedule.Kind == ScheduleKind.Distribution
+                                         && !string.IsNullOrWhiteSpace(schedule.DistEmail))
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Primary"
+                                             Style="overflow-wrap: anywhere;">
+                                        <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small" Style="vertical-align: middle;" />
+                                        Distribution — @schedule.DistEmail
+                                    </MudText>
+                                }
+
                                 @if (!string.IsNullOrWhiteSpace(schedule.Recipients))
                                 {
                                     <MudText Typo="Typo.caption" Color="Color.Secondary"
@@ -63,12 +87,33 @@
                                         Last run: @schedule.LastRunAt.Value.ToString("MMM dd, yyyy HH:mm")
                                     </MudText>
                                 }
+                                @* Last-run headline. With the kind-aware Worker
+                                   this string is the per-fan-out summary
+                                   ("3/5 sent. 2 skipped: jdoe; msmith") and is
+                                   the primary debugging surface — show it in
+                                   full so admins don't have to hover a tooltip
+                                   to find out what happened. Title attribute
+                                   carries the full text in case it wraps. *@
+                                @if (!string.IsNullOrWhiteSpace(schedule.LastRunStatus))
+                                {
+                                    <MudText Typo="Typo.caption"
+                                             Color="@(IsRunStatusFailed(schedule) ? Color.Error : Color.Secondary)"
+                                             Style="overflow-wrap: anywhere;"
+                                             title="@schedule.LastRunStatus">
+                                        Status: @schedule.LastRunStatus
+                                    </MudText>
+                                }
                             </MudStack>
 
-                            @* Status badge *@
-                            @if (schedule.LastRunStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)
+                            @* Status badge. The Worker's new headline shape
+                               ("N/M sent...") never matches the literal
+                               "Failed" string, so the badge logic checks for
+                               the structural failure signals: legacy "Failed:"
+                               prefix, or "0/M sent" meaning no recipient got
+                               through. *@
+                            @if (IsRunStatusFailed(schedule))
                             {
-                                <MudTooltip Text="@($"Failed: {schedule.LastRunStatus} ({schedule.ConsecutiveFailures} consecutive failures)")">
+                                <MudTooltip Text="@($"{schedule.LastRunStatus} ({schedule.ConsecutiveFailures} consecutive failure{(schedule.ConsecutiveFailures == 1 ? "" : "s")})")">
                                     <MudChip T="string" Size="Size.Small" Color="Color.Error"
                                              Variant="Variant.Filled">
                                         Failed
@@ -247,6 +292,24 @@
                 Snackbar.Add($"Failed to delete schedule: {ex.Message}", Severity.Error);
             }
         }
+    }
+
+    // Failed badge logic. The Worker's headline can take a few shapes:
+    //   * "Failed: <error>" — outer-shell catch
+    //   * "0/N sent" — legacy header from prior Worker builds
+    //   * "3 sent. 1 failed: alice — SMTP timeout" — current per-
+    //     recipient summary; "failed:" clause = real delivery error
+    //   * "3 sent. 1 with rows but no email: jdoe" — config gap, NOT
+    //     a failure; surfaced in caption text but doesn't paint red
+    //   * "Ran — no recipients had data this run." — quiet success
+    private static bool IsRunStatusFailed(ReportSchedule schedule)
+    {
+        var status = schedule.LastRunStatus;
+        if (string.IsNullOrWhiteSpace(status)) return false;
+        if (status.StartsWith("Failed:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (status.StartsWith("0/", StringComparison.Ordinal)) return true;
+        if (status.Contains("failed:", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     private static string DescribeTrigger(ReportSchedule schedule)

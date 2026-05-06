@@ -131,6 +131,31 @@ public sealed class QueryScopingInfo
     public string? OwnerFieldId { get; set; }
     public string? ExternalUserId { get; set; }
 
+    // Direct-column scope: like self-scope, but bypasses the schema's
+    // field-id catalog and consumes a raw owner-column reference instead.
+    // Used by the scheduled-report Worker on Individual schedules — the
+    // Worker derives the column from Team Builder's team_type → owner
+    // column map and the value(s) from the team's roster, without ever
+    // touching RPT_users / RPT_user_connection_logins / role resolution.
+    // Wins over OwnerFieldId when both are set.
+    //
+    //   * OwnerColumn — raw identifier (e.g. "PROCESSOR_USERID") or a
+    //                   pre-qualified alias.column ("BORR.LOAN_NO").
+    //                   Auto-prefixed with PrimaryAlias when unqualified
+    //                   to mirror the team-scope behavior.
+    //   * PrimaryAlias — used to qualify a bare column. Caller supplies
+    //                   from PrimaryTableRef.Parse so the alias matches
+    //                   what the emitter actually uses in FROM.
+    //   * ExternalUserId — single-value form, emits "col = @p".
+    //   * ExternalUserIds — multi-value form, emits "col IN (@p0, @p1, …)".
+    //                   Wins over ExternalUserId. Used by the Worker's
+    //                   "fetch once, group by owner" Individual flow so
+    //                   one round-trip can pull every team member's
+    //                   rows in a single pass.
+    public string? OwnerColumn { get; set; }
+    public string? PrimaryAlias { get; set; }
+    public IReadOnlyList<string>? ExternalUserIds { get; set; }
+
     // Team-scope (scope_rule = 'team'): match rows by ANY of the user's
     // teams. Mutually exclusive with the self-scope pair above — a role
     // has one scope_rule at a time, so only one of the two branches is

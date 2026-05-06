@@ -72,6 +72,31 @@ public sealed class AppTheme
     [JsonPropertyName("detailGrandTotalBg")]    public string DetailGrandTotalBg    { get; set; } = "#F7F7F7";
     [JsonPropertyName("detailGrandTotalText")]  public string DetailGrandTotalText  { get; set; } = "#202124";
 
+    // Word-style text formatting per band. Bold / Italic / Underline
+    // are booleans that emit font-weight, font-style, text-decoration.
+    // FontFamily / FontSize are free-form CSS strings (e.g. "Arial",
+    // "0.875rem", "14px"). Empty string → "inherit" — the band stays
+    // visually identical to the surrounding text. Defaults preserve
+    // the previously-hardcoded weights (headers / footers / totals
+    // were 600-700; collapsed to 700 here with negligible visual diff).
+    [JsonPropertyName("detailGroupHeaderBold")]       public bool   DetailGroupHeaderBold       { get; set; } = true;
+    [JsonPropertyName("detailGroupHeaderItalic")]     public bool   DetailGroupHeaderItalic     { get; set; } = false;
+    [JsonPropertyName("detailGroupHeaderUnderline")]  public bool   DetailGroupHeaderUnderline  { get; set; } = false;
+    [JsonPropertyName("detailGroupHeaderFontFamily")] public string DetailGroupHeaderFontFamily { get; set; } = "";
+    [JsonPropertyName("detailGroupHeaderFontSize")]   public string DetailGroupHeaderFontSize   { get; set; } = "";
+
+    [JsonPropertyName("detailGroupFooterBold")]       public bool   DetailGroupFooterBold       { get; set; } = true;
+    [JsonPropertyName("detailGroupFooterItalic")]     public bool   DetailGroupFooterItalic     { get; set; } = false;
+    [JsonPropertyName("detailGroupFooterUnderline")]  public bool   DetailGroupFooterUnderline  { get; set; } = false;
+    [JsonPropertyName("detailGroupFooterFontFamily")] public string DetailGroupFooterFontFamily { get; set; } = "";
+    [JsonPropertyName("detailGroupFooterFontSize")]   public string DetailGroupFooterFontSize   { get; set; } = "";
+
+    [JsonPropertyName("detailGrandTotalBold")]        public bool   DetailGrandTotalBold        { get; set; } = true;
+    [JsonPropertyName("detailGrandTotalItalic")]      public bool   DetailGrandTotalItalic      { get; set; } = false;
+    [JsonPropertyName("detailGrandTotalUnderline")]   public bool   DetailGrandTotalUnderline   { get; set; } = false;
+    [JsonPropertyName("detailGrandTotalFontFamily")]  public string DetailGrandTotalFontFamily  { get; set; } = "";
+    [JsonPropertyName("detailGrandTotalFontSize")]    public string DetailGrandTotalFontSize    { get; set; } = "";
+
     // ── Master Dashboard tile header / footer ──
     // Each tile renders as: header band (title + tile-level controls) →
     // content area (chart / grid / etc.) → footer band (row count +
@@ -84,6 +109,22 @@ public sealed class AppTheme
     [JsonPropertyName("dashboardFooterBg")]   public string DashboardFooterBg   { get; set; } = "#FAFAFA";
     [JsonPropertyName("dashboardFooterText")] public string DashboardFooterText { get; set; } = "#5F6368";
 
+    // Tile-chrome text formatting (paired with the *Text / *Bg tokens
+    // above). Header defaults to bold to match the previously-inline
+    // font-weight: 700 on the tile title; footer stays normal-weight
+    // since it's a low-visual-priority metadata strip.
+    [JsonPropertyName("dashboardHeaderBold")]       public bool   DashboardHeaderBold       { get; set; } = true;
+    [JsonPropertyName("dashboardHeaderItalic")]     public bool   DashboardHeaderItalic     { get; set; } = false;
+    [JsonPropertyName("dashboardHeaderUnderline")]  public bool   DashboardHeaderUnderline  { get; set; } = false;
+    [JsonPropertyName("dashboardHeaderFontFamily")] public string DashboardHeaderFontFamily { get; set; } = "";
+    [JsonPropertyName("dashboardHeaderFontSize")]   public string DashboardHeaderFontSize   { get; set; } = "";
+
+    [JsonPropertyName("dashboardFooterBold")]       public bool   DashboardFooterBold       { get; set; } = false;
+    [JsonPropertyName("dashboardFooterItalic")]     public bool   DashboardFooterItalic     { get; set; } = false;
+    [JsonPropertyName("dashboardFooterUnderline")]  public bool   DashboardFooterUnderline  { get; set; } = false;
+    [JsonPropertyName("dashboardFooterFontFamily")] public string DashboardFooterFontFamily { get; set; } = "";
+    [JsonPropertyName("dashboardFooterFontSize")]   public string DashboardFooterFontSize   { get; set; } = "";
+
     // ── Master Dashboard tile grid header / footer (the data table itself) ──
     // Inside each tile is a sortable summary grid (DashboardView's
     // .dash-summary-table). Its sticky <thead> band and sticky totals
@@ -94,6 +135,22 @@ public sealed class AppTheme
     [JsonPropertyName("dashboardGridHeaderText")] public string DashboardGridHeaderText { get; set; } = "#202124";
     [JsonPropertyName("dashboardGridFooterBg")]   public string DashboardGridFooterBg   { get; set; } = "#FFF8DC"; // cornsilk
     [JsonPropertyName("dashboardGridFooterText")] public string DashboardGridFooterText { get; set; } = "#202124";
+
+    // Tile-data-grid text formatting (paired with the *Text / *Bg
+    // tokens above). Both default to bold — matches the existing
+    // font-weight: 600 on .dash-summary-table thead th and
+    // .dash-footer-cell.
+    [JsonPropertyName("dashboardGridHeaderBold")]       public bool   DashboardGridHeaderBold       { get; set; } = true;
+    [JsonPropertyName("dashboardGridHeaderItalic")]     public bool   DashboardGridHeaderItalic     { get; set; } = false;
+    [JsonPropertyName("dashboardGridHeaderUnderline")]  public bool   DashboardGridHeaderUnderline  { get; set; } = false;
+    [JsonPropertyName("dashboardGridHeaderFontFamily")] public string DashboardGridHeaderFontFamily { get; set; } = "";
+    [JsonPropertyName("dashboardGridHeaderFontSize")]   public string DashboardGridHeaderFontSize   { get; set; } = "";
+
+    [JsonPropertyName("dashboardGridFooterBold")]       public bool   DashboardGridFooterBold       { get; set; } = true;
+    [JsonPropertyName("dashboardGridFooterItalic")]     public bool   DashboardGridFooterItalic     { get; set; } = false;
+    [JsonPropertyName("dashboardGridFooterUnderline")]  public bool   DashboardGridFooterUnderline  { get; set; } = false;
+    [JsonPropertyName("dashboardGridFooterFontFamily")] public string DashboardGridFooterFontFamily { get; set; } = "";
+    [JsonPropertyName("dashboardGridFooterFontSize")]   public string DashboardGridFooterFontSize   { get; set; } = "";
 
     // Snapshot of the seed values. Used by GetAsync as a fallback when
     // the DB row is missing, and by AdminThemeTab's "Reset" button.
@@ -123,17 +180,65 @@ public sealed class AppTheme
     --table-row-striped:         {TableRowStriped};
     --detail-group-header-bg:    {DetailGroupHeaderBg};
     --detail-group-header-text:  {DetailGroupHeaderText};
+    --detail-group-header-weight:    {Weight(DetailGroupHeaderBold)};
+    --detail-group-header-style:     {Style(DetailGroupHeaderItalic)};
+    --detail-group-header-deco:      {Deco(DetailGroupHeaderUnderline)};
+    --detail-group-header-font:      {FontFamily(DetailGroupHeaderFontFamily)};
+    --detail-group-header-size:      {FontSize(DetailGroupHeaderFontSize)};
     --detail-group-footer-bg:    {DetailGroupFooterBg};
     --detail-group-footer-text:  {DetailGroupFooterText};
+    --detail-group-footer-weight:    {Weight(DetailGroupFooterBold)};
+    --detail-group-footer-style:     {Style(DetailGroupFooterItalic)};
+    --detail-group-footer-deco:      {Deco(DetailGroupFooterUnderline)};
+    --detail-group-footer-font:      {FontFamily(DetailGroupFooterFontFamily)};
+    --detail-group-footer-size:      {FontSize(DetailGroupFooterFontSize)};
     --detail-grand-total-bg:     {DetailGrandTotalBg};
     --detail-grand-total-text:   {DetailGrandTotalText};
+    --detail-grand-total-weight:     {Weight(DetailGrandTotalBold)};
+    --detail-grand-total-style:      {Style(DetailGrandTotalItalic)};
+    --detail-grand-total-deco:       {Deco(DetailGrandTotalUnderline)};
+    --detail-grand-total-font:       {FontFamily(DetailGrandTotalFontFamily)};
+    --detail-grand-total-size:       {FontSize(DetailGrandTotalFontSize)};
     --dashboard-header-bg:       {DashboardHeaderBg};
     --dashboard-header-text:     {DashboardHeaderText};
+    --dashboard-header-weight:       {Weight(DashboardHeaderBold)};
+    --dashboard-header-style:        {Style(DashboardHeaderItalic)};
+    --dashboard-header-deco:         {Deco(DashboardHeaderUnderline)};
+    --dashboard-header-font:         {FontFamily(DashboardHeaderFontFamily)};
+    --dashboard-header-size:         {FontSize(DashboardHeaderFontSize)};
     --dashboard-footer-bg:       {DashboardFooterBg};
     --dashboard-footer-text:     {DashboardFooterText};
+    --dashboard-footer-weight:       {Weight(DashboardFooterBold)};
+    --dashboard-footer-style:        {Style(DashboardFooterItalic)};
+    --dashboard-footer-deco:         {Deco(DashboardFooterUnderline)};
+    --dashboard-footer-font:         {FontFamily(DashboardFooterFontFamily)};
+    --dashboard-footer-size:         {FontSize(DashboardFooterFontSize)};
     --dashboard-grid-header-bg:    {DashboardGridHeaderBg};
     --dashboard-grid-header-text:  {DashboardGridHeaderText};
+    --dashboard-grid-header-weight:  {Weight(DashboardGridHeaderBold)};
+    --dashboard-grid-header-style:   {Style(DashboardGridHeaderItalic)};
+    --dashboard-grid-header-deco:    {Deco(DashboardGridHeaderUnderline)};
+    --dashboard-grid-header-font:    {FontFamily(DashboardGridHeaderFontFamily)};
+    --dashboard-grid-header-size:    {FontSize(DashboardGridHeaderFontSize)};
     --dashboard-grid-footer-bg:    {DashboardGridFooterBg};
     --dashboard-grid-footer-text:  {DashboardGridFooterText};
+    --dashboard-grid-footer-weight:  {Weight(DashboardGridFooterBold)};
+    --dashboard-grid-footer-style:   {Style(DashboardGridFooterItalic)};
+    --dashboard-grid-footer-deco:    {Deco(DashboardGridFooterUnderline)};
+    --dashboard-grid-footer-font:    {FontFamily(DashboardGridFooterFontFamily)};
+    --dashboard-grid-footer-size:    {FontSize(DashboardGridFooterFontSize)};
 }}";
+
+    // Helpers that map theme flags / strings into safe CSS-variable
+    // values. Empty inputs collapse to "inherit" so an admin who
+    // hasn't touched a band sees no visual change from the parent
+    // element. The four formatters keep the ToCssBlock template
+    // readable instead of forcing an inline ternary on every line.
+    private static string Weight(bool bold) => bold ? "700" : "400";
+    private static string Style(bool italic) => italic ? "italic" : "normal";
+    private static string Deco(bool underline) => underline ? "underline" : "none";
+    private static string FontFamily(string family) =>
+        string.IsNullOrWhiteSpace(family) ? "inherit" : family;
+    private static string FontSize(string size) =>
+        string.IsNullOrWhiteSpace(size) ? "inherit" : size;
 }

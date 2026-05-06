@@ -6,12 +6,30 @@
 @inject IAdminAccessService AdminAccess
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
 
 <PageTitle>Admin - Executive Reporting Suite</PageTitle>
 
 <MudStack Spacing="3" Class="pa-4">
     <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Navigation.NavigateTo("/reports"))" />
+        @* Back arrow uses the browser history when there's something to
+           go back to (the natural picker → dashboard → admin flow lands
+           the user back on the dashboard or picker as expected). When
+           there's no history — bookmarked direct nav to /admin, or a
+           fresh tab — fall back to the all-companies picker (/?all=1).
+           A System Support user landing directly on /admin previously
+           had no path back to the picker; this restores it. *@
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       title="Back"
+                       OnClick="GoBack" />
+        @* Explicit shortcut to the all-companies picker — reachable
+           regardless of browser history state. Useful for System
+           Support users who jump between admin sections and the
+           picker repeatedly. *@
+        <MudTooltip Text="All companies">
+            <MudIconButton Icon="@Icons.Material.Filled.Apps"
+                           OnClick="@(() => Navigation.NavigateTo("/?all=1"))" />
+        </MudTooltip>
         <MudText Typo="Typo.h5" Style="font-weight: 600;">Admin</MudText>
         @if (_isFullAdmin)
         {
@@ -100,6 +118,13 @@
                     <AdminTeamBuilderTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
+            @if (_allowedSections.Contains(AdminSections.Schedules))
+            {
+                <MudTabPanel Text="Schedules" Icon="@Icons.Material.Filled.Schedule">
+                    <AdminSchedulesTab CurrentUserEmail="@_currentUserEmail"
+                                       CurrentUserId="@_currentUserId" />
+                </MudTabPanel>
+            }
             @if (_allowedSections.Contains(AdminSections.SchemaHistory))
             {
                 <MudTabPanel Text="Schema History" Icon="@Icons.Material.Filled.History">
@@ -133,6 +158,10 @@
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     private int _activeTab;
     private string _currentUserEmail = string.Empty;
+    // Schedule owner-id requires a stable identifier — "oid" claim (Azure
+    // AD object id) when present, falls back to the email so the dev-stub
+    // auth still produces a non-empty value. Used by the Schedules tab.
+    private string _currentUserId = string.Empty;
     private IDisposable? _editorScope;
 
     protected override async Task OnInitializedAsync()
@@ -144,10 +173,28 @@
             ?? authState.User.FindFirst("email")?.Value
             ?? authState.User.Identity?.Name
             ?? string.Empty;
+        _currentUserId = authState.User.FindFirst("oid")?.Value
+            ?? authState.User.Identity?.Name
+            ?? _currentUserEmail;
 
         _isFullAdmin = AdminService.IsGlobalAdmin(_currentUserEmail);
         _allowedSections = await AdminAccess.GetAllowedSectionsAsync(_currentUserEmail);
         _accessGranted = _allowedSections.Count > 0;
+    }
+
+    // Browser-history-aware back. Mirrors ReportLibrary.GoBack so the
+    // affordance behaves the same way across the app: prefer "the page
+    // the user came from" when one exists, fall back to the all-
+    // companies picker otherwise. Without the fallback, System Support
+    // users who land directly on /admin (bookmarked, fresh tab, etc.)
+    // had no path back to the picker.
+    private async Task GoBack()
+    {
+        var hasHistory = await JS.InvokeAsync<bool>("eval", "window.history.length > 1");
+        if (hasHistory)
+            await JS.InvokeVoidAsync("history.back");
+        else
+            Navigation.NavigateTo("/?all=1");
     }
 
     public void Dispose()

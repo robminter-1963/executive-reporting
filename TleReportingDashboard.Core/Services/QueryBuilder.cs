@@ -355,6 +355,20 @@ public static class QueryBuilder
             }
         }
 
+        // Same problem for direct-column scope (Worker Individual fan-out):
+        // a pre-qualified owner column like "BORR.LOAN_NO" needs the BORR
+        // table joined in even when no selected field references it.
+        if (request.Scoping is { OwnerColumn: string oc } && !string.IsNullOrWhiteSpace(oc))
+        {
+            var dot = oc.IndexOf('.');
+            if (dot > 0)
+            {
+                var alias = oc[..dot].Trim();
+                if (!string.IsNullOrEmpty(alias))
+                    requiredTables.Add(alias);
+            }
+        }
+
         var sb = new StringBuilder();
         var parameters = new List<System.Data.Common.DbParameter>();
 
@@ -967,6 +981,48 @@ public static class QueryBuilder
                     // Scoped user with missing configuration — fail safe to
                     // empty result set. Applies to both self and team scope.
                     whereClauses.Add("1 = 0");
+                }
+                else if (!string.IsNullOrEmpty(scope.OwnerColumn)
+                         && (scope.ExternalUserIds is { Count: > 0 }
+                             || !string.IsNullOrEmpty(scope.ExternalUserId)))
+                {
+                    // Direct-column scope. Bypasses the schema field-id
+                    // catalog — emitter takes the OwnerColumn string as-is.
+                    // Auto-prefixes with PrimaryAlias when unqualified to
+                    // mirror the team-scope shape, so admins configuring a
+                    // team-type owner column on Team Builder don't have to
+                    // think about alias qualification differently between
+                    // the team-scope (live UI) and Individual-schedule
+                    // (Worker fan-out) paths.
+                    var ownerCol = scope.OwnerColumn!.Contains('.')
+                        ? scope.OwnerColumn!
+                        : string.IsNullOrWhiteSpace(scope.PrimaryAlias)
+                            ? scope.OwnerColumn!
+                            : $"{scope.PrimaryAlias}.{scope.OwnerColumn}";
+
+                    if (scope.ExternalUserIds is { Count: > 0 } extIds)
+                    {
+                        // Multi-value form: WHERE col IN (@p0, @p1, ...).
+                        // Used by the Worker's "fetch once, group by
+                        // owner" Individual fan-out so a single round-
+                        // trip can carry every team member's rows.
+                        var paramNames = new List<string>(extIds.Count);
+                        for (var i = 0; i < extIds.Count; i++)
+                        {
+                            var p = $"@__scope_user_{i}";
+                            parameters.Add(dialect.CreateParameter(p, extIds[i]));
+                            paramNames.Add(p);
+                        }
+                        whereClauses.Add($"{ownerCol} IN ({string.Join(", ", paramNames)})");
+                    }
+                    else
+                    {
+                        // Single-value form: WHERE col = @p (legacy /
+                        // per-recipient).
+                        var paramName = "@__scope_user";
+                        parameters.Add(dialect.CreateParameter(paramName, scope.ExternalUserId!));
+                        whereClauses.Add($"{ownerCol} = {paramName}");
+                    }
                 }
                 else if (!string.IsNullOrEmpty(scope.OwnerFieldId)
                          && !string.IsNullOrEmpty(scope.ExternalUserId)

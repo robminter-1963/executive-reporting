@@ -68,15 +68,20 @@
                    report ran (plus bound parameters and any row-level
                    scoping note) so admins can compare against what
                    the Builder emits when troubleshooting. *@
-                <MudTooltip Text="Show the SQL that produced this view">
-                    <MudButton Variant="Variant.Outlined" Size="Size.Small"
-                               Color="Color.Default"
-                               StartIcon="@Icons.Material.Filled.Code"
-                               OnClick="ShowReportQuery"
-                               Disabled="@(_queryData?.Sql is null)">
-                        Show SQL
-                    </MudButton>
-                </MudTooltip>
+                @* Show SQL is admin-only — exposes the raw query and
+                   bound parameters (per the 2026-05-05 policy change). *@
+                @if (_isAdmin)
+                {
+                    <MudTooltip Text="Show the SQL that produced this view">
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                   Color="Color.Default"
+                                   StartIcon="@Icons.Material.Filled.Code"
+                                   OnClick="ShowReportQuery"
+                                   Disabled="@(_queryData?.Sql is null)">
+                            Show SQL
+                        </MudButton>
+                    </MudTooltip>
+                }
                 <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
                             Disabled="@(_queryData is null || !_queryData.Rows.Any())" />
             </MudStack>
@@ -130,7 +135,10 @@
                                 ReadOnly="true" />
                 </MudTabPanel>
                 <MudTabPanel Text="Chart" Icon="@Icons.Material.Filled.BarChart">
-                    <ChartBuilder Data="_queryData" AvailableColumns="_queryData.Columns" />
+                    <ChartBuilder Data="_queryData" AvailableColumns="_queryData.Columns"
+                                  InitialChartType="@_chartType"
+                                  InitialXField="@_chartXField"
+                                  InitialYField="@_chartYField" />
                 </MudTabPanel>
                 <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
                     <DashboardView Data="_queryData" InitialConfig="_dashboardConfig"
@@ -189,10 +197,20 @@
     private Guid? _connectionId;
     private string? _primaryTable;
     private bool _isLoading;
+    // Admin-only Show SQL gate. Resolved during init alongside the
+    // other auth state — non-admins get no Show SQL button.
+    private bool _isAdmin;
     private int _activeTab;
     private string? _error;
     private QueryResponse? _queryData;
     private DashboardView.DashboardConfig? _dashboardConfig;
+    // Chart tab restore — read from ColumnState during OnInitialized
+    // and forwarded to ChartBuilder so the saved visualization is
+    // shown when the user runs the report. Read-only: Viewer doesn't
+    // re-save the report.
+    private string? _chartType;
+    private string? _chartXField;
+    private string? _chartYField;
     private List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? _tableCalcColumns;
     private List<string> _appliedFilters = new();
     private Dictionary<string, string> _fieldLabelsById = new(StringComparer.OrdinalIgnoreCase);
@@ -230,6 +248,7 @@
                   ?? authState.User.Identity?.Name
                   ?? "anonymous";
         _userEmail = authState.User.FindFirst("preferred_username")?.Value ?? string.Empty;
+        _isAdmin = !string.IsNullOrEmpty(_userEmail) && AdminService.IsAdmin(_userEmail);
 
         // Build a FieldId → Label lookup so the filter chips can show human-
         // readable names instead of raw ids like "loan_status".
@@ -329,6 +348,16 @@
                     }
                     if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
                         _customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
+                    // Chart-tab config — type + axis fields. The
+                    // Viewer is read-only, so these flow into
+                    // ChartBuilder as InitialChart* and stay there for
+                    // the session.
+                    if (doc.RootElement.TryGetProperty("ChartType", out var ctVwEl))
+                        _chartType = ctVwEl.GetString();
+                    if (doc.RootElement.TryGetProperty("ChartXField", out var cxVwEl))
+                        _chartXField = cxVwEl.GetString();
+                    if (doc.RootElement.TryGetProperty("ChartYField", out var cyVwEl))
+                        _chartYField = cyVwEl.GetString();
                     // Advanced filters — the WHERE-tree the Builder
                     // composes via the AdvancedFilterGroup component.
                     // Saved into column_state.AdvancedFilters; pass on

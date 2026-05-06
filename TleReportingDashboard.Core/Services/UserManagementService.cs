@@ -581,6 +581,33 @@ public sealed class UserManagementService : IUserManagementService
             },
             bypass: _editorMode.IsActive);
 
+    public Task<UserRecord?> GetByExternalUserIdAsync(Guid connectionId, string externalUserId,
+                                                       CancellationToken ct = default) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("UserManagementService", "ByExternalUserId", connectionId, externalUserId),
+            async () =>
+            {
+                if (string.IsNullOrWhiteSpace(externalUserId)) return null;
+                await using var conn = new SqlConnection(_connStr);
+                await conn.OpenAsync(ct);
+                // Mirrors GetExternalUserIdAsync's join — RPT_user_connection_logins
+                // can be keyed by either u.user_id (post first sign-in) or u.email
+                // (pre-provisioned stub), so the predicate matches both forms to
+                // catch users who haven't logged in yet but were granted a LOS
+                // mapping by an admin.
+                await using var cmd = new SqlCommand(
+                    UserSelectSql + @"
+                          JOIN EMPOWER.RPT_user_connection_logins ucl
+                            ON (ucl.user_id = u.user_id OR ucl.user_id = u.email)
+                         WHERE ucl.connection_id = @connectionId
+                           AND ucl.external_user_id = @ext;", conn);
+                cmd.Parameters.Add(new SqlParameter("@connectionId", connectionId));
+                cmd.Parameters.Add(new SqlParameter("@ext", externalUserId));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                return await reader.ReadAsync(ct) ? ReadUser(reader) : null;
+            },
+            bypass: _editorMode.IsActive);
+
     public async Task RevokeCompanyAccessAsync(string email, Guid companyId, CancellationToken ct = default)
     {
         await using var conn = new SqlConnection(_connStr);

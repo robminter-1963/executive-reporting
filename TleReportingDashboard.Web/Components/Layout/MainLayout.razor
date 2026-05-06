@@ -69,13 +69,17 @@
             }
             else
             {
-                @* Ralis logo navigates to the picker for users with access
-                   to more than one company. Single-company users have
-                   nowhere else to pick, so the logo is a static decoration
-                   for them — clicking does nothing rather than redirecting
-                   to the same dashboard they're already on. Admins and
-                   admin-section roles always see every company so they
-                   land in the multi-company branch. *@
+                @* Ralis logo + suite name navigate to the all-companies
+                   picker for users with access to more than one company.
+                   Single-company users have nowhere else to pick, so the
+                   header is a static decoration for them — clicking does
+                   nothing rather than redirecting to the same dashboard
+                   they're already on. Global admins AND admin-section
+                   roles (System Support et al.) get the click affordance
+                   because their _accessibleCompanyCount is set to the
+                   active company total (vs. counting only the user's own
+                   RPT_user_companies grants, which would leave System
+                   Support at 0 and silently suppress the click). *@
                 @if (_accessibleCompanyCount > 1)
                 {
                     <div style="cursor: pointer; display: flex; align-items: center; gap: 8px;" @onclick="@(() => Navigation.NavigateTo("/?all=1"))">
@@ -600,8 +604,16 @@
                         _envAccessDenied = true;
                     }
                 }
-                if (_isAdmin)
+                if (_isAdmin || _hasAdminAccess)
                 {
+                    // Global admins and admin-section roles (System
+                    // Support et al.) need cross-company visibility to
+                    // do their job — same model the picker, master
+                    // dashboard, and report library use. Counting only
+                    // RPT_user_companies grants would leave them at 0
+                    // (those rows are non-admin-only), which then
+                    // suppressed the title-bar click-to-picker
+                    // affordance for everyone except global admins.
                     _accessibleCompanyCount = (await CompanyRegistry.GetActiveAsync()).Count;
                 }
                 else if (!string.IsNullOrEmpty(_userEmail))

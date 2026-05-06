@@ -520,7 +520,15 @@
                                                                at narrow tile widths. *@
                                                             var gkText = FormatGroupKey(row.GroupKey);
                                                             <td title="@gkText" style="@AlignToCss(GetAlign("groupBy", IsNumericDataType(GetGroupByDataType()) ? "right" : "left"))">
-                                                                <span style="font-weight: 500;">@gkText</span>
+                                                                @* Group key cell — first column of each summary
+                                                                   row when a group-by is active. Inherits the Grid
+                                                                   header's text formatting (weight / style / deco /
+                                                                   font / size) so admins toggling "Grid header text"
+                                                                   bold in Admin → Theme see consistent bolding
+                                                                   across BOTH the column header row AND the group-
+                                                                   key cells. Previously hardcoded `font-weight: 500`,
+                                                                   which silently ignored the theme. *@
+                                                                <span style="font-weight: var(--dashboard-grid-header-weight, 500); font-style: var(--dashboard-grid-header-style, normal); text-decoration: var(--dashboard-grid-header-deco, none); font-family: var(--dashboard-grid-header-font, inherit);">@gkText</span>
                                                             </td>
                                                         }
                                                         else if (ck == "measure")
@@ -742,7 +750,11 @@
         color: var(--dashboard-grid-header-text, #202124);
         border-bottom: 1px solid var(--border-default, #DADCE0);
         padding: 4px 8px;
-        font-weight: 600;
+        font-weight: var(--dashboard-grid-header-weight, 700);
+        font-style: var(--dashboard-grid-header-style, normal);
+        text-decoration: var(--dashboard-grid-header-deco, none);
+        font-family: var(--dashboard-grid-header-font, inherit);
+        font-size: var(--dashboard-grid-header-size, inherit);
         white-space: nowrap;
         user-select: none;
         /* Header cells clip overflow same as body cells so the column
@@ -823,7 +835,11 @@
     }
     .dash-footer-cell {
         padding: 4px 8px;
-        font-weight: 600;
+        font-weight: var(--dashboard-grid-footer-weight, 700);
+        font-style: var(--dashboard-grid-footer-style, normal);
+        text-decoration: var(--dashboard-grid-footer-deco, none);
+        font-family: var(--dashboard-grid-footer-font, inherit);
+        font-size: var(--dashboard-grid-footer-size, inherit);
         white-space: nowrap;
         position: sticky;
         bottom: 0;

@@ -115,6 +115,15 @@ public interface IUserManagementService
     // "no rows match" rather than "no filter."
     Task<string?> GetExternalUserIdAsync(string email, Guid connectionId, CancellationToken ct = default);
 
+    // Reverse of GetExternalUserIdAsync. Resolves a Team Builder
+    // member_ext_id back to the registered app user on this connection.
+    // Used by the scheduled-report Worker on Individual schedules to
+    // turn a team's roster of LOS logins into emails the resolver can
+    // scope. Null when no app user is mapped to that ext id on this
+    // connection — caller skips that team member with a logged warning.
+    Task<UserRecord?> GetByExternalUserIdAsync(Guid connectionId, string externalUserId,
+                                                CancellationToken ct = default);
+
     // ── Team assignments (team-scope role input) ───────────────────────────
 
     // Teams the user could be assigned to. Restricted to teams on connections

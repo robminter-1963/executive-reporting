@@ -99,10 +99,15 @@
             }
             @* Admin moved to the MainLayout user menu — reachable from any
                page, not just here. *@
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
-                       OnClick="@(() => Navigation.NavigateTo("/builder"))">
-                New Report
-            </MudButton>
+            @* Authoring affordance — hidden for viewer-only users, who
+               can run shared reports but never create or edit their own. *@
+            @if (!_isViewerOnly)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="@(() => Navigation.NavigateTo("/builder"))">
+                    New Report
+                </MudButton>
+            }
         </MudStack>
     </MudStack>
 </MudPaper>
@@ -179,7 +184,13 @@
              Elevation="0" Rounded ApplyEffectsToContainer
              Class="pa-4">
 
-        @* ── Tab 1: My Reports ── *@
+        @* ── Tab 1: My Reports ──
+           Authoring tab — hidden for viewer-only users. They never own
+           reports (Viewer role can't create them) so the table would
+           always be empty AND the action buttons in this tab include
+           Edit / Share / Schedule which are inappropriate for the role. *@
+        @if (!_isViewerOnly)
+        {
         <MudTabPanel Text="@(_isAdminView ? "All Reports" : "My Reports")" Icon="@Icons.Material.Filled.Folder">
             @if (FilteredMyReports.Any())
             {
@@ -332,9 +343,6 @@
                                     <MudIconButton Icon="@Icons.Material.Filled.Share" Size="Size.Small"
                                                    Color="Color.Default" title="Share"
                                                    OnClick="() => OpenShareDialog(context)" />
-                                    <MudIconButton Icon="@Icons.Material.Filled.Schedule" Size="Size.Small"
-                                                   Color="Color.Default" title="Schedule"
-                                                   OnClick="() => OpenScheduleDialog(context)" />
                                     <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
                                                    Color="Color.Error" title="Delete"
                                                    OnClick="() => ConfirmDelete(context)" />
@@ -371,6 +379,7 @@
                 }
             }
         </MudTabPanel>
+        }
 
         @* ── Tab 2: Shared With Me ── *@
         <MudTabPanel Text="Shared With Me" Icon="@Icons.Material.Filled.PeopleAlt">
@@ -451,9 +460,17 @@
                                 <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
                                                Color="Color.Primary" title="Run"
                                                OnClick="() => ViewReport(context.Id)" />
-                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
-                                               Color="Color.Default" title="Clone"
-                                               OnClick="() => CloneReport(context)" />
+                                @* Clone makes the cloning user the new
+                                   owner — that contradicts viewer-only
+                                   ("can't author"), so it's hidden for
+                                   that role. Run is the only action a
+                                   viewer-only user gets on shared rows. *@
+                                @if (!_isViewerOnly)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                                                   Color="Color.Default" title="Clone"
+                                                   OnClick="() => CloneReport(context)" />
+                                }
                             </MudStack>
                         </MudTd>
                     </RowTemplate>
@@ -475,7 +492,12 @@
             }
         </MudTabPanel>
 
-        @* ── Tab 3: Recent ── *@
+        @* ── Tab 3: Recent ──
+           Source data is _myReports filtered by LastRunAt — a viewer-
+           only user owns nothing, so Recent would always render empty
+           for them. Hiding the tab keeps the tab strip honest. *@
+        @if (!_isViewerOnly)
+        {
         <MudTabPanel Text="Recent" Icon="@Icons.Material.Filled.History">
             @if (FilteredRecent.Any())
             {
@@ -559,9 +581,6 @@
                                 <MudIconButton Icon="@Icons.Material.Filled.Share" Size="Size.Small"
                                                Color="Color.Default" title="Share"
                                                OnClick="() => OpenShareDialog(context)" />
-                                <MudIconButton Icon="@Icons.Material.Filled.Schedule" Size="Size.Small"
-                                               Color="Color.Default" title="Schedule"
-                                               OnClick="() => OpenScheduleDialog(context)" />
                                 <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
                                                Color="Color.Error" title="Delete"
                                                OnClick="() => ConfirmDelete(context)" />
@@ -585,6 +604,7 @@
                             Body="Reports you've opened recently will appear here, so the ones you use most are always one click away." />
             }
         </MudTabPanel>
+        }
     </MudTabs>
 </MudContainer>
 
@@ -648,6 +668,13 @@
     // into LibraryNavState so the toggle state survives navigation to the
     // builder/viewer and back within the same session.
     private bool _isAdminView;
+
+    // True when the user has no Editor / Admin grant on any company —
+    // i.e. their role is Viewer (or absent) everywhere they have access.
+    // Drives UI gating: hides "New Report", the My Reports tab, the
+    // Recent tab, and Clone in Shared With Me. Shared With Me + Run is
+    // the only surface a viewer-only user gets in the Library.
+    private bool _isViewerOnly;
 
     // Resolve a report's connection_id to a human label for the grid column.
     // Returns "—" when the report has no connection assigned (legacy row)
@@ -851,6 +878,28 @@
                 var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
                 var allowed = access.Select(a => a.CompanyId).ToHashSet();
                 _companies = _companies.Where(c => allowed.Contains(c.Id)).ToList();
+
+                // Viewer-only when every grant the user has is the
+                // Viewer role. Empty access (a never-granted user)
+                // also falls into this bucket — they have nothing to
+                // author, only the Shared With Me surface makes
+                // sense. Admins / admin-section users always retain
+                // full Library affordances.
+                _isViewerOnly = access.Count == 0
+                    || access.All(a => string.Equals(a.Role, UserRoles.Viewer, StringComparison.OrdinalIgnoreCase));
+            }
+            // _isViewerOnly stays default false for admins / admin-
+            // section users — they always see the full Library.
+
+            // Tab-strip safety: if a viewer-only user has a stored
+            // _activeTabIndex pointing at My Reports (0) or Recent
+            // (2), those panels won't render and MudTabs would land
+            // on an invisible index. Force them onto Shared With Me
+            // (which becomes the only visible tab → index 0).
+            if (_isViewerOnly)
+            {
+                _activeTabIndex = 0;
+                NavState.LastActiveTab = 0;
             }
 
             // Load connections across every active company so we can render
@@ -1093,31 +1142,6 @@
         };
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
         await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, options);
-    }
-
-    // ── Schedule dialog ──
-
-    private async Task OpenScheduleDialog(SavedReport report)
-    {
-        var parameters = new DialogParameters<SchedulesDialog>
-        {
-            { x => x.ReportId, report.Id },
-            { x => x.ReportName, report.Name },
-            { x => x.UserId, _userId },
-            { x => x.UserEmail, _userEmail }
-        };
-        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<SchedulesDialog>("Schedules", parameters, options);
-        await dialog.Result;
-
-        // Refresh schedule + next-run state after the user closes the manager
-        try
-        {
-            var all = await ScheduleService.GetSchedulesForUserAsync(_userId);
-            _scheduledReportIds = all.Where(s => s.IsActive).Select(s => s.ReportId).ToHashSet();
-            _nextRunByReport = ComputeNextRuns(all);
-        }
-        catch { /* non-fatal */ }
     }
 
     // ── Delete confirmation ──

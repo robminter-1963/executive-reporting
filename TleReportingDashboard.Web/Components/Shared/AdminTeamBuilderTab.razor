@@ -93,6 +93,51 @@
             </MudStack>
         </MudPaper>
 
+        @* ── User Emails SQL editor ─────────────────────────────────── *@
+        <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+            <MudStack Spacing="2">
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">User Emails SQL</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Resolves a team member's <strong>member_ext_id</strong> to an email address by joining into whichever LOS user table holds it. Used by Individual scheduled reports to turn a team's roster into mailable addresses without requiring an entry in the dashboard's user-connection-logins mapping. Optional — leave blank if every team member already has a connection-login mapping in Admin → Users.
+                </MudText>
+                <MudTextField T="string" @bind-Value="_userEmailsSql"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="6"
+                              Style="font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85rem;"
+                              HelperText="Must return: member_ext_id, email." />
+                <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                           StartIcon="@Icons.Material.Filled.AlternateEmail"
+                           OnClick="PreviewUserEmails"
+                           Disabled="@(_busy || string.IsNullOrWhiteSpace(_userEmailsSql))">
+                    Preview emails
+                </MudButton>
+                @if (_userEmailsPreview is not null)
+                {
+                    @if (_userEmailsPreview.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense>
+                            User Emails SQL ran successfully but returned no rows.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; max-height: 220px; overflow-y: auto;">
+                            <MudTable Items="_userEmailsPreview" Dense T="TeamMemberEmailRecord" Class="pa-0">
+                                <HeaderContent>
+                                    <MudTh Style="width: 200px;">Login</MudTh>
+                                    <MudTh>Email</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd><code>@context.MemberExtId</code></MudTd>
+                                    <MudTd>@context.Email</MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        </MudPaper>
+                    }
+                }
+            </MudStack>
+        </MudPaper>
+
         @* ── Team type → owner column editor ────────────────────────── *@
         <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
             <MudStack Spacing="2">
@@ -170,6 +215,12 @@
                            Disabled="@(_busy || string.IsNullOrWhiteSpace(_teamsSql))">
                     Preview teams
                 </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                           StartIcon="@Icons.Material.Filled.Code"
+                           OnClick="@(() => ShowJoinSql(null))"
+                           Disabled="@(string.IsNullOrWhiteSpace(_teamsSql) || string.IsNullOrWhiteSpace(_membersSql))">
+                    Show join SQL
+                </MudButton>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
                            StartIcon="@Icons.Material.Filled.Save"
                            OnClick="Save"
@@ -209,7 +260,9 @@
                         </MudSelect>
                     }
                 </MudStack>
-                <MudTable Items="FilteredPreview()" Dense Hover Class="pa-0" T="TeamRecord">
+                <MudTable Items="FilteredPreview()" Dense Hover Class="pa-0" T="TeamRecord"
+                          OnRowClick="@(args => { if (args.Item is not null) _ = OnTeamRowClicked(args.Item); })"
+                          RowStyleFunc="@TeamRowStyle">
                     <HeaderContent>
                         <MudTh Style="width: 80px;">ID</MudTh>
                         <MudTh>Name</MudTh>
@@ -248,9 +301,100 @@
                     </RowTemplate>
                 </MudTable>
             </MudPaper>
+
+            @* ── Selected team's members ─────────────────────────────────
+               Renders below the team list when an admin clicks a row.
+               Members are fetched lazily on first click (and cached for
+               this preview cycle) so showing the team list alone doesn't
+               pay the round-trip if the admin doesn't drill in. *@
+            @if (_selectedTeam is not null)
+            {
+                <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Class="pa-3" Spacing="2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Members of @(_selectedTeam.TeamName ?? $"team {_selectedTeam.TeamId}")
+                            @if (_membersLoaded)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-2" Inline="true">
+                                    (@MembersForSelected().Count)
+                                </MudText>
+                            }
+                        </MudText>
+                        <MudSpacer />
+                        <MudButton Variant="Variant.Text" Color="Color.Default" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Code"
+                                   OnClick="@(() => ShowJoinSql(_selectedTeam.TeamId))"
+                                   Disabled="@(string.IsNullOrWhiteSpace(_teamsSql) || string.IsNullOrWhiteSpace(_membersSql))">
+                            Show SQL
+                        </MudButton>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                       OnClick="@(() => _selectedTeam = null)" />
+                    </MudStack>
+
+                    @if (string.IsNullOrWhiteSpace(_membersSql))
+                    {
+                        <MudAlert Severity="Severity.Info" Dense Class="ma-3">
+                            Configure <strong>Members SQL</strong> above and re-run Preview to see team members here.
+                        </MudAlert>
+                    }
+                    else if (_membersLoading)
+                    {
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="pa-3">
+                            <MudProgressCircular Indeterminate Size="Size.Small" />
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">Loading members…</MudText>
+                        </MudStack>
+                    }
+                    else if (!string.IsNullOrEmpty(_membersError))
+                    {
+                        <MudAlert Severity="Severity.Error" Dense Class="ma-3">@_membersError</MudAlert>
+                    }
+                    else if (MembersForSelected().Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense Class="ma-3">
+                            No members returned for this team.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudTable Items="MembersForSelected()" Dense Hover Class="pa-0" T="TeamMemberRecord">
+                            <HeaderContent>
+                                <MudTh Style="width: 200px;">Login (member_ext_id)</MudTh>
+                                <MudTh>Name</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd><code>@context.MemberExtId</code></MudTd>
+                                <MudTd>@(string.IsNullOrEmpty(context.MemberName) ? "—" : context.MemberName)</MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+                </MudPaper>
+            }
         }
     }
 </MudStack>
+
+@* ── Show SQL dialog ─────────────────────────────────────────────────
+   Read-only display of the synthesized teams ⨝ members query. Pure
+   string composition — never executed against the source. Admins
+   copy it into SSMS to validate the join shape outside the app. *@
+<MudDialog @bind-Visible="_showSqlDialogOpen" Options="@(new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true })">
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            Teams ⨝ Members SQL@(_showSqlForTeam is null ? "" : $" — team {_showSqlForTeam.Value}")
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+            Synthesized join template wrapping your Teams SQL and Members SQL as CTEs and joining on <code>team_id</code>. Copy into SSMS to validate against your source.
+        </MudText>
+        <MudTextField T="string" Value="_showSqlText" ReadOnly Lines="20"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="font-family: 'Consolas', 'Courier New', monospace; font-size: 0.8rem;" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showSqlDialogOpen = false)">Close</MudButton>
+    </DialogActions>
+</MudDialog>
 
 @code {
     [Parameter] public string? CurrentUserEmail { get; set; }
@@ -294,6 +438,8 @@
 
     private string _teamsSql = string.Empty;
     private string _membersSql = string.Empty;
+    private string _userEmailsSql = string.Empty;
+    private List<TeamMemberEmailRecord>? _userEmailsPreview;
     private List<TypeRow> _typeRows = new();
     private HashSet<string> _discoveredTypes = new(StringComparer.OrdinalIgnoreCase);
 
@@ -319,6 +465,21 @@
     private List<TeamRecord>? _previewRows;
     private HashSet<string> _previewTypes = new();
     private string _typeFilter = string.Empty;
+
+    // Members drilldown state. _selectedTeam drives the visibility of the
+    // members panel; _allMembers caches one fetch per Preview cycle and
+    // gets filtered client-side per team. Cleared whenever Preview runs
+    // so a re-run picks up source changes.
+    private TeamRecord? _selectedTeam;
+    private List<TeamMemberRecord>? _allMembers;
+    private bool _membersLoaded;
+    private bool _membersLoading;
+    private string? _membersError;
+
+    // Show SQL dialog state.
+    private bool _showSqlDialogOpen;
+    private string _showSqlText = string.Empty;
+    private int? _showSqlForTeam;
 
     private bool _busy;
     private string? _error;
@@ -391,6 +552,7 @@
                 // the required output column aliases.
                 _teamsSql = string.Empty;
                 _membersSql = string.Empty;
+                _userEmailsSql = string.Empty;
                 _savedAt = null;
                 _savedBy = null;
             }
@@ -398,6 +560,7 @@
             {
                 _teamsSql = cfg.TeamsSql;
                 _membersSql = cfg.MembersSql ?? string.Empty;
+                _userEmailsSql = cfg.UserEmailsSql ?? string.Empty;
                 _savedAt = cfg.UpdatedAt;
                 _savedBy = cfg.UpdatedBy;
             }
@@ -526,6 +689,13 @@
         if (_selectedConnectionId is not Guid id) return;
         _error = null;
         _busy = true;
+        // Re-running Preview invalidates any cached members from the
+        // previous fetch — the source could have changed and we don't
+        // want stale rows showing under a freshly-loaded team list.
+        _selectedTeam = null;
+        _allMembers = null;
+        _membersLoaded = false;
+        _membersError = null;
         StateHasChanged();
         try
         {
@@ -566,7 +736,8 @@
         try
         {
             var trimmedMembers = string.IsNullOrWhiteSpace(_membersSql) ? null : _membersSql;
-            await TeamSource.SaveConfigAsync(id, _teamsSql, trimmedMembers, CurrentUserEmail);
+            var trimmedEmails = string.IsNullOrWhiteSpace(_userEmailsSql) ? null : _userEmailsSql;
+            await TeamSource.SaveConfigAsync(id, _teamsSql, trimmedMembers, trimmedEmails, CurrentUserEmail);
 
             // De-dup and drop empty rows before saving the type map so the
             // UI's "blank row awaiting input" pattern doesn't round-trip to
@@ -608,6 +779,8 @@
     {
         _teamsSql = string.Empty;
         _membersSql = string.Empty;
+        _userEmailsSql = string.Empty;
+        _userEmailsPreview = null;
         _typeRows = new();
         _discoveredTypes.Clear();
         _savedAt = null;
@@ -615,7 +788,124 @@
         _previewRows = null;
         _previewTypes.Clear();
         _typeFilter = string.Empty;
+        _selectedTeam = null;
+        _allMembers = null;
+        _membersLoaded = false;
+        _membersError = null;
         _error = null;
+    }
+
+    private async Task PreviewUserEmails()
+    {
+        if (_selectedConnectionId is not Guid id) return;
+        _error = null;
+        _busy = true;
+        StateHasChanged();
+        try
+        {
+            _userEmailsPreview = await TeamSource.PreviewUserEmailsAsync(id, _userEmailsSql);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _userEmailsPreview = null;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OnTeamRowClicked(TeamRecord team)
+    {
+        // Toggle: clicking the already-selected row collapses the panel,
+        // matching the same affordance MudBlazor uses for expandable rows
+        // elsewhere in the admin UI.
+        if (_selectedTeam is not null && _selectedTeam.TeamId == team.TeamId)
+        {
+            _selectedTeam = null;
+            return;
+        }
+        _selectedTeam = team;
+
+        // Lazy fetch on the first row click — skip entirely when no
+        // members SQL is configured (panel renders an info alert in
+        // that case).
+        if (string.IsNullOrWhiteSpace(_membersSql) || _membersLoaded || _membersLoading) return;
+        if (_selectedConnectionId is not Guid cid) return;
+
+        _membersLoading = true;
+        _membersError = null;
+        StateHasChanged();
+        try
+        {
+            _allMembers = await TeamSource.PreviewMembersAsync(cid, _membersSql);
+            _membersLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            _membersError = ex.Message;
+        }
+        finally
+        {
+            _membersLoading = false;
+        }
+    }
+
+    private List<TeamMemberRecord> MembersForSelected()
+    {
+        if (_selectedTeam is null || _allMembers is null) return new();
+        return _allMembers
+            .Where(m => m.TeamId == _selectedTeam.TeamId)
+            .OrderBy(m => m.MemberName ?? m.MemberExtId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    // Subtle highlight on the row whose members panel is open. MudTable
+    // doesn't surface a "selected row" affordance out of the box, so we
+    // paint it via RowStyleFunc.
+    private string TeamRowStyle(TeamRecord team, int _) =>
+        _selectedTeam is not null && _selectedTeam.TeamId == team.TeamId
+            ? "background-color: #E8F0FE;"
+            : string.Empty;
+
+    // Synthesizes a CTE-wrapped join over the admin's Teams SQL,
+    // Members SQL, and (when configured) User Emails SQL purely for
+    // display. The dialog is read-only — the string is never executed
+    // against the source — so no escaping concerns; the admin pastes
+    // it into SSMS to verify the join shape outside the app.
+    private void ShowJoinSql(int? teamId)
+    {
+        _showSqlForTeam = teamId;
+        var teamsSql = (_teamsSql ?? string.Empty).TrimEnd().TrimEnd(';');
+        var membersSql = (_membersSql ?? string.Empty).TrimEnd().TrimEnd(';');
+        var emailsSql = (_userEmailsSql ?? string.Empty).TrimEnd().TrimEnd(';');
+        var hasEmails = !string.IsNullOrWhiteSpace(emailsSql);
+        var whereClause = teamId is int tid ? $"\n WHERE t.team_id = {tid}" : string.Empty;
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("WITH teams AS (\n").Append(Indent(teamsSql)).Append("\n");
+        sb.Append("), members AS (\n").Append(Indent(membersSql)).Append("\n");
+        if (hasEmails)
+        {
+            sb.Append("), user_emails AS (\n").Append(Indent(emailsSql)).Append("\n");
+        }
+        sb.Append(")\n");
+        sb.Append("SELECT t.team_id, t.team_name, t.team_type,\n");
+        sb.Append("       t.manager_ext_id, t.manager_name,\n");
+        sb.Append("       m.member_ext_id");
+        if (hasEmails) sb.Append(",\n       ue.email");
+        sb.Append("\n  FROM teams t\n");
+        sb.Append("  INNER JOIN members m ON m.team_id = t.team_id\n");
+        if (hasEmails)
+            sb.Append("  LEFT  JOIN user_emails ue ON ue.member_ext_id = m.member_ext_id");
+        sb.Append(whereClause).Append("\n");
+        sb.Append(" ORDER BY t.team_name, m.member_ext_id;");
+        _showSqlText = sb.ToString();
+        _showSqlDialogOpen = true;
+
+        static string Indent(string sql) =>
+            string.Join('\n', sql.Split('\n').Select(line => "    " + line));
     }
 
     private IEnumerable<TeamRecord> FilteredPreview()

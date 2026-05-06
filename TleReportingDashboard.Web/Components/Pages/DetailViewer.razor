@@ -56,7 +56,11 @@
         .grouped-detail-table tr.group-header td {
             background: var(--detail-group-header-bg, #FFEFD5);
             color: var(--detail-group-header-text, #202124);
-            font-weight: 700;
+            font-weight: var(--detail-group-header-weight, 700);
+            font-style: var(--detail-group-header-style, normal);
+            text-decoration: var(--detail-group-header-deco, none);
+            font-family: var(--detail-group-header-font, inherit);
+            font-size: var(--detail-group-header-size, inherit);
             padding: 6px 8px;
         }
         .grouped-detail-table tr.detail-row td {
@@ -68,20 +72,28 @@
             color: var(--detail-group-footer-text, #202124);
             border-top: 1px solid var(--border-default, #DADCE0);
             border-bottom: 2px solid #BDC1C6;
-            font-weight: 600;
+            font-weight: var(--detail-group-footer-weight, 700);
+            font-style: var(--detail-group-footer-style, normal);
+            text-decoration: var(--detail-group-footer-deco, none);
+            font-family: var(--detail-group-footer-font, inherit);
+            font-size: var(--detail-group-footer-size, inherit);
             padding: 5px 8px;
         }
 
         /* Grand-total row pinned to the bottom of the scroll container so
            it stays visible regardless of how far down the admin has
-           scrolled. Background + text drive off theme tokens so admins
-           can re-paint them via Admin → Theme. */
+           scrolled. Background + text + bold drive off theme tokens so
+           admins can re-paint and reweight them via Admin → Theme. */
         .grouped-detail-table tfoot tr.grand-total td {
             position: sticky;
             bottom: 0;
             background: var(--detail-grand-total-bg, #F7F7F7);
             color: var(--detail-grand-total-text, #202124);
-            font-weight: 700;
+            font-weight: var(--detail-grand-total-weight, 700);
+            font-style: var(--detail-grand-total-style, normal);
+            text-decoration: var(--detail-grand-total-deco, none);
+            font-family: var(--detail-grand-total-font, inherit);
+            font-size: var(--detail-grand-total-size, inherit);
             padding: 8px;
             border-top: 2px solid #5F6368;
         }
@@ -149,15 +161,20 @@
                            Labeled (not just an icon) so admins can discover it
                            when diagnosing why a drill-down view returned the
                            rows it did. *@
-                        <MudTooltip Text="Show the SQL that produced this view">
-                            <MudButton Variant="Variant.Outlined" Size="Size.Small"
-                                       Color="Color.Default"
-                                       StartIcon="@Icons.Material.Filled.Code"
-                                       OnClick="ShowDetailQuery"
-                                       Disabled="@(_detailData?.Sql is null)">
-                                Show SQL
-                            </MudButton>
-                        </MudTooltip>
+                        @* Show SQL is admin-only — exposes raw SQL +
+                           bound parameters (per the 2026-05-05 policy). *@
+                        @if (_isAdmin)
+                        {
+                            <MudTooltip Text="Show the SQL that produced this view">
+                                <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                           Color="Color.Default"
+                                           StartIcon="@Icons.Material.Filled.Code"
+                                           OnClick="ShowDetailQuery"
+                                           Disabled="@(_detailData?.Sql is null)">
+                                    Show SQL
+                                </MudButton>
+                            </MudTooltip>
+                        }
                         <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
                                     Disabled="@(_detailData is null || !_detailData.Rows.Any())" />
                     </MudStack>
@@ -333,6 +350,9 @@
     private string? _groupLabel;
     private string? _error;
     private bool _isLoading;
+    // Admin-only Show SQL gate. Set during init so the action button
+    // can hide for non-admins per the 2026-05-05 policy change.
+    private bool _isAdmin;
     private QueryResponse? _detailData;
     private DashboardView.DashboardConfig? _dashConfig;
     // Per-report SQL calc columns. Hydrated from ColumnState so the
@@ -405,6 +425,7 @@
             if (report is null) { _error = "Report not found."; return; }
 
             var isAdmin = AdminService.IsAdmin(userEmail);
+            _isAdmin = isAdmin;
             // Admin-section roles (System Support et al.) bypass the per-
             // company gate — they need cross-company visibility for support
             // work, same model the picker / Report Library use.

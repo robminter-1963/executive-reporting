@@ -18,6 +18,7 @@ public static class AdminSections
     public const string Users         = "users";
     public const string Roles         = "roles";
     public const string TeamBuilder   = "team_builder";
+    public const string Schedules     = "schedules";
     public const string SchemaHistory = "schema_history";
     public const string SchemaBuilder = "schema_builder";
     public const string Promotion     = "promotion";
@@ -32,6 +33,7 @@ public static class AdminSections
         (Users,         "Users"),
         (Roles,         "Roles"),
         (TeamBuilder,   "Team Builder"),
+        (Schedules,     "Schedules"),
         (SchemaHistory, "Schema History"),
         (SchemaBuilder, "Schema Builder"),
         (Promotion,     "Promotion"),

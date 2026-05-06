@@ -82,11 +82,14 @@ public sealed class SchedulerSyncService : BackgroundService
 
         // Pull the desired state from the DB. LEFT JOIN saved_reports +
         // companies so we can format the friendly label as
-        // "<Company> - <Report Name>" — Hangfire's [DisplayName]
+        // "<Company> - <Schedule Subject>" — Hangfire's [DisplayName]
         // attribute on ScheduledReportJob.ExecuteAsync renders {1} (the
         // displayName argument) in place of the raw method signature, so
-        // the dashboard becomes scannable when the same report exists
-        // across multiple companies.
+        // renaming a schedule's subject in the dialog reflects in the
+        // dashboard on the next sync poll. Falls back to the saved
+        // report's name when subject is somehow blank, then to
+        // "(unnamed schedule)" if both are missing — defensive only;
+        // the dialog enforces non-empty subject at save time.
         var desired = new Dictionary<Guid, ScheduleRow>();
         await using (var conn = new SqlConnection(connStr))
         {
@@ -94,8 +97,8 @@ public sealed class SchedulerSyncService : BackgroundService
             await using var cmd = new SqlCommand(@"
                 SELECT s.id,
                        s.cron_expression,
-                       COALESCE(r.name, '(unnamed report)') AS report_name,
-                       c.name                              AS company_name
+                       COALESCE(NULLIF(LTRIM(RTRIM(s.subject)), ''), r.name, '(unnamed schedule)') AS label,
+                       c.name AS company_name
                   FROM EMPOWER.RPT_report_schedules s
              LEFT JOIN EMPOWER.RPT_saved_reports r ON r.id = s.report_id
              LEFT JOIN EMPOWER.RPT_companies   c ON c.id = r.company_id
@@ -107,11 +110,11 @@ public sealed class SchedulerSyncService : BackgroundService
                 {
                     var id = r.GetGuid(0);
                     var cron = r.GetString(1);
-                    var reportName = r.IsDBNull(2) ? "(unnamed report)" : r.GetString(2);
+                    var label = r.IsDBNull(2) ? "(unnamed schedule)" : r.GetString(2);
                     var companyName = r.IsDBNull(3) ? null : r.GetString(3);
                     var displayName = string.IsNullOrWhiteSpace(companyName)
-                        ? reportName
-                        : $"{companyName} - {reportName}";
+                        ? label
+                        : $"{companyName} - {label}";
                     if (!string.IsNullOrWhiteSpace(cron))
                         desired[id] = new ScheduleRow(cron.Trim(), displayName);
                 }

@@ -8,7 +8,6 @@
 @inject IReportService ReportService
 @inject IExportService ExportService
 @inject ISharingService SharingService
-@inject IScheduleService ScheduleService
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -259,11 +258,6 @@
                                 Apply template…
                             </MudMenuItem>
                         }
-                        <MudMenuItem OnClick="HandleSchedule"
-                                     Disabled="@(_loadedReportId is null)"
-                                     Icon="@Icons.Material.Filled.Schedule">
-                            @(_loadedReportId is null ? "Schedule (save report first)" : "Schedule…")
-                        </MudMenuItem>
                         <MudMenuItem OnClick="HandleShare"
                                      Disabled="@(_loadedReportId is null)"
                                      Icon="@Icons.Material.Filled.Share">
@@ -278,24 +272,27 @@
                                 Save as template
                             </MudMenuItem>
                         }
-                        @* Show generated SQL is intentionally available to
-                           every user — it's the same right-click affordance
-                           the dashboard tile menu offers, used to debug
-                           "why am I seeing zero rows?" without admin help. *@
-                        <MudMenuItem OnClick="ShowQuery"
-                                     Disabled="@(!_selectedFieldIds.Any())"
-                                     Icon="@Icons.Material.Filled.Code">
-                            Show generated SQL
-                        </MudMenuItem>
-                        @* Show the report's saved-state JSON in a dialog —
-                           same purpose as Schema Builder's Export tab, but
-                           inline so admins can copy/inspect without leaving
-                           the report. Useful for diagnosing column-order /
-                           hidden-list / dashboard-config drift. *@
-                        <MudMenuItem OnClick="ShowReportJson"
-                                     Icon="@Icons.Material.Filled.DataObject">
-                            View report JSON
-                        </MudMenuItem>
+                        @* Show generated SQL / View report JSON are
+                           admin-only — both expose schema-level details
+                           (raw SQL with bound parameters, ColumnState
+                           internals) that non-admin users shouldn't see.
+                           Earlier the Show SQL item was open to everyone
+                           for self-service debugging; user request 2026-05-05
+                           reverted that to admin-only across every surface
+                           (Builder / Viewer / DetailViewer / Master tile
+                           right-click). *@
+                        @if (_isAdmin)
+                        {
+                            <MudMenuItem OnClick="ShowQuery"
+                                         Disabled="@(!_selectedFieldIds.Any())"
+                                         Icon="@Icons.Material.Filled.Code">
+                                Show generated SQL
+                            </MudMenuItem>
+                            <MudMenuItem OnClick="ShowReportJson"
+                                         Icon="@Icons.Material.Filled.DataObject">
+                                View report JSON
+                            </MudMenuItem>
+                        }
                     </MudMenu>
                 </MudTooltip>
                 @if (_isAdmin)
@@ -813,7 +810,11 @@
                                 FillViewport="true" />
                 </MudTabPanel>
                 <MudTabPanel Text="Chart" Icon="@Icons.Material.Filled.BarChart">
-                    <ChartBuilder Data="_queryData" AvailableColumns="_queryData.Columns" />
+                    <ChartBuilder Data="_queryData" AvailableColumns="_queryData.Columns"
+                                  InitialChartType="@_currentConfig.ChartType"
+                                  InitialXField="@_currentConfig.ChartXField"
+                                  InitialYField="@_currentConfig.ChartYField"
+                                  OnConfigChanged="HandleChartConfigChanged" />
                 </MudTabPanel>
                 <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
                     <DashboardView @ref="_dashboardView" Data="_queryData"
@@ -1158,6 +1159,19 @@
                 var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
                 var allowed = access.Select(a => a.CompanyId).ToHashSet();
                 _companies = _companies.Where(c => allowed.Contains(c.Id)).ToList();
+
+                // Viewer-only users can't author reports — bounce
+                // them back to the Library. Library hides the "New
+                // Report" button for them, but a direct nav to
+                // /builder (typed URL, bookmarked link, stale tab)
+                // would otherwise land them on an editor they can't
+                // actually save. Fail-closed at the page boundary.
+                if (access.Count == 0
+                    || access.All(a => string.Equals(a.Role, UserRoles.Viewer, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Navigation.NavigateTo("/reports", replace: true);
+                    return;
+                }
             }
 
             _availableConnections = new();
@@ -1358,6 +1372,20 @@
                     {
                         _currentConfig.CustomFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfElement.GetRawText());
                     }
+
+                    // Chart-tab config — the picks the user made on
+                    // the Chart tab (type + axis fields). Persisted
+                    // here so navigating away and back, or running
+                    // the report from the Library, restores the same
+                    // visualization. Master Dashboard tile rendering
+                    // also reads these (via ReportConfig.ChartType)
+                    // to decide whether to show its chart icon.
+                    if (root.TryGetProperty("ChartType", out var ctEl))
+                        _currentConfig.ChartType = ctEl.GetString();
+                    if (root.TryGetProperty("ChartXField", out var cxEl))
+                        _currentConfig.ChartXField = cxEl.GetString();
+                    if (root.TryGetProperty("ChartYField", out var cyEl))
+                        _currentConfig.ChartYField = cyEl.GetString();
 
                     // Table-view calculated columns. Independent of the
                     // dashboard's calc columns (those live inside
@@ -1847,6 +1875,18 @@
         _currentConfig.TableSort = sort
             .Select(t => new TableSortSpec { Field = t.Field, Direction = t.Direction })
             .ToList();
+        return Task.CompletedTask;
+    }
+
+    // Mirrors HandleSortChanged for the Chart tab — pushes the user's
+    // type / X / Y picks into _currentConfig so BuildColumnStateJson
+    // emits them on the next save. ChartBuilder fires this on every
+    // user change; in-memory only until Save.
+    private Task HandleChartConfigChanged((string ChartType, string XField, string YField) cfg)
+    {
+        _currentConfig.ChartType = string.IsNullOrWhiteSpace(cfg.ChartType) ? null : cfg.ChartType;
+        _currentConfig.ChartXField = string.IsNullOrWhiteSpace(cfg.XField) ? null : cfg.XField;
+        _currentConfig.ChartYField = string.IsNullOrWhiteSpace(cfg.YField) ? null : cfg.YField;
         return Task.CompletedTask;
     }
 
@@ -3194,23 +3234,6 @@
         await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, options);
     }
 
-    // ── Schedule ──
-
-    private async Task HandleSchedule()
-    {
-        if (_loadedReportId is null) return;
-
-        var parameters = new DialogParameters<SchedulesDialog>
-        {
-            { x => x.ReportId, _loadedReportId.Value },
-            { x => x.ReportName, _loadedReportName ?? "Report" },
-            { x => x.UserId, _userId },
-            { x => x.UserEmail, _userEmail }
-        };
-        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        await DialogService.ShowAsync<SchedulesDialog>("Schedules", parameters, options);
-    }
-
     // ── KPI management ──
 
     private void HandleKpiAdded(string kpiId)
@@ -3265,6 +3288,16 @@
         // Custom filter IDs
         if (_currentConfig.CustomFilterIds is not null && _currentConfig.CustomFilterIds.Count > 0)
             state["CustomFilterIds"] = _currentConfig.CustomFilterIds;
+
+        // Chart-tab config. Only persisted when at least one piece is
+        // populated — keeps legacy reports clean of phantom keys when
+        // the author never visited the Chart tab.
+        if (!string.IsNullOrWhiteSpace(_currentConfig.ChartType))
+            state["ChartType"] = _currentConfig.ChartType;
+        if (!string.IsNullOrWhiteSpace(_currentConfig.ChartXField))
+            state["ChartXField"] = _currentConfig.ChartXField;
+        if (!string.IsNullOrWhiteSpace(_currentConfig.ChartYField))
+            state["ChartYField"] = _currentConfig.ChartYField;
 
         // Multi-column sort — ordered list of {Field, Direction}. Primary first.
         // This is the only sort source new saves emit. The legacy TableSortField

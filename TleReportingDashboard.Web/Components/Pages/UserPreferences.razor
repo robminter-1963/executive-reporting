@@ -4,7 +4,6 @@
 @inject UserPreferenceState PreferenceState
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
-@inject IJSRuntime JS
 @inject ISnackbar Snackbar
 
 <PageTitle>Preferences - Executive Reporting Suite</PageTitle>
@@ -77,10 +76,17 @@
                 </MudStack>
             </MudPaper>
 
-            @* ── Save ── *@
+            @* ── Save ──
+               Cancel + Save both navigate to "/" — the company picker
+               page, which auto-redirects to the user's last-visited
+               company dashboard when PrefersCompanyPicker is false.
+               This sends users back to their working surface (the
+               dashboard they came from) rather than dumping them in
+               the Report Library, which a viewer-only user may not
+               even need. *@
             <MudStack Row Justify="Justify.FlexEnd" Spacing="2">
                 <MudButton Variant="Variant.Text" Color="Color.Default"
-                           OnClick="@(() => Navigation.NavigateTo("/reports"))">
+                           OnClick="@(() => Navigation.NavigateTo("/"))">
                     Cancel
                 </MudButton>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
@@ -111,17 +117,16 @@
         _loading = false;
     }
 
-    // Prefer browser-native back so the arrow honors the actual navigation
-    // history (could be Report Library, Master Dashboard, or anywhere else).
-    // Falls back to /reports when there's no prior entry (fresh tab opened
-    // straight to /preferences).
-    private async Task GoBack()
+    // Always go "home" — the company picker at "/", which auto-redirects
+    // to the user's last-visited company dashboard when PrefersCompanyPicker
+    // is false. We deliberately skip browser-history back here because the
+    // most common entry path is "user menu → Preferences" from any page,
+    // and a viewer-only user landing back on /reports (or any other
+    // hands-off surface they were just on) wasn't useful — they want to
+    // get back to their dashboard. Mirrors the Cancel / Save destinations.
+    private void GoBack()
     {
-        var hasHistory = await JS.InvokeAsync<bool>("eval", "window.history.length > 1");
-        if (hasHistory)
-            await JS.InvokeVoidAsync("history.back");
-        else
-            Navigation.NavigateTo("/reports");
+        Navigation.NavigateTo("/");
     }
 
     private void OnPageSizeChanged(int size)
@@ -141,7 +146,10 @@
         {
             await PreferenceService.SavePreferencesAsync(_pref);
             PreferenceState.Set(_pref);
-            Navigation.NavigateTo("/reports");
+            // Land back on the picker, which redirects to the user's
+            // last-visited company dashboard. Same destination Cancel
+            // / Back use, so the page has one consistent exit target.
+            Navigation.NavigateTo("/");
         }
         catch (Exception ex)
         {

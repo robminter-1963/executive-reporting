@@ -94,6 +94,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         AddReportParams(cmd, report);
         await cmd.ExecuteNonQueryAsync();
         _cache.Invalidate("ReportDbService:Reports:");
+        _cache.Invalidate("ReportDbService:Shares:");
         _cache.Invalidate("MasterDashboardService:");
         _logger.LogInformation("Report saved: {Id} {Name}", report.Id, report.Name);
         return report;
@@ -119,6 +120,13 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         var rows = await cmd.ExecuteNonQueryAsync();
         if (rows == 0) throw new UnauthorizedAccessException("Report not found or not owned by user.");
         _cache.Invalidate("ReportDbService:Reports:");
+        // Renaming or any other report mutation has to invalidate the
+        // shared-with-me caches too — those keys (Shares:SharedWith:<userId>)
+        // hold List<SavedReport> snapshots that include the joined name.
+        // Without this, a viewer's "Shared With Me" tab keeps the old
+        // name until the next cache eviction, which is exactly the bug
+        // the user reported when renaming a shared report.
+        _cache.Invalidate("ReportDbService:Shares:");
         _cache.Invalidate("MasterDashboardService:");
         return report;
     }
@@ -164,6 +172,11 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         var rows = await cmd.ExecuteNonQueryAsync();
         if (rows == 0) throw new UnauthorizedAccessException("Report not found or not owned by user.");
         _cache.Invalidate("ReportDbService:Reports:");
+        // ON DELETE CASCADE on RPT_report_shares.report_id removes the
+        // share rows, but the SharedWith caches still hold the deleted
+        // report. Drop those so users it was shared to don't see a
+        // ghost entry until eviction.
+        _cache.Invalidate("ReportDbService:Shares:");
         _cache.Invalidate("MasterDashboardService:");
     }
 
@@ -284,9 +297,11 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
             @"INSERT INTO EMPOWER.RPT_report_schedules
               (id, report_id, owner_id, owner_email, cron_expression, schedule_pattern, start_date, end_date,
                subject, recipients, cc_recipients, bcc_recipients,
+               kind, team_id, team_connection_id, dist_email,
                attachment_format, include_preview, is_active, created_at)
               VALUES (@Id, @ReportId, @OwnerId, @OwnerEmail, @Cron, @Pattern, @StartDate, @EndDate,
                       @Subject, @Recipients, @Cc, @Bcc,
+                      @Kind, @TeamId, @TeamConnId, @DistEmail,
                       @Format, @Preview, @Active, @CreatedAt)", conn);
         AddScheduleParams(cmd, schedule);
         cmd.Parameters.Add(new SqlParameter("@CreatedAt", schedule.CreatedAt));
@@ -304,6 +319,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
               start_date = @StartDate, end_date = @EndDate,
               subject = @Subject,
               recipients = @Recipients, cc_recipients = @Cc, bcc_recipients = @Bcc,
+              kind = @Kind, team_id = @TeamId, team_connection_id = @TeamConnId, dist_email = @DistEmail,
               attachment_format = @Format, include_preview = @Preview, is_active = @Active
               WHERE id = @Id AND owner_id = @OwnerId", conn);
         AddScheduleParams(cmd, schedule);
@@ -326,6 +342,15 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@Recipients", (object?)s.Recipients ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@Cc", (object?)s.CcRecipients ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@Bcc", (object?)s.BccRecipients ?? DBNull.Value));
+        // Kind is persisted as the lowercase string ('individual' /
+        // 'distribution') rather than the integer enum so the column
+        // stays human-readable from SSMS — matches the CHECK constraint
+        // in the migration.
+        cmd.Parameters.Add(new SqlParameter("@Kind",
+            s.Kind == ScheduleKind.Individual ? "individual" : "distribution"));
+        cmd.Parameters.Add(new SqlParameter("@TeamId", (object?)s.TeamId ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@TeamConnId", (object?)s.TeamConnectionId ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@DistEmail", (object?)s.DistEmail ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@Format", s.AttachmentFormat));
         cmd.Parameters.Add(new SqlParameter("@Preview", s.IncludePreview));
         cmd.Parameters.Add(new SqlParameter("@Active", s.IsActive));
@@ -454,6 +479,15 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
                 Recipients = GetNullableString(reader, "recipients"),
                 CcRecipients = GetNullableString(reader, "cc_recipients"),
                 BccRecipients = GetNullableString(reader, "bcc_recipients"),
+                // Kind / team / dist columns are read defensively via
+                // TryGetOptional* — envs that haven't applied the
+                // 2026-05-05 schedule_kind migration return nulls here
+                // and the row falls through to the legacy owner-email
+                // distribution path in the Worker.
+                Kind = ParseScheduleKind(TryGetOptionalString(reader, "kind")),
+                TeamId = TryGetOptionalInt(reader, "team_id"),
+                TeamConnectionId = TryGetOptionalGuid(reader, "team_connection_id"),
+                DistEmail = TryGetOptionalString(reader, "dist_email"),
                 AttachmentFormat = reader.GetString(reader.GetOrdinal("attachment_format")),
                 IncludePreview = reader.GetBoolean(reader.GetOrdinal("include_preview")),
                 IsActive = reader.GetBoolean(reader.GetOrdinal("is_active")),
@@ -510,4 +544,23 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         }
         catch (IndexOutOfRangeException) { return null; }
     }
+
+    private static int? TryGetOptionalInt(SqlDataReader reader, string column)
+    {
+        try
+        {
+            var ord = reader.GetOrdinal(column);
+            return reader.IsDBNull(ord) ? null : reader.GetInt32(ord);
+        }
+        catch (IndexOutOfRangeException) { return null; }
+    }
+
+    // Maps the lowercase string persisted by AddScheduleParams back to
+    // the enum. Null / unknown values default to Distribution so a
+    // pre-migration env (no `kind` column) reads as the legacy single-
+    // recipient mode and the Worker's owner-email fallback kicks in.
+    private static ScheduleKind ParseScheduleKind(string? raw) =>
+        string.Equals(raw, "individual", StringComparison.OrdinalIgnoreCase)
+            ? ScheduleKind.Individual
+            : ScheduleKind.Distribution;
 }

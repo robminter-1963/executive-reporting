@@ -1,13 +1,13 @@
 <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px;" Class="pa-4">
     <MudStack Spacing="3">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-            <MudToggleGroup T="ChartType" @bind-Value="_chartType" @bind-Value:after="BuildChart" Outlined Size="Size.Small">
+            <MudToggleGroup T="ChartType" @bind-Value="_chartType" @bind-Value:after="HandleConfigChanged" Outlined Size="Size.Small">
                 <MudToggleItem T="ChartType" Value="ChartType.Bar" Text="Bar" />
                 <MudToggleItem T="ChartType" Value="ChartType.Line" Text="Line" />
                 <MudToggleItem T="ChartType" Value="ChartType.Pie" Text="Pie" />
             </MudToggleGroup>
 
-            <MudSelect T="string" @bind-Value="_xField" @bind-Value:after="BuildChart" Label="X-Axis" Variant="Variant.Outlined"
+            <MudSelect T="string" @bind-Value="_xField" @bind-Value:after="HandleConfigChanged" Label="X-Axis" Variant="Variant.Outlined"
                        Margin="Margin.Dense" Dense Style="max-width: 200px;">
                 @foreach (var col in AvailableColumns)
                 {
@@ -15,7 +15,7 @@
                 }
             </MudSelect>
 
-            <MudSelect T="string" @bind-Value="_yField" @bind-Value:after="BuildChart" Label="Y-Axis" Variant="Variant.Outlined"
+            <MudSelect T="string" @bind-Value="_yField" @bind-Value:after="HandleConfigChanged" Label="Y-Axis" Variant="Variant.Outlined"
                        Margin="Margin.Dense" Dense Style="max-width: 200px;">
                 @foreach (var col in NumericColumns)
                 {
@@ -64,9 +64,29 @@
     [Parameter] public QueryResponse? Data { get; set; }
     [Parameter] public List<ColumnMeta> AvailableColumns { get; set; } = new();
 
+    // Initial values from the saved report's ColumnState. Applied
+    // once on first parameter set so re-renders triggered by Data
+    // changes (paging, refresh) don't blow away the user's in-session
+    // edits. ChartType is a string ("Bar"|"Line"|"Pie") to match the
+    // serialized form on RPT_saved_reports.column_state.
+    [Parameter] public string? InitialChartType { get; set; }
+    [Parameter] public string? InitialXField { get; set; }
+    [Parameter] public string? InitialYField { get; set; }
+
+    // Fires when the user picks a different chart type / X / Y so
+    // the parent (Builder) can persist the change into ColumnState
+    // on save. The triple is the canonical save shape — ChartType
+    // string + the two field ids — so the parent doesn't need to
+    // know about MudBlazor's enum.
+    [Parameter] public EventCallback<(string ChartType, string XField, string YField)> OnConfigChanged { get; set; }
+
     private ChartType _chartType = ChartType.Bar;
     private string _xField = string.Empty;
     private string _yField = string.Empty;
+    // Tracks whether we've already applied the Initial* parameters
+    // — Blazor's [Parameter] re-flow on each render would otherwise
+    // overwrite the user's mid-session edits with the saved values.
+    private bool _initialApplied;
 
     private List<ChartSeries<double>> _chartSeries = new();
     private string[] _chartLabels = Array.Empty<string>();
@@ -100,7 +120,34 @@
 
     protected override void OnParametersSet()
     {
+        // First-render hydration from saved ColumnState. After this
+        // applies once, the user owns the values until the component
+        // is destroyed/recreated.
+        if (!_initialApplied)
+        {
+            _chartType = InitialChartType switch
+            {
+                "Pie" => ChartType.Pie,
+                "Line" => ChartType.Line,
+                _ => ChartType.Bar
+            };
+            _xField = InitialXField ?? string.Empty;
+            _yField = InitialYField ?? string.Empty;
+            _initialApplied = true;
+        }
         BuildChart();
+    }
+
+    private async Task HandleConfigChanged()
+    {
+        BuildChart();
+        if (OnConfigChanged.HasDelegate)
+        {
+            await OnConfigChanged.InvokeAsync((
+                ChartType: _chartType.ToString(),
+                XField: _xField ?? string.Empty,
+                YField: _yField ?? string.Empty));
+        }
     }
 
     private void BuildChart()

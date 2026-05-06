@@ -113,17 +113,19 @@
                    browser tab / <PageTitle> stays informative. *@
             </MudStack>
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                @* Report Library shortcut. Same audience as the back arrow's
-                   prior destination — Editors, Schedulers, and admins all
-                   need a way to author / schedule ad-hoc reports without
-                   leaving the dashboard manually. Viewers don't get the
-                   shortcut because they don't have Report Library access. *@
-                @if (_userRoleForCompany != UserRoles.Viewer)
+                @* Report Library shortcut. Visible to every role
+                   except viewers with no shared reports — those would
+                   land on an empty Library and have nothing to do
+                   there, so the link disappears once their last share
+                   is revoked. Editors / Schedulers / admins always
+                   see the button; the Library handles their role-aware
+                   tab/affordance gating internally. *@
+                @if (_userRoleForCompany != UserRoles.Viewer || _hasAnyShares)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
                                StartIcon="@Icons.Material.Filled.LibraryBooks"
                                OnClick="@(() => Navigation.NavigateTo("/reports"))">
-                        Report Library
+                        @(_userRoleForCompany == UserRoles.Viewer ? "Shared Reports" : "Report Library")
                     </MudButton>
                 }
                 @* Edit is admin-only — the shared dashboard is the company's
@@ -177,25 +179,49 @@
                 @foreach (var tab in _tabs)
                 {
                     var t = tab;
+                    var tIdx = _tabs.IndexOf(t);
                     <MudTabPanel>
                         <TabContent>
-                            @* Tab header doubles as a drop target while a
-                               tile is being dragged in edit mode — drop a
-                               tile onto another tab's label to re-home it.
-                               Plain div wraps the MudStack because drag
-                               directives (:preventDefault / :stopPropagation)
-                               don't compose cleanly with MudBlazor component
-                               parameters. stopPropagation on drop prevents
-                               MudTabs from treating the release as a tab-click. *@
+                            @* Tab header doubles as a drop target for two
+                               drag flavors in edit mode: a tile (re-home
+                               to another tab) and a sibling tab (reorder).
+                               Sections are deliberately NOT droppable on
+                               other tabs — they stay scoped to the tab
+                               they were created in, and the predicate
+                               below excludes _sectionDragSource. Plain
+                               div wraps the MudStack because drag
+                               directives (:preventDefault /
+                               :stopPropagation) don't compose cleanly with
+                               MudBlazor component parameters.
+                               stopPropagation on drop prevents MudTabs
+                               from treating the release as a tab-click. *@
                             <div style="@(_dropTargetTabId == t.Id
                                             ? "outline: 2px dashed #1A73E8; outline-offset: 2px; border-radius: 4px;"
                                             : "")"
                                  @ondragover:preventDefault
-                                 @ondragover="@(() => { if (_editMode && (_dragSource >= 0 || _sectionDragSource >= 0) && t.Id != ActiveTab?.Id) _dropTargetTabId = t.Id; })"
+                                 @ondragover="@(() => { if (_editMode && (_dragSource >= 0 || (_tabDragSource >= 0 && _tabDragSource != tIdx))) _dropTargetTabId = t.Id; })"
                                  @ondragleave="@(() => { if (_dropTargetTabId == t.Id) _dropTargetTabId = 0; })"
                                  @ondrop="@(async () => await OnTabStripDrop(t.Id))"
                                  @ondrop:stopPropagation="true">
                                 <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                    @* Drag handle for tab reorder. Mirrors
+                                       the section drag-indicator pattern —
+                                       only the handle is draggable so
+                                       clicking the rest of the tab still
+                                       activates it normally. stopPropagation
+                                       on click keeps a click on the handle
+                                       from also triggering tab activation. *@
+                                    @if (_editMode)
+                                    {
+                                        <span draggable="true"
+                                              @ondragstart="@(() => _tabDragSource = tIdx)"
+                                              @ondragend="@(() => { _tabDragSource = -1; _dropTargetTabId = 0; })"
+                                              style="cursor: grab; display: inline-flex;"
+                                              @onclick:stopPropagation="true"
+                                              title="Drag to reorder tabs">
+                                            <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small" Style="color: #5F6368;" />
+                                        </span>
+                                    }
                                     <span>@t.Label</span>
                                     @if (_editMode)
                                     {
@@ -308,7 +334,7 @@
                                                           @ondragend="@(() => { _sectionDragSource = -1; _headerDropTargetIdx = -1; })"
                                                           style="cursor: grab; display: inline-flex;"
                                                           @onclick:stopPropagation="true"
-                                                          title="Drag to reorder sections (or drop on another tab to move)">
+                                                          title="Drag to reorder sections">
                                                         <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small" Style="color: #5F6368;" />
                                                     </span>
                                                 }
@@ -402,14 +428,21 @@
                                            flex-shrink: 0 + min-width: auto combination was pinning
                                            the tile at ColSpan * 60 regardless of viewport / parent
                                            width, which then propagated down to the table. *@
+                                        @* Right-click → "Show SQL" dialog
+                                           is admin-only. For non-admins
+                                           we don't bind the handler at all,
+                                           so the browser's default context
+                                           menu surfaces normally and there's
+                                           no admin-only affordance to
+                                           discover. (2026-05-05 policy.) *@
                                         <div @key="tl.Id" id="@($"master-tile-{tl.Id}")"
                                              class="@tileClass"
                                              style="@(visible ? string.Empty : "display: none; ")width: @(tl.ColSpan * 60)px; height: @(tl.Height)px; position: relative; min-width: 0; flex-shrink: 1;"
                                              @ondragover:preventDefault
                                              @ondragover="@(() => { if (_editMode && _dragSource >= 0 && idx != _dragSource) { _dropTarget = idx; } })"
                                              @ondrop="@(async () => await OnTileDrop(idx))"
-                                             @oncontextmenu="@(() => ShowTileQuery(tl))"
-                                             @oncontextmenu:preventDefault="true">
+                                             @oncontextmenu="@(() => { if (_userRoleForCompany == UserRoles.Admin) _ = ShowTileQuery(tl); })"
+                                             @oncontextmenu:preventDefault="@(_userRoleForCompany == UserRoles.Admin)">
                                             <MudPaper Elevation="0" Style="border: 1px solid var(--border-subtle, #E8EAED); border-radius: 12px; height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--surface-card, #FFFFFF); box-shadow: 7px 7px 9px rgba(0,0,0,0.20), 5px 5px 7px rgba(0,0,0,0.14);">
                                                 @* Tile header — drag handle in edit mode; title is bold and per-tile alignable *@
                                                 @{
@@ -425,7 +458,7 @@
                                                             <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small"
                                                                      Style="color: #5F6368; font-size: 18px;" />
                                                         }
-                                                        <span style="@($"flex: 1; min-width: 0; font-weight: 700; font-size: 0.95rem; text-align: {tileAlign}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;")"
+                                                        <span style="@($"flex: 1; min-width: 0; font-weight: var(--dashboard-header-weight, 700); font-style: var(--dashboard-header-style, normal); text-decoration: var(--dashboard-header-deco, none); font-family: var(--dashboard-header-font, inherit); font-size: var(--dashboard-header-size, 0.95rem); text-align: {tileAlign}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;")"
                                                               title="@tl.ReportName">@tl.ReportName</span>
                                                         @if (_editMode)
                                                         {
@@ -558,7 +591,7 @@
                                                    uncluttered. *@
                                                 @if (_tileData.TryGetValue(tl.ReportId, out var tdFooter))
                                                 {
-                                                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 12px; border-top: 1px solid var(--border-subtle, #E8EAED); background: var(--dashboard-footer-bg, #FAFAFA); color: var(--dashboard-footer-text, #5F6368); font-size: 0.7rem;">
+                                                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 12px; border-top: 1px solid var(--border-subtle, #E8EAED); background: var(--dashboard-footer-bg, #FAFAFA); color: var(--dashboard-footer-text, #5F6368); font-weight: var(--dashboard-footer-weight, 400); font-style: var(--dashboard-footer-style, normal); text-decoration: var(--dashboard-footer-deco, none); font-family: var(--dashboard-footer-font, inherit); font-size: var(--dashboard-footer-size, 0.7rem);">
                                                         <span>@tdFooter.Data.Rows.Count.ToString("N0") rows</span>
                                                         <span>updated @FormatTileFooterTime(_tileLoadedAtUtc.GetValueOrDefault(tl.ReportId))</span>
                                                     </div>
@@ -763,6 +796,14 @@
     // Drives per-role UI gating — e.g. hiding the Report Library shortcut
     // from Viewers, who aren't meant to leave the dashboard.
     private string _userRoleForCompany = string.Empty;
+    // Drives whether the "Shared Reports" header button shows for
+    // viewer-role users. Editor / Scheduler / Admin roles always see
+    // the full Library, so this flag is only consulted on the viewer
+    // branch. Refreshed on each page load — when an admin revokes a
+    // share, the next time the viewer hits the dashboard the count
+    // will reflect the change (the share cache was invalidated by
+    // ReportDbService at revoke time).
+    private bool _hasAnyShares;
     // Drives the back-arrow visibility: single-company users have no picker
     // to return to (CompanyPicker auto-redirects them straight here), so
     // showing the arrow would just dead-end them on a redirect loop.
@@ -993,6 +1034,25 @@
             }
             if (grant is not null && !string.IsNullOrWhiteSpace(grant.CompanyEmail))
                 activeEmail = grant.CompanyEmail;
+
+            // Resolve "does this user have any reports shared with
+            // them right now?" — gates the Shared Reports header
+            // button for viewer-role users so it disappears the
+            // moment the last share is revoked. Quick query (one
+            // join, indexed); cache invalidation is already wired
+            // on the share create/delete and report mutation paths.
+            try
+            {
+                var shares = await SharingService.GetSharedWithMeAsync(_userId);
+                _hasAnyShares = shares.Count > 0;
+            }
+            catch
+            {
+                // Service hiccup shouldn't suppress the button on a
+                // false negative — default to true so the user
+                // always has a path to retry from the Library.
+                _hasAnyShares = true;
+            }
         }
         if (hasAdminAccess)
         {
@@ -1440,6 +1500,13 @@
     // so the two interaction surfaces don't interfere.
 
     private int _sectionDragSource = -1;
+
+    // Index of the tab whose drag-handle the user grabbed. Mirrors the
+    // section drag-source pattern but for the top-level tab strip.
+    // -1 means "no tab is being dragged." OnTabStripDrop dispatches to
+    // OnTabDrop when this is set, separately from section / tile drag
+    // sources so the three flavors don't interfere.
+    private int _tabDragSource = -1;
 
     // First real section's id, falling back to 0 (= "(no section)") when
     // none exist. Used on tab load and after section deletes / moves.
@@ -1906,9 +1973,9 @@
     // based on which drag source is active.
     private async Task OnTabStripDrop(int targetTabId)
     {
-        if (_sectionDragSource >= 0)
+        if (_tabDragSource >= 0)
         {
-            await OnSectionDropOnTab(targetTabId);
+            await OnTabDrop(targetTabId);
             return;
         }
         if (_dragSource >= 0)
@@ -1916,52 +1983,66 @@
             await OnTileDropOnTab(targetTabId);
             return;
         }
-        // Neither drag flavor active — clear drop highlight and bail.
+        // _sectionDragSource is intentionally not handled here — sections
+        // can be reordered within their tab but cannot be moved to a
+        // different tab. The predicate on the tab @ondragover excludes
+        // section drags from highlighting the drop zone, and dropping
+        // a section here is a no-op that just clears the highlight.
+        _sectionDragSource = -1;
         _dropTargetTabId = 0;
     }
 
-    // Cross-tab section move. Mirrors OnTileDropOnTab but for a section
-    // and all of its tiles. The service handles both the section row and
-    // every referencing tile in one transaction; locally we drop the
-    // moved section + its tiles from the current view (the user stays on
-    // the source tab; the section is just gone from here).
-    private async Task OnSectionDropOnTab(int targetTabId)
+    // Tab reorder. Source is _tabDragSource (set by the drag handle in
+    // edit mode); target is the tab the user dropped onto. Move the
+    // dragged tab to the target's slot, recompute SortOrder, and
+    // persist immediately so the order sticks even if the user closes
+    // the browser before clicking Done Editing. Active-tab tracking
+    // is by id through the move so the user stays on the same tab
+    // they were viewing.
+    private async Task OnTabDrop(int targetTabId)
     {
-        var activeId = ActiveTab?.Id ?? 0;
-        var sourceIdx = _sectionDragSource;
-        _sectionDragSource = -1;
-        _headerDropTargetIdx = -1;
+        var sourceIdx = _tabDragSource;
+        _tabDragSource = -1;
         _dropTargetTabId = 0;
 
-        if (sourceIdx < 0 || sourceIdx >= _sections.Count) return;
-        if (targetTabId == activeId) return;
+        if (sourceIdx < 0 || sourceIdx >= _tabs.Count) return;
+        var targetIdx = _tabs.FindIndex(x => x.Id == targetTabId);
+        if (targetIdx < 0 || targetIdx == sourceIdx) return;
 
-        var section = _sections[sourceIdx];
+        // Track the currently-active tab by id so we can re-resolve its
+        // index after the reorder. Without this, dragging a tab past
+        // the active one would silently switch the user to a different
+        // panel.
+        var activeTabId = ActiveTab?.Id;
+
+        // Drop semantic — same as OnSectionDrop / OnTileDrop:
+        // dragging RIGHT drops AFTER the target, dragging LEFT drops
+        // BEFORE. Both collapse to "remove source, then insert at the
+        // target's *pre-removal* index" — which after removal lands
+        // the moved item in the visually-correct slot for either
+        // direction. An earlier "-1" adjustment in this codebase
+        // made right-drag-onto-last-tab land second-to-last instead
+        // of last; don't reintroduce it.
+        var moved = _tabs[sourceIdx];
+        _tabs.RemoveAt(sourceIdx);
+        var insertAt = Math.Clamp(targetIdx, 0, _tabs.Count);
+        _tabs.Insert(insertAt, moved);
+        for (var i = 0; i < _tabs.Count; i++) _tabs[i].SortOrder = i;
+
+        if (activeTabId is int aid)
+        {
+            var newActive = _tabs.FindIndex(x => x.Id == aid);
+            if (newActive >= 0) _activeTabIndex = newActive;
+        }
+
         try
         {
-            await MasterService.MoveSectionToTabAsync(section.Id, targetTabId, _userEmail);
-            // Snackbar message uses the live tile count BEFORE we mutate
-            // _tiles so admins see how many tiles followed the section.
-            var movedTileCount = _tiles.Count(t => t.SectionId == section.Id);
-            _sections.RemoveAt(sourceIdx);
-            _tiles.RemoveAll(t => t.SectionId == section.Id);
-            // Drop cached per-tab state for both the source and target so
-            // re-entering either tab refetches fresh — server-side counts
-            // and ordering may have shifted under both.
-            _tilesByTab.Remove(activeId);
-            _tilesByTab.Remove(targetTabId);
-            _sectionsByTab.Remove(activeId);
-            _sectionsByTab.Remove(targetTabId);
-            var targetLabel = _tabs.FirstOrDefault(x => x.Id == targetTabId)?.Label ?? "another tab";
-            Snackbar.Add(
-                movedTileCount > 0
-                    ? $"Moved section \"{section.Label}\" ({movedTileCount} tile{(movedTileCount == 1 ? string.Empty : "s")}) to {targetLabel}."
-                    : $"Moved section \"{section.Label}\" to {targetLabel}.",
-                Severity.Success);
+            await MasterService.UpdateTabOrderAsync(_tabs, _userEmail);
+            StateHasChanged();
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to move section: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Failed to save tab order: {ex.Message}", Severity.Error);
         }
     }
 

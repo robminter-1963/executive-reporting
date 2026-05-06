@@ -111,6 +111,18 @@
                 @TokenSwatch("Footer bg",          _theme.DashboardFooterBg,   v => _theme.DashboardFooterBg = v)
                 @TokenSwatch("Footer text",        _theme.DashboardFooterText, v => _theme.DashboardFooterText = v)
             </div>
+            @TextFormatPanel("Header text",
+                () => _theme.DashboardHeaderBold,       b => _theme.DashboardHeaderBold = b,
+                () => _theme.DashboardHeaderItalic,     b => _theme.DashboardHeaderItalic = b,
+                () => _theme.DashboardHeaderUnderline,  b => _theme.DashboardHeaderUnderline = b,
+                () => _theme.DashboardHeaderFontFamily, v => _theme.DashboardHeaderFontFamily = v,
+                () => _theme.DashboardHeaderFontSize,   v => _theme.DashboardHeaderFontSize = v)
+            @TextFormatPanel("Footer text",
+                () => _theme.DashboardFooterBold,       b => _theme.DashboardFooterBold = b,
+                () => _theme.DashboardFooterItalic,     b => _theme.DashboardFooterItalic = b,
+                () => _theme.DashboardFooterUnderline,  b => _theme.DashboardFooterUnderline = b,
+                () => _theme.DashboardFooterFontFamily, v => _theme.DashboardFooterFontFamily = v,
+                () => _theme.DashboardFooterFontSize,   v => _theme.DashboardFooterFontSize = v)
         </MudPaper>
 
         <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
@@ -124,6 +136,18 @@
                 @TokenSwatch("Grid footer bg",      _theme.DashboardGridFooterBg,   v => _theme.DashboardGridFooterBg = v)
                 @TokenSwatch("Grid footer text",    _theme.DashboardGridFooterText, v => _theme.DashboardGridFooterText = v)
             </div>
+            @TextFormatPanel("Grid header text",
+                () => _theme.DashboardGridHeaderBold,       b => _theme.DashboardGridHeaderBold = b,
+                () => _theme.DashboardGridHeaderItalic,     b => _theme.DashboardGridHeaderItalic = b,
+                () => _theme.DashboardGridHeaderUnderline,  b => _theme.DashboardGridHeaderUnderline = b,
+                () => _theme.DashboardGridHeaderFontFamily, v => _theme.DashboardGridHeaderFontFamily = v,
+                () => _theme.DashboardGridHeaderFontSize,   v => _theme.DashboardGridHeaderFontSize = v)
+            @TextFormatPanel("Grid footer text",
+                () => _theme.DashboardGridFooterBold,       b => _theme.DashboardGridFooterBold = b,
+                () => _theme.DashboardGridFooterItalic,     b => _theme.DashboardGridFooterItalic = b,
+                () => _theme.DashboardGridFooterUnderline,  b => _theme.DashboardGridFooterUnderline = b,
+                () => _theme.DashboardGridFooterFontFamily, v => _theme.DashboardGridFooterFontFamily = v,
+                () => _theme.DashboardGridFooterFontSize,   v => _theme.DashboardGridFooterFontSize = v)
         </MudPaper>
 
         <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
@@ -139,6 +163,24 @@
                 @TokenSwatch("Grand total bg",         _theme.DetailGrandTotalBg,    v => _theme.DetailGrandTotalBg = v)
                 @TokenSwatch("Grand total text",       _theme.DetailGrandTotalText,  v => _theme.DetailGrandTotalText = v)
             </div>
+            @TextFormatPanel("Group header text",
+                () => _theme.DetailGroupHeaderBold,       b => _theme.DetailGroupHeaderBold = b,
+                () => _theme.DetailGroupHeaderItalic,     b => _theme.DetailGroupHeaderItalic = b,
+                () => _theme.DetailGroupHeaderUnderline,  b => _theme.DetailGroupHeaderUnderline = b,
+                () => _theme.DetailGroupHeaderFontFamily, v => _theme.DetailGroupHeaderFontFamily = v,
+                () => _theme.DetailGroupHeaderFontSize,   v => _theme.DetailGroupHeaderFontSize = v)
+            @TextFormatPanel("Group footer text",
+                () => _theme.DetailGroupFooterBold,       b => _theme.DetailGroupFooterBold = b,
+                () => _theme.DetailGroupFooterItalic,     b => _theme.DetailGroupFooterItalic = b,
+                () => _theme.DetailGroupFooterUnderline,  b => _theme.DetailGroupFooterUnderline = b,
+                () => _theme.DetailGroupFooterFontFamily, v => _theme.DetailGroupFooterFontFamily = v,
+                () => _theme.DetailGroupFooterFontSize,   v => _theme.DetailGroupFooterFontSize = v)
+            @TextFormatPanel("Grand total text",
+                () => _theme.DetailGrandTotalBold,       b => _theme.DetailGrandTotalBold = b,
+                () => _theme.DetailGrandTotalItalic,     b => _theme.DetailGrandTotalItalic = b,
+                () => _theme.DetailGrandTotalUnderline,  b => _theme.DetailGrandTotalUnderline = b,
+                () => _theme.DetailGrandTotalFontFamily, v => _theme.DetailGrandTotalFontFamily = v,
+                () => _theme.DetailGrandTotalFontSize,   v => _theme.DetailGrandTotalFontSize = v)
         </MudPaper>
 
         <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
@@ -152,6 +194,26 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
         gap: 12px;
+    }
+    /* Word-style text-format strip rendered under the swatch grid for
+       bands that have themable text. Wraps when the row gets narrow so
+       Bold / Italic / Underline collapse below the family/size inputs
+       on a tighter container. Top border keeps the visual separation
+       from the swatch grid above. */
+    .theme-text-format {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px dashed #E8EAED;
+    }
+    .theme-text-format-label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #5F6368;
+        min-width: 110px;
     }
     .theme-token-card {
         display: flex;
@@ -213,6 +275,42 @@
         }
         _loading = false;
     }
+
+    // RenderFragment helper for the per-band text formatting block —
+    // five Word-style controls (Bold / Italic / Underline + free-form
+    // font family + font size). Each maps to a CSS variable emitted
+    // by AppTheme.ToCssBlock(); empty Family/Size collapse to
+    // "inherit" so unconfigured bands look identical to before.
+    // Getter/setter Funcs follow the same pattern TokenSwatch uses
+    // so individual fields on _theme can be mutated without passing
+    // _theme around as a `ref`.
+    private RenderFragment TextFormatPanel(
+        string label,
+        Func<bool> getBold, Action<bool> setBold,
+        Func<bool> getItalic, Action<bool> setItalic,
+        Func<bool> getUnderline, Action<bool> setUnderline,
+        Func<string> getFamily, Action<string> setFamily,
+        Func<string> getSize, Action<string> setSize) => __builder =>
+    {
+        <div class="theme-text-format">
+            <span class="theme-text-format-label">@label</span>
+            <MudCheckBox T="bool" Value="@getBold()" ValueChanged="@(b => { setBold(b); StateHasChanged(); })"
+                         Label="Bold" Dense Size="Size.Small" Color="Color.Primary" />
+            <MudCheckBox T="bool" Value="@getItalic()" ValueChanged="@(b => { setItalic(b); StateHasChanged(); })"
+                         Label="Italic" Dense Size="Size.Small" Color="Color.Primary" />
+            <MudCheckBox T="bool" Value="@getUnderline()" ValueChanged="@(b => { setUnderline(b); StateHasChanged(); })"
+                         Label="Underline" Dense Size="Size.Small" Color="Color.Primary" />
+            <MudTextField T="string" Value="@getFamily()" ValueChanged="@(v => { setFamily(v ?? ""); StateHasChanged(); })"
+                          Label="Font family" Placeholder="(inherit)"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Style="max-width: 200px;" />
+            <MudTextField T="string" Value="@getSize()" ValueChanged="@(v => { setSize(v ?? ""); StateHasChanged(); })"
+                          Label="Font size" Placeholder="(inherit)"
+                          HelperText="0.875rem · 14px"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Style="max-width: 140px;" />
+        </div>
+    };
 
     // RenderFragment helper so each token row stays a one-liner in the
     // markup. The MudColorPicker is keyed off the live token value;

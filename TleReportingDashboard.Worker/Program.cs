@@ -71,6 +71,15 @@ try
     builder.Services.AddSingleton<ISchemaConfigStore, SchemaConfigStore>();
     builder.Services.AddScoped<IQueryPipeline, SqlEmitter>();
 
+    // Team Builder data source — the Worker uses this on Individual
+    // schedules to read the team's members, the user-emails mapping,
+    // and the team_type → owner column lookup. Forced direct-column
+    // scope is built from those three pieces alone — RPT_users and the
+    // role-based scope resolver are deliberately *not* consulted on
+    // the schedule path (those govern in-app dashboard scope, not
+    // scheduled-email fan-out, which is a separate concern).
+    builder.Services.AddScoped<ITeamSourceService, TeamSourceService>();
+
     // The job class itself — Hangfire activates it from the scoped DI
     // container on every fire, picking up a fresh DbConnection / scoped
     // dependencies without leaking state across runs.
@@ -118,6 +127,81 @@ try
 
     if (!string.IsNullOrEmpty(configConnStr))
     {
+        // Dashboard customization: replace Hangfire's relative time
+        // renderings ("in 2 days", "in a month") with absolute
+        // timestamps. Hangfire formats every recurring-job next-run
+        // and last-execution column via moment.js .fromNow(); we
+        // monkey-patch that method on each HTML response so all date
+        // displays become absolute (MMM D, YYYY h:mm A).
+        //
+        // Has to be registered BEFORE MapHangfireDashboard so the
+        // middleware sits outside the dashboard handler and can
+        // intercept the response stream. Filtering by the /hangfire
+        // path prefix keeps the rewrite cost off other endpoints.
+        const string hangfireAbsoluteTimeScript = """
+            <script>(function(){
+              var fmt = 'MMM D, YYYY h:mm A';
+              function patch(){
+                if (typeof moment === 'undefined') { setTimeout(patch, 50); return; }
+                moment.fn.fromNow = function(){ return this.format(fmt); };
+                document.querySelectorAll('[data-moment-title]').forEach(function(el){
+                  var iso = el.getAttribute('data-moment-title');
+                  if (iso) el.textContent = moment(iso).format(fmt);
+                });
+              }
+              patch();
+            })();</script>
+            """;
+        app.Use(async (context, next) =>
+        {
+            if (!context.Request.Path.StartsWithSegments("/hangfire"))
+            {
+                await next();
+                return;
+            }
+
+            var originalBody = context.Response.Body;
+            using var capture = new MemoryStream();
+            context.Response.Body = capture;
+            try
+            {
+                await next();
+                capture.Position = 0;
+
+                // Only HTML responses get script injection. Hangfire's
+                // stats poll returns JSON; static .css/.js routes have
+                // their own content types — leave them untouched.
+                var contentType = context.Response.ContentType ?? string.Empty;
+                if (context.Response.StatusCode == 200
+                    && contentType.StartsWith("text/html", StringComparison.OrdinalIgnoreCase))
+                {
+                    string html;
+                    using (var reader = new StreamReader(capture, leaveOpen: true))
+                    {
+                        html = await reader.ReadToEndAsync();
+                    }
+                    var injectAt = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+                    if (injectAt >= 0)
+                    {
+                        html = html[..injectAt] + hangfireAbsoluteTimeScript + html[injectAt..];
+                    }
+                    context.Response.Body = originalBody;
+                    context.Response.ContentLength = null;
+                    await context.Response.WriteAsync(html);
+                }
+                else
+                {
+                    capture.Position = 0;
+                    context.Response.Body = originalBody;
+                    await capture.CopyToAsync(originalBody);
+                }
+            }
+            finally
+            {
+                context.Response.Body = originalBody;
+            }
+        });
+
         // Dashboard is gated by HangfireDashboardAuthFilter — open in
         // Development, restricted to Admins:Emails everywhere else.
         // Without the filter, /hangfire is reachable by anyone who can

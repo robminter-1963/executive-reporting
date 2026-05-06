@@ -1,0 +1,548 @@
+@inject IScheduleService ScheduleService
+@inject IReportService ReportService
+@inject ICompanyRegistry CompanyRegistry
+@inject ICompanyConnectionAdminService ConnectionSvc
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@using MudBlazor
+@using TleReportingDashboard.Web.Models
+@using TleReportingDashboard.Web.Services
+
+@* Admin-only cross-report schedule manager. Lists every schedule
+   across every report so admins can audit, edit, pause, or delete
+   without needing to navigate to each report individually. New
+   schedules are created here too: pick a report from the dropdown,
+   then the standard ScheduleDialog opens with the report's
+   connection pre-resolved. *@
+<MudStack Spacing="3" Class="pa-2"
+          Style="max-height: calc(100vh - 196px); overflow-y: auto;">
+    <MudText Typo="Typo.body2" Color="Color.Secondary">
+        Manage every scheduled report across the system. Create new schedules by picking a report from the dropdown below; edit or delete existing ones from the table.
+    </MudText>
+
+    @* ── New schedule picker ──────────────────────────────────────
+       Cascade: Company narrows the connection list; Connection narrows
+       the report list. Reports without a connection set are surfaced
+       under a sentinel "(no connection)" entry so legacy reports stay
+       reachable. The report dropdown is the only required pick — the
+       company / connection picks are scoping aids, not required
+       metadata on the schedule itself (the schedule binds to the
+       saved report; the connection comes from the report at fire time). *@
+    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">New schedule</MudText>
+            <MudStack Row Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+                <MudSelect T="Guid?" Value="_newCompanyId" ValueChanged="OnNewCompanyChanged"
+                           Label="Company" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           ToStringFunc="@CompanyToLabel"
+                           Style="min-width: 220px;">
+                    <MudSelectItem T="Guid?" Value="@((Guid?)null)">All companies</MudSelectItem>
+                    @foreach (var c in _companies.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase))
+                    {
+                        <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="Guid?" Value="_newConnectionId" ValueChanged="OnNewConnectionChanged"
+                           Label="Connection" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           ToStringFunc="@ConnectionToLabel"
+                           Style="min-width: 240px;">
+                    <MudSelectItem T="Guid?" Value="@((Guid?)null)">All connections</MudSelectItem>
+                    @foreach (var c in ConnectionsForNewPicker())
+                    {
+                        <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">
+                            @c.Name (@c.ConnectionType)@(c.IsDefault ? " · default" : "")
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="Guid?" @bind-Value="_newReportId"
+                           Label="Report" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           ToStringFunc="@ReportToLabel"
+                           Style="min-width: 320px; flex: 1;">
+                    @foreach (var r in ReportsForNewPicker())
+                    {
+                        <MudSelectItem T="Guid?" Value="@((Guid?)r.Id)">@DisplayLabel(r)</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="OpenNewScheduleDialog"
+                           Disabled="@(_newReportId is null)">
+                    Add schedule
+                </MudButton>
+            </MudStack>
+            @if (_newReportId is null && (_newCompanyId is not null || _newConnectionId is not null)
+                 && !ReportsForNewPicker().Any())
+            {
+                <MudAlert Severity="Severity.Info" Dense>
+                    No reports found for the selected company / connection. Clear the filter or pick a different scope.
+                </MudAlert>
+            }
+        </MudStack>
+    </MudPaper>
+
+    @* ── Filters ──────────────────────────────────────────────────── *@
+    <MudStack Row Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+        <MudTextField @bind-Value="_search" Placeholder="Search subject or report…"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      DebounceInterval="200" Style="max-width: 360px; flex: 1;" />
+        <MudSelect T="string" @bind-Value="_statusFilter" Label="Status"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                   Style="min-width: 160px;">
+            <MudSelectItem T="string" Value="@("all")">All</MudSelectItem>
+            <MudSelectItem T="string" Value="@("active")">Active</MudSelectItem>
+            <MudSelectItem T="string" Value="@("paused")">Paused</MudSelectItem>
+            <MudSelectItem T="string" Value="@("failed")">Failed</MudSelectItem>
+        </MudSelect>
+        <MudSelect T="string" @bind-Value="_kindFilter" Label="Kind"
+                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                   Style="min-width: 160px;">
+            <MudSelectItem T="string" Value="@("all")">All kinds</MudSelectItem>
+            <MudSelectItem T="string" Value="@("individual")">Individual</MudSelectItem>
+            <MudSelectItem T="string" Value="@("distribution")">Distribution</MudSelectItem>
+        </MudSelect>
+    </MudStack>
+
+    @* ── Schedules table ──────────────────────────────────────────── *@
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate Color="Color.Primary" />
+    }
+    else if (FilteredSchedules.Any())
+    {
+        <MudTable Items="FilteredSchedules" Dense Hover Striped Elevation="0"
+                  Style="border: 1px solid #DADCE0;" T="ReportSchedule">
+            <HeaderContent>
+                <MudTh>Subject</MudTh>
+                <MudTh>Report</MudTh>
+                <MudTh>Owner</MudTh>
+                <MudTh>Trigger</MudTh>
+                <MudTh>Target</MudTh>
+                <MudTh>Last Run</MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh Style="width: 80px; text-align: center;">Active</MudTh>
+                <MudTh Style="width: 110px; text-align: right;">Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Subject">
+                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Subject</MudText>
+                </MudTd>
+                <MudTd DataLabel="Report">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @ReportNameFor(context.ReportId)
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="Owner">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @context.OwnerEmail
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="Trigger">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @DescribeTrigger(context)
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="Target">
+                    @if (context.Kind == ScheduleKind.Individual && context.TeamId is int tid)
+                    {
+                        <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
+                            <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.caption">Individual · team @tid</MudText>
+                        </MudStack>
+                    }
+                    else if (context.Kind == ScheduleKind.Distribution && !string.IsNullOrWhiteSpace(context.DistEmail))
+                    {
+                        <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
+                            <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.caption" Style="overflow-wrap: anywhere;">
+                                @context.DistEmail
+                            </MudText>
+                        </MudStack>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Warning"
+                                 title="No target set — falls back to schedule owner's email at fire time.">
+                            (owner fallback)
+                        </MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Last Run">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @(context.LastRunAt?.ToString("MMM d, yyyy HH:mm") ?? "Never")
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="Status">
+                    @if (!string.IsNullOrWhiteSpace(context.LastRunStatus))
+                    {
+                        <MudText Typo="Typo.caption"
+                                 Color="@(IsRunStatusFailed(context) ? Color.Error : Color.Secondary)"
+                                 Style="overflow-wrap: anywhere;"
+                                 title="@context.LastRunStatus">
+                            @context.LastRunStatus
+                        </MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Default">—</MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Active" Style="text-align: center;">
+                    <MudSwitch T="bool" Value="context.IsActive" Color="Color.Primary" Size="Size.Small"
+                               ValueChanged="@(v => ToggleActiveAsync(context, v))" />
+                </MudTd>
+                <MudTd DataLabel="Actions" Style="text-align: right;">
+                    <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                       title="Edit schedule"
+                                       OnClick="@(() => OpenEditScheduleDialog(context))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                       Color="Color.Error" title="Delete schedule"
+                                       OnClick="@(() => ConfirmDelete(context))" />
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Info" Dense>
+            No schedules match the current filters.
+        </MudAlert>
+    }
+</MudStack>
+
+@code {
+    [Parameter] public string CurrentUserEmail { get; set; } = string.Empty;
+    [Parameter] public string CurrentUserId { get; set; } = string.Empty;
+
+    private List<ReportSchedule> _schedules = new();
+    private List<SavedReport> _reports = new();
+    private Dictionary<Guid, string> _reportNamesById = new();
+
+    // Companies + connections for the new-schedule picker. Connections
+    // are loaded across every active company so the dropdowns can
+    // cascade without a per-pick fetch.
+    private List<CompanySummary> _companies = new();
+    private List<CompanyConnectionRecord> _connections = new();
+    private Dictionary<Guid, Guid> _connectionCompanyById = new();
+
+    private bool _loading = true;
+
+    private string _search = string.Empty;
+    private string _statusFilter = "all";
+    private string _kindFilter = "all";
+
+    // New-schedule picker state. _newReportId is the only field that
+    // ultimately matters — company / connection just scope which
+    // reports show in the dropdown.
+    private Guid? _newCompanyId;
+    private Guid? _newConnectionId;
+    private Guid? _newReportId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        try
+        {
+            // Reports + schedules + companies in parallel; connections
+            // are fanned out per-company below since the connection
+            // service is keyed on company id.
+            var reportsTask = ReportService.GetAllReportsAsync();
+            var schedulesTask = ScheduleService.GetAllSchedulesAsync();
+            var companiesTask = CompanyRegistry.GetActiveAsync();
+            await Task.WhenAll(reportsTask, schedulesTask, companiesTask);
+            _reports = await reportsTask;
+            _schedules = await schedulesTask;
+            _companies = await companiesTask;
+            _reportNamesById = _reports.ToDictionary(
+                r => r.Id,
+                r => string.IsNullOrWhiteSpace(r.InternalName) ? r.Name : r.InternalName!);
+
+            // Flatten connections across every active company so the
+            // cascade can filter without per-pick round-trips. Map
+            // connection_id → company_id once for the report-list
+            // narrowing logic.
+            _connections = new List<CompanyConnectionRecord>();
+            _connectionCompanyById = new Dictionary<Guid, Guid>();
+            foreach (var c in _companies)
+            {
+                var conns = await ConnectionSvc.GetByCompanyAsync(c.Id);
+                foreach (var conn in conns.Where(x => x.IsActive))
+                {
+                    _connections.Add(conn);
+                    _connectionCompanyById[conn.Id] = conn.CompanyId;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load schedules: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // ── New-schedule picker cascades ──
+
+    private void OnNewCompanyChanged(Guid? id)
+    {
+        _newCompanyId = id;
+        // A company change invalidates the connection / report picks
+        // when they no longer fit the new scope.
+        if (_newConnectionId is Guid c && _connectionCompanyById.TryGetValue(c, out var cc) && cc != id)
+            _newConnectionId = null;
+        if (_newReportId is Guid r && _reports.FirstOrDefault(x => x.Id == r) is SavedReport rep
+            && rep.ConnectionId is Guid rc
+            && _connectionCompanyById.TryGetValue(rc, out var rcc)
+            && id is not null && rcc != id)
+            _newReportId = null;
+    }
+
+    private void OnNewConnectionChanged(Guid? id)
+    {
+        _newConnectionId = id;
+        // If the picked report doesn't belong to the new connection,
+        // clear it so the dropdown doesn't display a value that's
+        // hidden by the cascade filter.
+        if (_newReportId is Guid r && _reports.FirstOrDefault(x => x.Id == r) is SavedReport rep)
+        {
+            if (id is Guid cid && rep.ConnectionId != cid)
+                _newReportId = null;
+        }
+    }
+
+    private IEnumerable<CompanyConnectionRecord> ConnectionsForNewPicker()
+    {
+        var pool = _connections.AsEnumerable();
+        if (_newCompanyId is Guid cid)
+            pool = pool.Where(c => c.CompanyId == cid);
+        return pool.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private IEnumerable<SavedReport> ReportsForNewPicker()
+    {
+        var pool = _reports.AsEnumerable();
+        if (_newConnectionId is Guid connId)
+        {
+            pool = pool.Where(r => r.ConnectionId == connId);
+        }
+        else if (_newCompanyId is Guid cid)
+        {
+            // Company selected, connection not — keep every report
+            // whose connection lives in that company. Reports with no
+            // connection assigned (legacy rows) drop out of the
+            // company-narrowed view; they reappear when the admin
+            // clears the company filter.
+            pool = pool.Where(r =>
+                r.ConnectionId is Guid rc
+                && _connectionCompanyById.TryGetValue(rc, out var rcc)
+                && rcc == cid);
+        }
+        return pool.OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private string CompanyToLabel(Guid? id)
+    {
+        if (id is null) return "All companies";
+        var c = _companies.FirstOrDefault(x => x.Id == id);
+        return c is null ? string.Empty : $"{c.Name} ({c.Code})";
+    }
+
+    private string ConnectionToLabel(Guid? id)
+    {
+        if (id is null) return "All connections";
+        var c = _connections.FirstOrDefault(x => x.Id == id);
+        if (c is null) return string.Empty;
+        return $"{c.Name} ({c.ConnectionType}){(c.IsDefault ? " · default" : "")}";
+    }
+
+    // ── Filtering ──
+
+    private IEnumerable<ReportSchedule> FilteredSchedules
+    {
+        get
+        {
+            IEnumerable<ReportSchedule> q = _schedules;
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var needle = _search.Trim();
+                q = q.Where(s =>
+                    s.Subject.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                    || ReportNameFor(s.ReportId).Contains(needle, StringComparison.OrdinalIgnoreCase));
+            }
+            q = _statusFilter switch
+            {
+                "active" => q.Where(s => s.IsActive && !IsRunStatusFailed(s)),
+                "paused" => q.Where(s => !s.IsActive),
+                "failed" => q.Where(s => IsRunStatusFailed(s)),
+                _ => q
+            };
+            q = _kindFilter switch
+            {
+                "individual" => q.Where(s => s.Kind == ScheduleKind.Individual),
+                "distribution" => q.Where(s => s.Kind == ScheduleKind.Distribution),
+                _ => q
+            };
+            return q
+                .OrderBy(s => ReportNameFor(s.ReportId), StringComparer.OrdinalIgnoreCase)
+                .ThenBy(s => s.Subject, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    // ── Helpers ──
+
+    private string ReportNameFor(Guid reportId) =>
+        _reportNamesById.TryGetValue(reportId, out var name) ? name : "(unknown report)";
+
+    private static string DisplayLabel(SavedReport r) =>
+        string.IsNullOrWhiteSpace(r.InternalName) ? r.Name : r.InternalName!;
+
+    private string ReportToLabel(Guid? id)
+    {
+        if (id is null) return string.Empty;
+        var r = _reports.FirstOrDefault(x => x.Id == id);
+        return r is null ? string.Empty : DisplayLabel(r);
+    }
+
+    private static string DescribeTrigger(ReportSchedule schedule)
+    {
+        if (!string.IsNullOrWhiteSpace(schedule.SchedulePatternJson))
+        {
+            var pattern = SchedulePattern.FromJson(schedule.SchedulePatternJson);
+            return ScheduleCron.Describe(pattern);
+        }
+        return string.IsNullOrWhiteSpace(schedule.CronExpression) ? "—" : schedule.CronExpression;
+    }
+
+    // Failed badge logic. Mirrors ScheduleManager.IsRunStatusFailed.
+    // Triggers on:
+    //   * Legacy outer-shell "Failed: <error>" strings.
+    //   * New per-recipient headline format containing a "failed:"
+    //     clause (e.g., "3 sent. 1 failed: alice — SMTP timeout").
+    //   * Legacy "0/N sent" prefix from prior Worker builds.
+    // Surfaced "with rows but no email" skips don't trigger Failed —
+    // they're a config gap, not a delivery failure; the headline
+    // surfaces them on its own.
+    private static bool IsRunStatusFailed(ReportSchedule schedule)
+    {
+        var status = schedule.LastRunStatus;
+        if (string.IsNullOrWhiteSpace(status)) return false;
+        if (status.StartsWith("Failed:", StringComparison.OrdinalIgnoreCase)) return true;
+        if (status.StartsWith("0/", StringComparison.Ordinal)) return true;
+        if (status.Contains("failed:", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // ── Actions ──
+
+    private async Task OpenNewScheduleDialog()
+    {
+        if (_newReportId is not Guid reportId) return;
+        var report = _reports.FirstOrDefault(r => r.Id == reportId);
+        if (report is null) return;
+
+        // Owner = the admin creating the schedule. Existing schedules
+        // owned by other users keep their original owner_id when edited
+        // (see OpenEditScheduleDialog) so the WHERE clause on the
+        // UPDATE still matches.
+        var parameters = new DialogParameters<ScheduleDialog>
+        {
+            { x => x.ReportId, reportId },
+            { x => x.ReportName, report.Name },
+            { x => x.UserId, string.IsNullOrWhiteSpace(CurrentUserId) ? CurrentUserEmail : CurrentUserId },
+            { x => x.UserEmail, CurrentUserEmail }
+        };
+        var dialog = await DialogService.ShowAsync<ScheduleDialog>("New Schedule", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not ReportSchedule s) return;
+        try
+        {
+            await ScheduleService.CreateScheduleAsync(s);
+            // Reset the cascade so the next New Schedule starts clean.
+            // Leaves the company filter alone — admin doing a batch of
+            // schedules for one company shouldn't have to re-pick.
+            _newReportId = null;
+            _newConnectionId = null;
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to create schedule: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenEditScheduleDialog(ReportSchedule schedule)
+    {
+        var parameters = new DialogParameters<ScheduleDialog>
+        {
+            { x => x.ReportId, schedule.ReportId },
+            { x => x.ReportName, ReportNameFor(schedule.ReportId) },
+            // Use the schedule's existing owner so the UPDATE's
+            // owner_id WHERE clause matches. Editing someone else's
+            // schedule from the admin tab preserves attribution and
+            // lets the legacy guard keep working.
+            { x => x.UserId, schedule.OwnerId },
+            { x => x.UserEmail, schedule.OwnerEmail },
+            { x => x.ExistingSchedule, schedule }
+        };
+        var dialog = await DialogService.ShowAsync<ScheduleDialog>("Edit Schedule", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not ReportSchedule updated) return;
+        try
+        {
+            await ScheduleService.UpdateScheduleAsync(updated);
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to update schedule: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ToggleActiveAsync(ReportSchedule schedule, bool isActive)
+    {
+        // Local update first for snappy UI; reload after the persist
+        // settles so we pick up any side-effects (cache invalidations,
+        // last-run updates if Hangfire fired between the toggle and
+        // the reload, etc.).
+        schedule.IsActive = isActive;
+        try
+        {
+            await ScheduleService.UpdateScheduleAsync(schedule);
+            Snackbar.Add(isActive ? "Schedule resumed." : "Schedule paused.", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            schedule.IsActive = !isActive; // revert on failure
+            Snackbar.Add($"Failed to update: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ConfirmDelete(ReportSchedule schedule)
+    {
+        var result = await DialogService.ShowMessageBoxAsync(
+            "Delete schedule",
+            $"Delete schedule \"{schedule.Subject}\"? This action cannot be undone.",
+            yesText: "Delete", cancelText: "Cancel");
+        if (result != true) return;
+        try
+        {
+            await ScheduleService.DeleteScheduleAsync(schedule.Id, schedule.OwnerId);
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+        }
+    }
+}

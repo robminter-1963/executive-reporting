@@ -25,8 +25,14 @@
                                title="Align right" />
             </span>
         }
+        @* Inherit font-* from the parent cell so the theme tokens
+           applied to .dash-summary-table thead th (weight, size,
+           style, family, decoration) reach the rendered label. The
+           previous hardcoded font-size: 0.8rem / font-weight: 600
+           silently overrode the theme — toggling Bold in Admin →
+           Theme had no effect on the header text. *@
         <MudTextField @bind-Value="_editValue" Variant="Variant.Text" Margin="Margin.Dense"
-                      Style="@($"font-size: 0.8rem; font-weight: 600; width: 100%; {Style}")"
+                      Style="@($"font: inherit; width: 100%; {Style}")"
                       Immediate AutoFocus
                       OnBlur="CommitEdit"
                       OnKeyDown="OnKeyDown" />
@@ -34,7 +40,11 @@
 }
 else
 {
-    <div style="@($"font-size: 0.8rem; font-weight: 600; width: 100%; text-align: {GetEffectiveAlign()}; {(ReadOnly ? "" : "cursor: pointer;")} {Style}")"
+    @* font: inherit propagates the parent th's theme-driven typography
+       (weight, size, style, family, decoration) onto the visible label.
+       Previously hardcoded to 0.8rem / 600, which made the dashboard-
+       grid-header theme bold/font/size toggles look broken. *@
+    <div style="@($"font: inherit; width: 100%; text-align: {GetEffectiveAlign()}; {(ReadOnly ? "" : "cursor: pointer;")} {Style}")"
          @ondblclick="@(ReadOnly ? (Action)(() => { }) : StartEdit)"
          title="@(ReadOnly ? Label : "Double-click to rename or align")">
         @if (ReadOnly)

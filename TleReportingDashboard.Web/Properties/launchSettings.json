@@ -10,6 +10,15 @@
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
     },
+    "LAN": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://0.0.0.0:5199",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
     "https": {
       "commandName": "Project",
       "dotnetRunMessages": true,

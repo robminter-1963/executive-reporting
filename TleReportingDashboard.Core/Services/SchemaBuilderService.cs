@@ -10,25 +10,57 @@ public record DbTableInfo(string SchemaName, string TableName, string FullName);
 public record DbColumnInfo(string ColumnName, string DataType, int? MaxLength, int? Precision, int? Scale, bool IsNullable);
 public record DbCodeSet(int CodeId, string Description);
 
+// Provider-agnostic join hint surfaced by Schema Builder. Today it's
+// populated only from Dataverse relationship metadata; SQL Server /
+// Postgres FK discovery (via REFERENTIAL_CONSTRAINTS) would slot in
+// behind the same shape later.
+//
+//   SourceTable = entity holding the FK (e.g. "contact")
+//   SourceColumn = FK attribute on SourceTable (e.g. "parentcustomerid")
+//   TargetTable = referenced entity (e.g. "account")
+//   TargetColumn = primary key on TargetTable (e.g. "accountid")
+//   Direction = "many-to-one" or "one-to-many" — same SQL shape, different
+//               admin-facing wording in any UI that surfaces it
+//   RelationshipName = stable id from the provider, useful as JoinDefinition.Id
+public record SuggestedJoin(string SourceTable, string SourceColumn,
+                            string TargetTable, string TargetColumn,
+                            string Direction, string RelationshipName);
+
 // Introspects a data-source connection's schema: tables, columns, row
 // counts, code sets. Dispatches by the connection's connection_type so it
-// hits INFORMATION_SCHEMA on both SQL Server and Postgres without choking
-// on provider-specific keywords.
+// hits INFORMATION_SCHEMA on both SQL Server and Postgres, and the
+// Metadata API on Dataverse, without choking on provider-specific keywords.
 public class SchemaBuilderService
 {
     private readonly ICompanyConnectionResolver _connectionResolver;
     private readonly ICompanyConnectionAdminService _connectionAdmin;
+    private readonly DataverseSchemaClient _dataverse;
     private readonly ILogger<SchemaBuilderService> _logger;
 
     public SchemaBuilderService(
         ICompanyConnectionResolver connectionResolver,
         ICompanyConnectionAdminService connectionAdmin,
+        DataverseSchemaClient dataverse,
         ILogger<SchemaBuilderService> logger)
     {
         _connectionResolver = connectionResolver;
         _connectionAdmin = connectionAdmin;
+        _dataverse = dataverse;
         _logger = logger;
     }
+
+    // Resolves the connection record without trying to build a SQL/Pg
+    // connection string — Dataverse rows would throw inside
+    // CompanyConnectionStringBuilder.Build, so callers that only need the
+    // type (or that route to Dataverse) shouldn't go through the resolver.
+    private async Task<CompanyConnectionRecord> ResolveRecordAsync(Guid connectionId)
+    {
+        return await _connectionAdmin.GetByIdAsync(connectionId)
+            ?? throw new InvalidOperationException($"Connection {connectionId} not found.");
+    }
+
+    private static bool IsDataverse(string? connectionType) =>
+        string.Equals(connectionType, "dataverse", StringComparison.OrdinalIgnoreCase);
 
     // Returns (type, connectionString, tableFilterSql, schemaFilterSql) for a
     // given connection id. Both filters are free-form WHERE fragments the
@@ -71,6 +103,30 @@ public class SchemaBuilderService
 
     public async Task<List<DbTableInfo>> GetTablesAsync(Guid? connectionId, string? filter = null)
     {
+        // Dataverse routes to the Metadata API — no SQL connection string,
+        // no INFORMATION_SCHEMA. Entity LogicalName is the closest analog
+        // to a table name; we surface it as the TableName and use the
+        // schema slot for "dataverse" so existing call sites that key off
+        // (schema, table) pairs stay legible.
+        if (connectionId is Guid dvId)
+        {
+            var dvRecord = await ResolveRecordAsync(dvId);
+            if (IsDataverse(dvRecord.ConnectionType))
+            {
+                var entities = await _dataverse.GetEntitiesAsync(dvRecord);
+                IEnumerable<DataverseSchemaClient.DvEntity> filtered = entities;
+                if (!string.IsNullOrWhiteSpace(filter))
+                {
+                    filtered = filtered.Where(e =>
+                        e.LogicalName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                        e.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase));
+                }
+                return filtered
+                    .Select(e => new DbTableInfo("dataverse", e.LogicalName, e.LogicalName))
+                    .ToList();
+            }
+        }
+
         var (type, connStr, tableFilter, schemaFilter) = await ResolveContextAsync(connectionId);
 
         var tables = new List<DbTableInfo>();
@@ -111,6 +167,27 @@ public class SchemaBuilderService
 
     public async Task<List<DbColumnInfo>> GetColumnsAsync(Guid? connectionId, string? schemaName, string tableName)
     {
+        // Dataverse path: pull attributes via the Metadata API and map them
+        // into DbColumnInfo so the rest of the schema editor flow (column
+        // picker, autocomplete, type inference) is provider-agnostic.
+        if (connectionId is Guid dvId)
+        {
+            var dvRecord = await ResolveRecordAsync(dvId);
+            if (IsDataverse(dvRecord.ConnectionType))
+            {
+                var attrs = await _dataverse.GetAttributesAsync(dvRecord, tableName);
+                return attrs
+                    .Select(a => new DbColumnInfo(
+                        ColumnName: a.LogicalName,
+                        DataType: a.AttributeType,
+                        MaxLength: null,
+                        Precision: null,
+                        Scale: null,
+                        IsNullable: !a.IsRequired))
+                    .ToList();
+            }
+        }
+
         var (type, connStr, _, _) = await ResolveContextAsync(connectionId);
 
         var columns = new List<DbColumnInfo>();
@@ -169,6 +246,23 @@ public class SchemaBuilderService
         Guid? connectionId, string? schemaName, string tableName)
     {
         var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Dataverse uniqueness derives from IsPrimaryId on attributes, not
+        // from a constraint catalog. We surface that single column so the
+        // OFFSET-pagination tiebreaker logic still has something stable
+        // to fall back on. Multi-column uniqueness isn't a Dataverse
+        // concept at the schema layer.
+        if (connectionId is Guid dvId)
+        {
+            var dvRecord = await ResolveRecordAsync(dvId);
+            if (IsDataverse(dvRecord.ConnectionType))
+            {
+                var attrs = await _dataverse.GetAttributesAsync(dvRecord, tableName);
+                foreach (var a in attrs.Where(a => a.IsPrimaryId))
+                    unique.Add(a.LogicalName);
+                return unique;
+            }
+        }
+
         var (type, connStr, _, _) = await ResolveContextAsync(connectionId);
 
         await using var conn = CreateConnection(type, connStr);
@@ -251,6 +345,19 @@ public class SchemaBuilderService
         Guid? connectionId, string? schemaName, string tableName)
     {
         var pks = new List<string>();
+        // Dataverse: the primary id is whichever attribute has IsPrimaryId=true.
+        // Single-column always — no composite PK concept at this level.
+        if (connectionId is Guid dvId)
+        {
+            var dvRecord = await ResolveRecordAsync(dvId);
+            if (IsDataverse(dvRecord.ConnectionType))
+            {
+                var attrs = await _dataverse.GetAttributesAsync(dvRecord, tableName);
+                pks.AddRange(attrs.Where(a => a.IsPrimaryId).Select(a => a.LogicalName));
+                return pks;
+            }
+        }
+
         var (type, connStr, _, _) = await ResolveContextAsync(connectionId);
 
         await using var conn = CreateConnection(type, connStr);
@@ -390,8 +497,68 @@ public class SchemaBuilderService
         return values;
     }
 
+    /// <summary>
+    /// Returns join hints for an entity/table — relationships where the
+    /// entity participates as either the FK holder (many-to-one) or the
+    /// parent (one-to-many). For Dataverse, sourced from the Metadata API's
+    /// relationship endpoints. For SQL Server / Postgres, returns an empty
+    /// list today; FK-catalog discovery can populate this same shape later
+    /// without changing callers.
+    /// </summary>
+    public async Task<List<SuggestedJoin>> GetSuggestedJoinsAsync(Guid? connectionId, string tableName)
+    {
+        if (connectionId is not Guid id || string.IsNullOrWhiteSpace(tableName))
+            return new List<SuggestedJoin>();
+
+        var record = await ResolveRecordAsync(id);
+        if (!IsDataverse(record.ConnectionType))
+            return new List<SuggestedJoin>();
+
+        var m2o = await _dataverse.GetManyToOneRelationshipsAsync(record, tableName);
+        var o2m = await _dataverse.GetOneToManyRelationshipsAsync(record, tableName);
+
+        var joins = new List<SuggestedJoin>(m2o.Count + o2m.Count);
+        foreach (var r in m2o)
+        {
+            joins.Add(new SuggestedJoin(
+                SourceTable: r.ReferencingEntity,
+                SourceColumn: r.ReferencingAttribute,
+                TargetTable: r.ReferencedEntity,
+                TargetColumn: r.ReferencedAttribute,
+                Direction: "many-to-one",
+                RelationshipName: r.SchemaName));
+        }
+        foreach (var r in o2m)
+        {
+            // Skip the inverse view of relationships we already captured
+            // from the M:1 side — they describe the same FK pair.
+            if (m2o.Any(x => string.Equals(x.SchemaName, r.SchemaName, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            joins.Add(new SuggestedJoin(
+                SourceTable: r.ReferencingEntity,
+                SourceColumn: r.ReferencingAttribute,
+                TargetTable: r.ReferencedEntity,
+                TargetColumn: r.ReferencedAttribute,
+                Direction: "one-to-many",
+                RelationshipName: r.SchemaName));
+        }
+        return joins;
+    }
+
     public async Task<int> GetRowCountAsync(Guid? connectionId, string schemaName, string tableName)
     {
+        // Dataverse doesn't expose a cheap planner-style row estimate
+        // analogous to sys.partitions / pg_class.reltuples. Returning 0
+        // is the same fallback non-fatal-error path the SQL branches use
+        // for locked-down accounts; admins can edit the row-count column
+        // manually if they need it for budgeting decisions.
+        if (connectionId is Guid dvId)
+        {
+            var dvRecord = await ResolveRecordAsync(dvId);
+            if (IsDataverse(dvRecord.ConnectionType))
+                return 0;
+        }
+
         var (type, connStr, _, _) = await ResolveContextAsync(connectionId);
 
         // Two dialects, two fast-approximate strategies. Both avoid COUNT(*)
@@ -438,6 +605,15 @@ public class SchemaBuilderService
         "int" or "smallint" or "tinyint" or "bigint" or "integer" => "integer",
         "datetime" or "datetime2" or "date" or "smalldatetime" or "timestamp" or "timestamp without time zone" or "timestamp with time zone" => "date",
         "bit" or "boolean" => "boolean",
+        // Dataverse AttributeType values — same canonical outputs as the
+        // SQL Server / Postgres branches so downstream consumers don't
+        // need to know which provider a column came from. Lookups /
+        // owners / customers come back as text (the GUID id; the friendly
+        // name lives on a related entity and isn't covered here).
+        "string" or "memo" or "uniqueidentifier" or "lookup" or "owner" or "customer" or "entityname" => "text",
+        "bigint_dv" or "biginteger" => "integer", // defensive — Dataverse uses BigInt; SQL bigint already maps above
+        "double" => "percent",
+        "picklist" or "state" or "status" or "multiselectpicklist" => "text",
         _ => "text"
     };
 

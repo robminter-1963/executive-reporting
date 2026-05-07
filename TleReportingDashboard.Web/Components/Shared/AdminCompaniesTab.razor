@@ -55,8 +55,9 @@
                 <MudTh>Connection Ref</MudTh>
                 <MudTh>Website</MudTh>
                 <MudTh>Active</MudTh>
+                <MudTh>Hidden</MudTh>
                 <MudTh>Updated</MudTh>
-                <MudTh Style="width: 160px;"></MudTh>
+                <MudTh Style="width: 200px;"></MudTh>
             </HeaderContent>
             <RowTemplate>
                 @if (_editingId == context.Id)
@@ -89,6 +90,11 @@
                     </MudTd>
                     <MudTd>
                         <MudSwitch T="bool" @bind-Value="_editIsActive" Color="Color.Success" />
+                    </MudTd>
+                    <MudTd>
+                        <MudTooltip Text="Hidden companies don't appear on the all-companies picker grid. They're still fully usable via direct nav and dropdowns.">
+                            <MudSwitch T="bool" @bind-Value="_editIsHidden" Color="Color.Warning" />
+                        </MudTooltip>
                     </MudTd>
                     <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
                     <MudTd>
@@ -143,6 +149,21 @@
                             <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Inactive</MudChip>
                         }
                     </MudTd>
+                    <MudTd>
+                        @if (context.IsHidden)
+                        {
+                            <MudTooltip Text="Tile suppressed on the all-companies picker. The company is still fully usable elsewhere.">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
+                                         Icon="@Icons.Material.Filled.VisibilityOff">
+                                    Hidden
+                                </MudChip>
+                            </MudTooltip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">Visible</MudChip>
+                        }
+                    </MudTd>
                     <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
                     <MudTd>
                         <MudTooltip Text="Edit">
@@ -152,6 +173,11 @@
                             <MudIconButton Icon="@(context.IsActive ? Icons.Material.Filled.Block : Icons.Material.Filled.CheckCircle)"
                                            Color="@(context.IsActive ? Color.Warning : Color.Success)" Size="Size.Small"
                                            OnClick="@(() => ToggleActive(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="@(context.IsHidden ? "Show on picker" : "Hide from picker")">
+                            <MudIconButton Icon="@(context.IsHidden ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)"
+                                           Color="Color.Default" Size="Size.Small"
+                                           OnClick="@(() => ToggleHidden(context))" />
                         </MudTooltip>
                     </MudTd>
                 }
@@ -183,6 +209,7 @@
     private string _editConnectionRef = string.Empty;
     private string _editWebsiteUrl = string.Empty;
     private bool _editIsActive;
+    private bool _editIsHidden;
 
     private SaveStatusIndicator? _addIndicator;
 
@@ -241,6 +268,7 @@
         _editConnectionRef = c.ConnectionRef;
         _editWebsiteUrl = c.WebsiteUrl ?? string.Empty;
         _editIsActive = c.IsActive;
+        _editIsHidden = c.IsHidden;
     }
 
     private void CancelEdit() => _editingId = null;
@@ -292,7 +320,7 @@
             await CompanyAdminSvc.UpdateAsync(id, _editCode.Trim().ToLowerInvariant(), _editName.Trim(),
                 _editDataSourceType, _editConnectionRef.Trim(),
                 string.IsNullOrWhiteSpace(_editWebsiteUrl) ? null : _editWebsiteUrl.Trim(),
-                _editIsActive);
+                _editIsActive, _editIsHidden);
             _editingId = null;
             await ReloadAsync();
         }
@@ -449,6 +477,27 @@
         catch (Exception ex)
         {
             Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // Toggle the picker-tile visibility flag. No confirmation prompt —
+    // unlike Activate/Deactivate this is purely a presentational
+    // change with no data-flow impact, so a one-click toggle keeps the
+    // admin loop tight. Snackbar feedback is enough.
+    private async Task ToggleHidden(CompanyRecord c)
+    {
+        var target = !c.IsHidden;
+        try
+        {
+            await CompanyAdminSvc.SetHiddenAsync(c.Id, target);
+            await ReloadAsync();
+            Snackbar.Add(
+                target ? $"'{c.Name}' hidden from picker." : $"'{c.Name}' shown on picker.",
+                Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to toggle: {ex.Message}", Severity.Error);
         }
     }
 }

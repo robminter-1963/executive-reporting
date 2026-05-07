@@ -1,5 +1,7 @@
 using System.Data;
 using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Npgsql;
 
@@ -11,6 +13,7 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
     private readonly ICompanyConnectionResolver _resolver;
     private readonly ConfigDbCache _cache;
     private readonly EditorModeState _editorMode;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<CompanyConnectionAdminService> _logger;
 
     public CompanyConnectionAdminService(
@@ -18,6 +21,7 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         ICompanyConnectionResolver resolver,
         ConfigDbCache cache,
         EditorModeState editorMode,
+        IHttpClientFactory httpClientFactory,
         ILogger<CompanyConnectionAdminService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
@@ -25,6 +29,7 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         _resolver = resolver;
         _cache = cache;
         _editorMode = editorMode;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -66,6 +71,11 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
 
     // Single source of truth for the column order, used by both GET paths
     // and the ReadRecord mapper below.
+    // The dv_* columns are read defensively via TryReadString so envs
+    // that haven't applied the 2026-05-05_17-00_dataverse migration
+    // still load existing connection rows correctly. Once every env
+    // has the migration, the column references can be promoted to
+    // direct GetString calls.
     private const string SelectAllColumns = @"
         SELECT id, company_id, name, connection_type, is_default, is_active,
                ss_data_source, ss_initial_catalog, ss_integrated_security, ss_user_id, ss_password,
@@ -73,7 +83,15 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
                pg_host, pg_port, pg_database, pg_username, pg_password,
                pg_ssl_mode, pg_command_timeout, pg_timeout,
                pg_root_certificate, pg_ssl_certificate, pg_ssl_key,
-               table_filter_sql, schema_filter_sql, pg_display_timezone ";
+               table_filter_sql, schema_filter_sql, pg_display_timezone,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_environment_url') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_environment_url END AS dv_environment_url,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_tenant_id') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_tenant_id END AS dv_tenant_id,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_id') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_client_id END AS dv_client_id,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_secret') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_client_secret END AS dv_client_secret ";
 
     private static CompanyConnectionRecord ReadRecord(SqlDataReader reader) => new()
     {
@@ -108,6 +126,14 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         TableFilterSql = reader.IsDBNull(26) ? null : reader.GetString(26),
         SchemaFilterSql = TryReadString(reader, 27),
         PgDisplayTimezone = TryReadString(reader, 28),
+        // Dataverse fields — read defensively to tolerate pre-migration
+        // schemas; the SelectAllColumns CASE WHEN already coalesces
+        // missing columns to NULL, so TryReadString just covers the
+        // belt-and-suspenders case.
+        DvEnvironmentUrl = TryReadString(reader, 29),
+        DvTenantId = TryReadString(reader, 30),
+        DvClientId = TryReadString(reader, 31),
+        DvClientSecret = TryReadString(reader, 32),
     };
 
     // Tolerates schema_filter_sql not yet being present (migration unrun)
@@ -207,6 +233,16 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         // cryptic error for an obvious form-level mistake.
         try { Validate(r); }
         catch (ArgumentException ex) { return new ConnectionTestResult(false, ex.Message, 0); }
+
+        // Dataverse takes a different code path entirely — no SQL
+        // connection string, no provider client. Test = Entra OAuth2
+        // client_credentials token + a Web API "WhoAmI" ping. Defer
+        // to the helper so the SQL/Postgres branches below stay
+        // focused on dialect-specific testing.
+        if (r.ConnectionType == "dataverse")
+        {
+            return await TestDataverseAsync(r, ct);
+        }
 
         string connStr;
         try { connStr = CompanyConnectionStringBuilder.Build(r); }
@@ -390,7 +426,8 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
                 pg_host, pg_port, pg_database, pg_username, pg_password,
                 pg_ssl_mode, pg_command_timeout, pg_timeout,
                 pg_root_certificate, pg_ssl_certificate, pg_ssl_key,
-                table_filter_sql, schema_filter_sql, pg_display_timezone)
+                table_filter_sql, schema_filter_sql, pg_display_timezone,
+                dv_environment_url, dv_tenant_id, dv_client_id, dv_client_secret)
             VALUES (
                 @id, @companyId, @name, @type, @isDefault, @isActive,
                 @ssDataSource, @ssInitialCatalog, @ssIntegrated, @ssUserId, @ssPassword,
@@ -398,7 +435,8 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
                 @pgHost, @pgPort, @pgDatabase, @pgUsername, @pgPassword,
                 @pgSslMode, @pgCommandTimeout, @pgTimeout,
                 @pgRoot, @pgCert, @pgKey,
-                @tableFilterSql, @schemaFilterSql, @pgDisplayTimezone);", conn, tx);
+                @tableFilterSql, @schemaFilterSql, @pgDisplayTimezone,
+                @dvEnvironmentUrl, @dvTenantId, @dvClientId, @dvClientSecret);", conn, tx);
         AddAllParams(cmd, r);
         return cmd;
     }
@@ -419,6 +457,10 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
                 table_filter_sql = @tableFilterSql,
                 schema_filter_sql = @schemaFilterSql,
                 pg_display_timezone = @pgDisplayTimezone,
+                dv_environment_url = @dvEnvironmentUrl,
+                dv_tenant_id = @dvTenantId,
+                dv_client_id = @dvClientId,
+                dv_client_secret = @dvClientSecret,
                 updated_at = SYSUTCDATETIME()
             WHERE id = @id;", conn, tx);
         AddAllParams(cmd, r);
@@ -460,6 +502,11 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         cmd.Parameters.Add(Optional("@tableFilterSql", r.TableFilterSql));
         cmd.Parameters.Add(Optional("@schemaFilterSql", r.SchemaFilterSql));
         cmd.Parameters.Add(Optional("@pgDisplayTimezone", r.PgDisplayTimezone));
+
+        cmd.Parameters.Add(Optional("@dvEnvironmentUrl", r.DvEnvironmentUrl));
+        cmd.Parameters.Add(Optional("@dvTenantId", r.DvTenantId));
+        cmd.Parameters.Add(Optional("@dvClientId", r.DvClientId));
+        cmd.Parameters.Add(Optional("@dvClientSecret", r.DvClientSecret));
     }
 
     private static SqlParameter Optional(string name, string? value) => new(name, (object?)value ?? DBNull.Value);
@@ -468,20 +515,176 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
     private static SqlParameter OptionalBytes(string name, byte[]? value) =>
         new(name, SqlDbType.VarBinary) { Value = (object?)value ?? DBNull.Value };
 
+    // ── Dataverse connection test ────────────────────────────────────
+    //
+    // Two-step probe:
+    //   1. POST to the Entra v2 token endpoint with grant_type =
+    //      client_credentials. Surfaces tenant / client id / secret
+    //      mistakes early with the exact error_description Microsoft
+    //      returns ("AADSTS7000215: Invalid client secret provided",
+    //      etc.) — much more diagnostic than a generic 401.
+    //   2. GET <env>/api/data/v9.2/WhoAmI with the bearer token. Confirms
+    //      the env URL is reachable, the app registration has Dataverse
+    //      api permissions, and an app user exists in the org for it.
+    //
+    // Both calls share a 10-second-timeout HttpClient so a hung token
+    // server doesn't block the admin button indefinitely.
+    private async Task<ConnectionTestResult> TestDataverseAsync(CompanyConnectionRecord r, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+
+        var envUrl   = (r.DvEnvironmentUrl ?? string.Empty).Trim().TrimEnd('/');
+        var tenant   = (r.DvTenantId      ?? string.Empty).Trim();
+        var clientId = (r.DvClientId      ?? string.Empty).Trim();
+        var secret   = (r.DvClientSecret  ?? string.Empty).Trim();
+
+        if (string.IsNullOrEmpty(envUrl) || string.IsNullOrEmpty(tenant)
+            || string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(secret))
+        {
+            return new ConnectionTestResult(false,
+                "Environment URL, Tenant ID, Client ID, and Client Secret are all required to test a Dataverse connection.",
+                sw.ElapsedMilliseconds);
+        }
+
+        var http = _httpClientFactory.CreateClient();
+        http.Timeout = TimeSpan.FromSeconds(10);
+
+        // Step 1 — token request
+        string accessToken;
+        try
+        {
+            using var form = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string, string>("client_id",     clientId),
+                new KeyValuePair<string, string>("client_secret", secret),
+                new KeyValuePair<string, string>("scope",         $"{envUrl}/.default"),
+                new KeyValuePair<string, string>("grant_type",    "client_credentials"),
+            });
+            using var resp = await http.PostAsync(
+                $"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token", form, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var detail = TryExtractTokenError(body) ?? body;
+                return new ConnectionTestResult(false,
+                    $"Token endpoint returned {(int)resp.StatusCode}: {detail}",
+                    sw.ElapsedMilliseconds);
+            }
+            accessToken = TryExtractAccessToken(body) ?? string.Empty;
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                return new ConnectionTestResult(false,
+                    "Token endpoint returned 200 but the response body had no access_token field.",
+                    sw.ElapsedMilliseconds);
+            }
+        }
+        catch (TaskCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (TaskCanceledException)
+        {
+            return new ConnectionTestResult(false,
+                "Token request timed out after 10 seconds. Check tenant ID and network reachability to login.microsoftonline.com.",
+                sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            return new ConnectionTestResult(false,
+                $"Token request failed: {ex.Message}", sw.ElapsedMilliseconds);
+        }
+
+        // Step 2 — WhoAmI ping against the env. Confirms the token works
+        // for THIS environment (a token can succeed against the tenant
+        // but fail here if the app user doesn't exist in the org or the
+        // env URL points at a different tenant's environment).
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{envUrl}/api/data/v9.2/WhoAmI");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            using var resp = await http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                var snippet = body.Length > 300 ? body[..300] + "…" : body;
+                return new ConnectionTestResult(false,
+                    $"WhoAmI returned {(int)resp.StatusCode}: {snippet}",
+                    sw.ElapsedMilliseconds);
+            }
+            return new ConnectionTestResult(true, null, sw.ElapsedMilliseconds);
+        }
+        catch (TaskCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (TaskCanceledException)
+        {
+            return new ConnectionTestResult(false,
+                "WhoAmI request timed out. Token acquired but the environment URL didn't respond — verify it points at the right org.",
+                sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            return new ConnectionTestResult(false,
+                $"WhoAmI request failed: {ex.Message}", sw.ElapsedMilliseconds);
+        }
+    }
+
+    // Token endpoint success body has the shape
+    // {"token_type":"Bearer","expires_in":3599,"access_token":"eyJ..."}
+    // — we only need the access_token here.
+    private static string? TryExtractAccessToken(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("access_token", out var t)
+                ? t.GetString()
+                : null;
+        }
+        catch { return null; }
+    }
+
+    // Token endpoint error body shape:
+    // {"error":"invalid_client","error_description":"AADSTS70...",...}
+    // We surface error_description (more user-friendly) and fall back
+    // to error / raw body if parsing or the field is missing.
+    private static string? TryExtractTokenError(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var desc = doc.RootElement.TryGetProperty("error_description", out var d) ? d.GetString() : null;
+            if (!string.IsNullOrWhiteSpace(desc)) return desc;
+            return doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() : null;
+        }
+        catch { return null; }
+    }
+
     private static void Validate(CompanyConnectionRecord r)
     {
         if (string.IsNullOrWhiteSpace(r.Name)) throw new ArgumentException("Name is required.");
-        if (r.ConnectionType is not ("sqlserver" or "postgres"))
-            throw new ArgumentException("connection_type must be 'sqlserver' or 'postgres'.");
+        if (r.ConnectionType is not ("sqlserver" or "postgres" or "dataverse"))
+            throw new ArgumentException("connection_type must be 'sqlserver', 'postgres', or 'dataverse'.");
         if (r.ConnectionType == "sqlserver")
         {
             if (string.IsNullOrWhiteSpace(r.SsDataSource) || string.IsNullOrWhiteSpace(r.SsInitialCatalog))
                 throw new ArgumentException("SQL Server connections require DataSource and InitialCatalog.");
         }
-        else
+        else if (r.ConnectionType == "postgres")
         {
             if (string.IsNullOrWhiteSpace(r.PgHost) || string.IsNullOrWhiteSpace(r.PgDatabase) || string.IsNullOrWhiteSpace(r.PgUsername))
                 throw new ArgumentException("Postgres connections require Host, Database, and Username.");
+        }
+        else // dataverse
+        {
+            if (string.IsNullOrWhiteSpace(r.DvEnvironmentUrl)
+                || string.IsNullOrWhiteSpace(r.DvTenantId)
+                || string.IsNullOrWhiteSpace(r.DvClientId))
+                throw new ArgumentException(
+                    "Dataverse connections require Environment URL, Tenant ID, and Client ID. " +
+                    "Client Secret is required unless certificate auth is configured (not yet supported).");
         }
     }
 }

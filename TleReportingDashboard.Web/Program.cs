@@ -91,6 +91,12 @@ try
     builder.Services.AddSingleton<ICompanyRegistry, CompanyRegistry>();
     builder.Services.AddScoped<ICompanyAdminService, CompanyAdminService>();
     builder.Services.AddScoped<ICompanyConnectionAdminService, CompanyConnectionAdminService>();
+    // IHttpClientFactory backs the Dataverse "Test connection" path
+    // (Entra token + WhoAmI ping). Registered once globally so the
+    // factory's connection pooling / handler lifecycle works correctly
+    // — using `new HttpClient()` per call would risk socket exhaustion
+    // under load. Default-named client is fine; we set Timeout per use.
+    builder.Services.AddHttpClient();
     builder.Services.AddScoped<IRoleService, RoleService>();
     builder.Services.AddScoped<IUserManagementService, UserManagementService>();
     builder.Services.AddScoped<IAdminAccessService, AdminAccessService>();
@@ -121,7 +127,12 @@ try
 
     // Schema service always reads from schema_config.json via IOptionsSnapshot
     builder.Services.AddScoped<ISchemaService, SchemaService>();
+    // Singleton — token cache lives across requests so a burst of metadata
+    // calls during schema setup doesn't hit the Entra token endpoint
+    // every time. Stateless apart from the cache; safe to share.
+    builder.Services.AddSingleton<DataverseSchemaClient>();
     builder.Services.AddScoped<SchemaBuilderService>();
+    builder.Services.AddScoped<ILibrarySectionService, LibrarySectionService>();
 
     // Per-company data-source connection resolver — reads RPT_company_connections
     // to materialize the ADO.NET connection string for the requested company.

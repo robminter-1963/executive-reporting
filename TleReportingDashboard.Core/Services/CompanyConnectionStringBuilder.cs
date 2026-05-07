@@ -14,6 +14,13 @@ public static class CompanyConnectionStringBuilder
         {
             "sqlserver" => BuildSqlServer(r),
             "postgres"  => BuildPostgres(r),
+            // Dataverse runs against the TDS endpoint at <env-host>:5558.
+            // Auth is Microsoft Entra Service Principal — SqlClient
+            // acquires the bearer token internally from the connection's
+            // User Id / Password (client id + secret) so we don't have
+            // to plumb DataverseSchemaClient's token cache through the
+            // CreateConnection path.
+            "dataverse" => BuildDataverseTds(r),
             var other   => throw new InvalidOperationException($"Unknown connection_type '{other}'.")
         };
 
@@ -40,6 +47,54 @@ public static class CompanyConnectionStringBuilder
         {
             b.MultipleActiveResultSets = true;
         }
+        return b.ConnectionString;
+    }
+
+    // Dataverse TDS endpoint connection string. Server is the env URL's
+    // host with port 5558 appended (TDS endpoint listens there alongside
+    // the standard 1433); Authentication=Active Directory Service Principal
+    // tells SqlClient to use the User Id / Password fields as the Entra
+    // client id / secret pair and acquire a bearer token internally.
+    // Encrypt=Mandatory matches the docs' requirement that the SQL
+    // connection use TLS. Database is the org name (the leftmost
+    // subdomain of the env URL) — Dataverse maps that to the active org.
+    private static string BuildDataverseTds(CompanyConnectionRecord r)
+    {
+        if (string.IsNullOrWhiteSpace(r.DvEnvironmentUrl)
+            || string.IsNullOrWhiteSpace(r.DvClientId)
+            || string.IsNullOrWhiteSpace(r.DvClientSecret))
+        {
+            throw new InvalidOperationException(
+                "Dataverse connection is missing Environment URL, Client ID, or Client Secret.");
+        }
+
+        // Strip scheme + trailing slash, keep host. e.g.
+        // "https://acme.crm.dynamics.com/" → "acme.crm.dynamics.com".
+        var envHost = r.DvEnvironmentUrl.Trim().TrimEnd('/');
+        if (envHost.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            envHost = envHost[8..];
+        else if (envHost.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            envHost = envHost[7..];
+
+        // Org name = leftmost label of the host (e.g. "acme" from
+        // "acme.crm.dynamics.com"). Dataverse uses this as the database
+        // name on the TDS connection string.
+        var dotIdx = envHost.IndexOf('.');
+        var orgName = dotIdx > 0 ? envHost[..dotIdx] : envHost;
+
+        var b = new SqlConnectionStringBuilder
+        {
+            DataSource = $"{envHost},5558",
+            InitialCatalog = orgName,
+            Authentication = SqlAuthenticationMethod.ActiveDirectoryServicePrincipal,
+            UserID = r.DvClientId.Trim(),
+            Password = r.DvClientSecret.Trim(),
+            Encrypt = SqlConnectionEncryptOption.Mandatory,
+            // 30s default is fine for ad-hoc queries; admins running a
+            // long aggregation can extend via per-report timeout settings
+            // if/when we add them.
+            ConnectTimeout = 30
+        };
         return b.ConnectionString;
     }
 

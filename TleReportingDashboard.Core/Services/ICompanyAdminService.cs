@@ -9,8 +9,12 @@ public interface ICompanyAdminService
     Task<CompanyRecord> CreateAsync(string code, string name, string dataSourceType, string connectionRef,
                                      string? websiteUrl, string? createdBy, CancellationToken ct = default);
     Task UpdateAsync(Guid id, string code, string name, string dataSourceType, string connectionRef,
-                     string? websiteUrl, bool isActive, CancellationToken ct = default);
+                     string? websiteUrl, bool isActive, bool isHidden, CancellationToken ct = default);
     Task SetActiveAsync(Guid id, bool isActive, CancellationToken ct = default);
+    // Toggle the picker-tile visibility flag. Distinct from SetActiveAsync
+    // — a hidden-but-active company stays usable everywhere except the
+    // all-companies picker grid.
+    Task SetHiddenAsync(Guid id, bool isHidden, CancellationToken ct = default);
 
     // Logo management. Kept on separate methods (not folded into UpdateAsync)
     // so the usual edit path doesn't have to re-send the blob every time —
@@ -47,4 +51,8 @@ public sealed record CompanyRecord(
     // on the master dashboard — clicking the company logo opens it in a
     // new tab. NULL means "logo isn't a link."
     public string? WebsiteUrl { get; init; }
+    // True when the picker grid should suppress this company's tile.
+    // Independent of IsActive — see CompanySummary for the full
+    // semantic. Toggle via Admin → Companies.
+    public bool IsHidden { get; init; }
 }

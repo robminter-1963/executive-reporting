@@ -509,8 +509,12 @@
                                                                 </MudTooltip>
                                                             }
                                                         }
+                                                        @* Hide the toggle when there's no data to chart — an empty
+                                                           result set produces no bars/slices/points, so offering
+                                                           "Show Chart" would just flip to a blank panel. *@
                                                         @if (_tileData.TryGetValue(tl.ReportId, out var tdHeader) && tdHeader.Config is not null
-                                                             && !string.IsNullOrEmpty(tdHeader.Config.ChartType))
+                                                             && !string.IsNullOrEmpty(tdHeader.Config.ChartType)
+                                                             && tdHeader.Data is not null && tdHeader.Data.Rows.Count > 0)
                                                         {
                                                             <MudTooltip Text="@(_chartVisibleTiles.Contains(tl.Id) ? "Hide Chart" : "Show Chart")" Placement="Placement.Bottom">
                                                                 <MudIconButton Icon="@(_chartVisibleTiles.Contains(tl.Id) ? Icons.Material.Filled.BarChart : Icons.Material.Outlined.BarChart)"
@@ -555,6 +559,7 @@
                                                         <DashboardView Data="td.Data" InitialConfig="td.Config"
                                                                        InitialHiddenColumns="td.HiddenColumns"
                                                                        TableCalcColumns="td.TableCalcColumns"
+                                                                       ColumnLabelOverrides="td.CustomColumnLabels"
                                                                        ReadOnly="true" DetailFromDashboard="true" ReportId="tl.ReportId"
                                                                        DashboardTabName="@(ActiveTab?.Label)"
                                                                        GridHeight="@($"{Math.Max(150, tl.Height - 120)}px")"
@@ -1288,6 +1293,7 @@
         // list is also captured here for the merged-hidden union below.
         var fieldIds = new List<string>();
         List<string>? templateHiddenColumns = null;
+        Dictionary<string, string>? templateColumnLabels = null;
         if (report.GridTemplateId.HasValue)
         {
             var resolved = await GridTemplateService.ResolveTemplateAsync(report.GridTemplateId);
@@ -1295,6 +1301,7 @@
             {
                 fieldIds = resolved.FieldIds;
                 templateHiddenColumns = resolved.HiddenColumns;
+                templateColumnLabels = resolved.CustomColumnLabels;
             }
         }
         else if (!string.IsNullOrWhiteSpace(report.FieldIds))
@@ -1396,7 +1403,7 @@
         try
         {
             var data = await QueryService.ExecuteQueryAsync(request);
-            return (new TileLoadResult(data, config, mergedHidden.Count > 0 ? mergedHidden : null, tableCalcColumns), null);
+            return (new TileLoadResult(data, config, mergedHidden.Count > 0 ? mergedHidden : null, tableCalcColumns, templateColumnLabels), null);
         }
         catch (Exception ex)
         {
@@ -2113,10 +2120,15 @@
     // Mirrors DetailViewer.BuildExportData — same shape, same intent.
     private static QueryResponse BuildTileExportData(TileLoadResult td)
     {
-        if (td.HiddenColumns is null || td.HiddenColumns.Count == 0) return td.Data;
-        var hidden = new HashSet<string>(td.HiddenColumns, StringComparer.OrdinalIgnoreCase);
-        var visibleColumns = td.Data.Columns.Where(c => !hidden.Contains(c.FieldId)).ToList();
-        if (visibleColumns.Count == td.Data.Columns.Count) return td.Data;
+        var hidden = td.HiddenColumns is { Count: > 0 }
+            ? new HashSet<string>(td.HiddenColumns, StringComparer.OrdinalIgnoreCase)
+            : null;
+        var hasOverrides = td.CustomColumnLabels is { Count: > 0 };
+        if (hidden is null && !hasOverrides) return td.Data;
+        var visibleColumns = (hidden is null
+            ? td.Data.Columns
+            : td.Data.Columns.Where(c => !hidden.Contains(c.FieldId)))
+            .WithLabelOverrides(td.CustomColumnLabels);
         return new QueryResponse
         {
             Columns = visibleColumns,
@@ -2136,7 +2148,12 @@
         QueryResponse Data,
         DashboardView.DashboardConfig? Config,
         List<string>? HiddenColumns,
-        List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? TableCalcColumns);
+        List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? TableCalcColumns,
+        // Per-template column-rename overrides — forwarded to the tile's
+        // DashboardView (drill-down detail) and applied to its export so
+        // the spreadsheet headers match the renamed columns admins see
+        // on screen.
+        Dictionary<string, string>? CustomColumnLabels);
 
     // Renders a wall-clock UTC stamp as a relative phrase ("just now",
     // "5m ago", "2h ago"). Falls back to the absolute date for anything

@@ -127,6 +127,7 @@ public class GridTemplateService : IGridTemplateService
         List<string>? hiddenColumns = null;
         string? sortField = null;
         string? sortDir = null;
+        Dictionary<string, string>? customColumnLabels = null;
 
         if (!string.IsNullOrWhiteSpace(template.ColumnState))
         {
@@ -141,11 +142,17 @@ public class GridTemplateService : IGridTemplateService
                     sortField = sfEl.GetString();
                 if (doc.RootElement.TryGetProperty("TableSortDirection", out var sdEl))
                     sortDir = sdEl.GetString();
+                if (doc.RootElement.TryGetProperty("CustomColumnLabels", out var clEl))
+                {
+                    var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(clEl.GetRawText());
+                    if (dict is { Count: > 0 })
+                        customColumnLabels = new Dictionary<string, string>(dict, StringComparer.OrdinalIgnoreCase);
+                }
             }
             catch { }
         }
 
-        return new ResolvedTemplate(fieldIds, columnOrder, hiddenColumns, sortField, sortDir);
+        return new ResolvedTemplate(fieldIds, columnOrder, hiddenColumns, sortField, sortDir, customColumnLabels);
     }
 
     /// <summary>

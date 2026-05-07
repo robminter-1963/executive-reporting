@@ -17,6 +17,11 @@ public interface IReportService
     Task<SavedReport> SaveReportAsync(SavedReport report);
     Task<SavedReport> UpdateReportAsync(SavedReport report);
     Task DeleteReportAsync(Guid id, string userId);
+    // Admin-only: delete any report regardless of owner. Used to clean up
+    // reports left behind when a user departs the company. Callers MUST
+    // gate this behind an IsAdmin check; the service skips the owner_id
+    // filter so the auth story lives entirely at the call site.
+    Task DeleteReportAsAdminAsync(Guid id);
     // Distinct, sorted list of category values used by any existing report.
     // Powers the Builder's autocomplete and the Library's filter dropdown.
     // Empty list when no reports have a category yet — UI degrades to a

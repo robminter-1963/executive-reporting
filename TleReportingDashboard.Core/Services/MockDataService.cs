@@ -274,6 +274,17 @@ public class MockDataService : ISchemaService, IQueryService, IReportService, IS
         }
     }
 
+    public Task DeleteReportAsAdminAsync(Guid id)
+    {
+        lock (_reportLock)
+        {
+            var existing = _savedReports.FirstOrDefault(r => r.Id == id);
+            if (existing is null) throw new InvalidOperationException("Report not found.");
+            _savedReports.Remove(existing);
+            return Task.CompletedTask;
+        }
+    }
+
     public Task<List<string>> GetDistinctCategoriesAsync()
     {
         lock (_reportLock)

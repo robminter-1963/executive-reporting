@@ -87,8 +87,8 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         // ShowOnMaster-flagged report would be invisible there.
         await using var cmd = new SqlCommand(
             @"INSERT INTO EMPOWER.RPT_saved_reports
-              (id, name, internal_name, category, owner_id, owner_email, field_ids, filters, aggregations, column_state, grid_template_id, connection_id, company_id, primary_table, last_run_at, created_at, updated_at)
-              VALUES (@Id, @Name, @InternalName, @Category, @OwnerId, @OwnerEmail, @FieldIds, @Filters, @Aggregations, @ColumnState, @GridTemplateId, @ConnectionId,
+              (id, name, internal_name, category, library_section_id, owner_id, owner_email, field_ids, filters, aggregations, column_state, grid_template_id, connection_id, company_id, primary_table, last_run_at, created_at, updated_at)
+              VALUES (@Id, @Name, @InternalName, @Category, @LibrarySectionId, @OwnerId, @OwnerEmail, @FieldIds, @Filters, @Aggregations, @ColumnState, @GridTemplateId, @ConnectionId,
                       (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
                       @PrimaryTable, @LastRunAt, @CreatedAt, @UpdatedAt)", conn);
         AddReportParams(cmd, report);
@@ -110,7 +110,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         // without a separate maintenance step.
         await using var cmd = new SqlCommand(
             @"UPDATE EMPOWER.RPT_saved_reports SET
-              name = @Name, internal_name = @InternalName, category = @Category, field_ids = @FieldIds, filters = @Filters, aggregations = @Aggregations,
+              name = @Name, internal_name = @InternalName, category = @Category, library_section_id = @LibrarySectionId, field_ids = @FieldIds, filters = @Filters, aggregations = @Aggregations,
               column_state = @ColumnState, grid_template_id = @GridTemplateId, connection_id = @ConnectionId,
               company_id = (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
               primary_table = @PrimaryTable,
@@ -178,6 +178,25 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         // ghost entry until eviction.
         _cache.Invalidate("ReportDbService:Shares:");
         _cache.Invalidate("MasterDashboardService:");
+    }
+
+    public async Task DeleteReportAsAdminAsync(Guid id)
+    {
+        // Admin-cleanup path. NO owner_id filter — used when a user has
+        // departed and an admin is removing their orphaned reports. Calling
+        // sites MUST verify IsAdmin before invoking this; the service trusts
+        // the caller. Cascade behavior matches the owner-scoped DeleteReportAsync
+        // (FK ON DELETE CASCADE on RPT_report_shares).
+        await using var conn = await OpenConnectionAsync();
+        await using var cmd = new SqlCommand(
+            "DELETE FROM EMPOWER.RPT_saved_reports WHERE id = @Id", conn);
+        cmd.Parameters.Add(new SqlParameter("@Id", id));
+        var rows = await cmd.ExecuteNonQueryAsync();
+        if (rows == 0) throw new InvalidOperationException("Report not found.");
+        _cache.Invalidate("ReportDbService:Reports:");
+        _cache.Invalidate("ReportDbService:Shares:");
+        _cache.Invalidate("MasterDashboardService:");
+        _logger.LogInformation("Report deleted by admin: {Id}", id);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -398,6 +417,10 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
                 // TryGet so envs that haven't applied the category migration
                 // yet keep working — null falls back to "uncategorized" everywhere.
                 Category = TryGetOptionalString(reader, "category"),
+                // TryGet so envs that haven't applied the library_sections
+                // migration keep working — null falls back to the catch-all
+                // bucket in the Library.
+                LibrarySectionId = TryGetOptionalGuid(reader, "library_section_id"),
                 OwnerId = reader.GetString(reader.GetOrdinal("owner_id")),
                 OwnerEmail = reader.GetString(reader.GetOrdinal("owner_email")),
                 CompanyId = reader.GetGuid(reader.GetOrdinal("company_id")),
@@ -509,6 +532,8 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
             string.IsNullOrWhiteSpace(r.InternalName) ? DBNull.Value : (object)r.InternalName));
         cmd.Parameters.Add(new SqlParameter("@Category",
             string.IsNullOrWhiteSpace(r.Category) ? DBNull.Value : (object)r.Category));
+        cmd.Parameters.Add(new SqlParameter("@LibrarySectionId",
+            (object?)r.LibrarySectionId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@OwnerId", r.OwnerId));
         cmd.Parameters.Add(new SqlParameter("@OwnerEmail", r.OwnerEmail));
         cmd.Parameters.Add(new SqlParameter("@FieldIds", r.FieldIds));

@@ -15,6 +15,11 @@ public class SavedReport
     // autocomplete fed by existing values to nudge consistency without
     // enforcing it. Null = uncategorized.
     public string? Category { get; set; }
+    // Optional FK to RPT_library_sections — drives row grouping in the
+    // Report Library's "All Reports" tab. Null = catch-all "(Uncategorized)"
+    // bucket at render time. ON DELETE SET NULL on the FK so deleting a
+    // section never orphans reports.
+    public Guid? LibrarySectionId { get; set; }
     public string OwnerId { get; set; } = string.Empty; // Entra object ID
     public string OwnerEmail { get; set; } = string.Empty;
     // Owning company. Authorization for Phase 3+ is "user has access to this

@@ -131,14 +131,9 @@
                                 InitialHiddenColumns="_hiddenColumns"
                                 InitialSort="@_initialSortTuples"
                                 CalcColumns="_tableCalcColumns"
+                                ColumnLabelOverrides="_templateColumnLabels"
                                 DisableUserSort="true"
                                 ReadOnly="true" />
-                </MudTabPanel>
-                <MudTabPanel Text="Chart" Icon="@Icons.Material.Filled.BarChart">
-                    <ChartBuilder Data="_queryData" AvailableColumns="_queryData.Columns"
-                                  InitialChartType="@_chartType"
-                                  InitialXField="@_chartXField"
-                                  InitialYField="@_chartYField" />
                 </MudTabPanel>
                 <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
                     <DashboardView Data="_queryData" InitialConfig="_dashboardConfig"
@@ -148,6 +143,7 @@
                                    ColumnOrder="_columnOrder"
                                    InitialHiddenColumns="_hiddenColumns"
                                    TableCalcColumns="_tableCalcColumns"
+                                   ColumnLabelOverrides="_templateColumnLabels"
                                    ReportId="ReportId"
                                    ReadOnly="true" />
                 </MudTabPanel>
@@ -204,14 +200,11 @@
     private string? _error;
     private QueryResponse? _queryData;
     private DashboardView.DashboardConfig? _dashboardConfig;
-    // Chart tab restore — read from ColumnState during OnInitialized
-    // and forwarded to ChartBuilder so the saved visualization is
-    // shown when the user runs the report. Read-only: Viewer doesn't
-    // re-save the report.
-    private string? _chartType;
-    private string? _chartXField;
-    private string? _chartYField;
     private List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? _tableCalcColumns;
+    // Column-rename overrides from the linked grid template. Forwarded to
+    // ReportGrid as ColumnLabelOverrides so the Table tab renders the
+    // template's renamed headers in the read-only viewer too.
+    private Dictionary<string, string>? _templateColumnLabels;
     private List<string> _appliedFilters = new();
     private Dictionary<string, string> _fieldLabelsById = new(StringComparer.OrdinalIgnoreCase);
     private string _userId = "anonymous";
@@ -302,6 +295,7 @@
                     _hiddenColumns = resolvedTemplate.HiddenColumns;
                     _tableSortField ??= resolvedTemplate.DefaultSortField;
                     _tableSortDirection ??= resolvedTemplate.DefaultSortDirection;
+                    _templateColumnLabels = resolvedTemplate.CustomColumnLabels;
                 }
             }
             else if (!string.IsNullOrWhiteSpace(report.FieldIds))
@@ -348,16 +342,6 @@
                     }
                     if (doc.RootElement.TryGetProperty("CustomFilterIds", out var cfEl))
                         _customFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfEl.GetRawText());
-                    // Chart-tab config — type + axis fields. The
-                    // Viewer is read-only, so these flow into
-                    // ChartBuilder as InitialChart* and stay there for
-                    // the session.
-                    if (doc.RootElement.TryGetProperty("ChartType", out var ctVwEl))
-                        _chartType = ctVwEl.GetString();
-                    if (doc.RootElement.TryGetProperty("ChartXField", out var cxVwEl))
-                        _chartXField = cxVwEl.GetString();
-                    if (doc.RootElement.TryGetProperty("ChartYField", out var cyVwEl))
-                        _chartYField = cyVwEl.GetString();
                     // Advanced filters — the WHERE-tree the Builder
                     // composes via the AdvancedFilterGroup component.
                     // Saved into column_state.AdvancedFilters; pass on
@@ -686,10 +670,18 @@
     // export loop iterates Columns, so dropped fields never get emitted.
     private QueryResponse BuildExportData(QueryResponse source)
     {
-        if (_hiddenColumns is null || _hiddenColumns.Count == 0) return source;
-        var hidden = new HashSet<string>(_hiddenColumns, StringComparer.OrdinalIgnoreCase);
-        var visibleColumns = source.Columns.Where(c => !hidden.Contains(c.FieldId)).ToList();
-        if (visibleColumns.Count == source.Columns.Count) return source;
+        var hidden = _hiddenColumns is { Count: > 0 }
+            ? new HashSet<string>(_hiddenColumns, StringComparer.OrdinalIgnoreCase)
+            : null;
+        var visibleColumns = (hidden is null
+            ? source.Columns
+            : source.Columns.Where(c => !hidden.Contains(c.FieldId)))
+            .WithLabelOverrides(_templateColumnLabels);
+        // Short-circuit when neither hidden filtering nor label overrides
+        // changed anything — preserves the prior reference-identity
+        // behavior so the export path stays cheap on un-templated reports.
+        if (hidden is null && (_templateColumnLabels is null || _templateColumnLabels.Count == 0))
+            return source;
         return new QueryResponse
         {
             Columns = visibleColumns,

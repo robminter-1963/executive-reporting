@@ -60,6 +60,24 @@ public sealed class PostgresDialect : ISqlDialect
         => new NpgsqlConnection(connectionString);
 }
 
+// Dataverse TDS endpoint speaks the SQL Server wire protocol — same
+// SqlConnection / SqlParameter, same TOP for row limits, same bracket
+// quoting. The dialect mainly exists so the rest of the pipeline can
+// detect Dataverse via Name and short-circuit features the TDS endpoint
+// doesn't support (no INSERT/UPDATE/DELETE, no OFFSET/FETCH paging,
+// no temp tables, no stored procs, 5000-row implicit cap).
+public sealed class DataverseTdsDialect : ISqlDialect
+{
+    public string Name => "dataverse";
+    public string QuoteIdentifier(string name) => $"[{name}]";
+    public string BuildRowLimitPrefix(string paramName) => $"TOP({paramName}) ";
+    public string BuildRowLimitSuffix(string paramName) => string.Empty;
+    public DbParameter CreateParameter(string name, object? value)
+        => new SqlParameter(name, value ?? DBNull.Value);
+    public DbConnection CreateConnection(string connectionString)
+        => new SqlConnection(connectionString);
+}
+
 public interface ISqlDialectFactory
 {
     ISqlDialect Get(string connectionType);
@@ -69,12 +87,14 @@ public sealed class SqlDialectFactory : ISqlDialectFactory
 {
     private readonly ISqlDialect _sqlServer = new SqlServerDialect();
     private readonly ISqlDialect _postgres = new PostgresDialect();
+    private readonly ISqlDialect _dataverse = new DataverseTdsDialect();
 
     public ISqlDialect Get(string connectionType) =>
         connectionType?.ToLowerInvariant() switch
         {
             "sqlserver" => _sqlServer,
             "postgres" => _postgres,
+            "dataverse" => _dataverse,
             _ => throw new InvalidOperationException($"Unknown connection_type '{connectionType}'.")
         };
 }

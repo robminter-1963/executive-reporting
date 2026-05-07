@@ -28,8 +28,8 @@
             </MudItem>
             <MudItem xs="12" sm="6">
                 <MudSelect T="string" Value="_edited.Domain" ValueChanged="v => _edited.Domain = v"
-                           Label="Domain" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
-                           HelperText="@(_domainIsLegacy ? "Legacy value — not in the Domains list anymore." : "Field grouping. Manage the list in Schema Builder → Domains.")">
+                           Label="Field Section" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           HelperText="@(_domainIsLegacy ? "Legacy value — not in the Field Sections list anymore." : "Field grouping. Manage the list in Schema Builder → Field Sections.")">
                     @* If the current value isn't in the list, show it at the top
                        with a "(legacy)" marker so saving the field doesn't lose it. *@
                     @if (_domainIsLegacy && !string.IsNullOrWhiteSpace(_edited.Domain))

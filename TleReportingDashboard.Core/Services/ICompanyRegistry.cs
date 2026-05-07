@@ -23,4 +23,9 @@ public sealed record CompanySummary(Guid Id, string Code, string Name, bool IsAc
     // Optional outbound link. When set, the master dashboard's header logo
     // becomes a clickable link to this URL (opened in a new tab).
     public string? WebsiteUrl { get; init; }
+    // True when the company is intentionally suppressed from the all-
+    // companies picker grid. Independent of IsActive — a hidden company
+    // is still fully functional via direct nav, dropdowns, and admin
+    // surfaces; it just doesn't render as a tile on the front door.
+    public bool IsHidden { get; init; }
 }

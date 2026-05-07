@@ -104,7 +104,19 @@ public sealed class DbCompanyConnectionResolver : ICompanyConnectionResolver
                pg_host, pg_port, pg_database, pg_username, pg_password,
                pg_ssl_mode, pg_command_timeout, pg_timeout,
                pg_root_certificate, pg_ssl_certificate, pg_ssl_key,
-               pg_display_timezone
+               pg_display_timezone,
+               -- Dataverse columns are read defensively so pre-migration
+               -- databases (no dv_* columns yet) still load SQL Server /
+               -- Postgres rows. CASE WHEN COL_LENGTH ... IS NULL returns
+               -- a typed NULL the reader maps to record.Dv* = null.
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_environment_url') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_environment_url END AS dv_environment_url,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_tenant_id') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_tenant_id END AS dv_tenant_id,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_id') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_client_id END AS dv_client_id,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_secret') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_client_secret END AS dv_client_secret
             FROM EMPOWER.RPT_company_connections
             WHERE is_active = 1 AND is_default = 1
             ORDER BY company_id, id";
@@ -135,7 +147,19 @@ public sealed class DbCompanyConnectionResolver : ICompanyConnectionResolver
                pg_host, pg_port, pg_database, pg_username, pg_password,
                pg_ssl_mode, pg_command_timeout, pg_timeout,
                pg_root_certificate, pg_ssl_certificate, pg_ssl_key,
-               pg_display_timezone
+               pg_display_timezone,
+               -- Dataverse columns are read defensively so pre-migration
+               -- databases (no dv_* columns yet) still load SQL Server /
+               -- Postgres rows. CASE WHEN COL_LENGTH ... IS NULL returns
+               -- a typed NULL the reader maps to record.Dv* = null.
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_environment_url') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_environment_url END AS dv_environment_url,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_tenant_id') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_tenant_id END AS dv_tenant_id,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_id') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_client_id END AS dv_client_id,
+               CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_secret') IS NULL
+                    THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_client_secret END AS dv_client_secret
             FROM EMPOWER.RPT_company_connections
             WHERE id = @id AND is_active = 1";
 
@@ -169,7 +193,15 @@ public sealed class DbCompanyConnectionResolver : ICompanyConnectionResolver
                    pg_host, pg_port, pg_database, pg_username, pg_password,
                    pg_ssl_mode, pg_command_timeout, pg_timeout,
                    pg_root_certificate, pg_ssl_certificate, pg_ssl_key,
-               pg_display_timezone
+                   pg_display_timezone,
+                   CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_environment_url') IS NULL
+                        THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_environment_url END AS dv_environment_url,
+                   CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_tenant_id') IS NULL
+                        THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_tenant_id END AS dv_tenant_id,
+                   CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_id') IS NULL
+                        THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_client_id END AS dv_client_id,
+                   CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_secret') IS NULL
+                        THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_client_secret END AS dv_client_secret
                FROM EMPOWER.RPT_company_connections
                WHERE company_id = @c AND is_active = 1 AND is_default = 1"
             : @"SELECT TOP 1
@@ -179,7 +211,15 @@ public sealed class DbCompanyConnectionResolver : ICompanyConnectionResolver
                    pg_host, pg_port, pg_database, pg_username, pg_password,
                    pg_ssl_mode, pg_command_timeout, pg_timeout,
                    pg_root_certificate, pg_ssl_certificate, pg_ssl_key,
-               pg_display_timezone
+                   pg_display_timezone,
+                   CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_environment_url') IS NULL
+                        THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_environment_url END AS dv_environment_url,
+                   CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_tenant_id') IS NULL
+                        THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_tenant_id END AS dv_tenant_id,
+                   CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_id') IS NULL
+                        THEN CAST(NULL AS NVARCHAR(100)) ELSE dv_client_id END AS dv_client_id,
+                   CASE WHEN COL_LENGTH('EMPOWER.RPT_company_connections','dv_client_secret') IS NULL
+                        THEN CAST(NULL AS NVARCHAR(500)) ELSE dv_client_secret END AS dv_client_secret
                FROM EMPOWER.RPT_company_connections
                WHERE company_id = @c AND is_active = 1 AND name = @name";
 
@@ -235,5 +275,13 @@ public sealed class DbCompanyConnectionResolver : ICompanyConnectionResolver
         PgSslCertificate = reader.IsDBNull(24) ? null : (byte[])reader.GetValue(24),
         PgSslKey = reader.IsDBNull(25) ? null : (byte[])reader.GetValue(25),
         PgDisplayTimezone = reader.IsDBNull(26) ? null : reader.GetString(26),
+        // Dataverse credentials. The CASE WHEN COL_LENGTH guard in the
+        // SELECT means these are typed NULL on databases that haven't run
+        // the 2026-05-05 dv_* migration yet; the IsDBNull checks here
+        // work either way.
+        DvEnvironmentUrl = reader.IsDBNull(27) ? null : reader.GetString(27),
+        DvTenantId       = reader.IsDBNull(28) ? null : reader.GetString(28),
+        DvClientId       = reader.IsDBNull(29) ? null : reader.GetString(29),
+        DvClientSecret   = reader.IsDBNull(30) ? null : reader.GetString(30),
     };
 }

@@ -25,7 +25,9 @@
                        Label="Company" Variant="Variant.Outlined" Margin="Margin.Dense"
                        ToStringFunc="@CompanyToLabel"
                        Style="min-width: 280px;">
-                @foreach (var c in _companies)
+                @* Sort in-foreach so adds/edits/renames re-render in
+                   alphabetical order without touching the source list. *@
+                @foreach (var c in _companies.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase))
                 {
                     <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
                 }
@@ -107,6 +109,7 @@
                                Style="width: 220px;">
                         <MudSelectItem Value="@("sqlserver")">SQL Server</MudSelectItem>
                         <MudSelectItem Value="@("postgres")">Postgres</MudSelectItem>
+                        <MudSelectItem Value="@("dataverse")">Dataverse</MudSelectItem>
                     </MudSelect>
                     <MudSwitch T="bool" @bind-Value="_form.IsDefault" Color="Color.Primary" Label="Default" />
                     <MudSwitch T="bool" @bind-Value="_form.IsActive" Color="Color.Success" Label="Active" />
@@ -138,6 +141,11 @@
 
                 <MudDivider />
 
+                @* Connection-type-specific form. Each branch reads / writes
+                   only the columns relevant to its dialect; the others stay
+                   null on the record. The Dataverse branch is setup-only as
+                   of v1 — saving works, but no consumer queries against it
+                   until the Dataverse adapter ships. *@
                 @if (_form.ConnectionType == "sqlserver")
                 {
                     <MudText Typo="Typo.overline" Color="Color.Secondary">SQL Server settings</MudText>
@@ -170,6 +178,37 @@
                                           Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 220px;" />
                         </MudStack>
                     }
+                }
+                else if (_form.ConnectionType == "dataverse")
+                {
+                    <MudText Typo="Typo.overline" Color="Color.Secondary">Dataverse settings</MudText>
+                    <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined" Class="py-1">
+                        Setup-only at this stage. Credentials persist, but query / scope / schema-builder pipelines
+                        haven't been extended to Dataverse yet — connections of this type can't run reports or be
+                        used as the data source for tiles until the adapter ships.
+                    </MudAlert>
+                    <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                        <MudTextField @bind-Value="_form.DvEnvironmentUrl" Label="Environment URL"
+                                      HelperText="e.g. https://contoso.crm.dynamics.com (no trailing slash)"
+                                      Placeholder="https://yourorg.crm.dynamics.com"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 360px; flex: 1;" />
+                    </MudStack>
+                    <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                        <MudTextField @bind-Value="_form.DvTenantId" Label="Tenant ID"
+                                      HelperText="Entra tenant where the app registration lives"
+                                      Placeholder="00000000-0000-0000-0000-000000000000"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 320px;" />
+                        <MudTextField @bind-Value="_form.DvClientId" Label="Client ID"
+                                      HelperText="App (client) ID with Dataverse user_impersonation"
+                                      Placeholder="00000000-0000-0000-0000-000000000000"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 320px;" />
+                    </MudStack>
+                    <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
+                        <MudTextField @bind-Value="_form.DvClientSecret" Label="Client Secret"
+                                      InputType="InputType.Password"
+                                      HelperText="App secret value (not the secret ID). Rotate when it nears expiry."
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 360px; flex: 1;" />
+                    </MudStack>
                 }
                 else
                 {
@@ -459,6 +498,11 @@
     private void StartEdit(CompanyConnectionRecord r)
     {
         // Deep copy so Cancel doesn't leave mutated in-place state behind.
+        // Every settable property on CompanyConnectionRecord must be
+        // copied here — missing a field silently strips it from the
+        // edit form, so the user sees blank inputs and (worse) saves
+        // a NULL back over their previously-saved value. Audit this
+        // list whenever the record gains new fields.
         _form = new CompanyConnectionRecord
         {
             Id = r.Id,
@@ -467,10 +511,13 @@
             ConnectionType = r.ConnectionType,
             IsDefault = r.IsDefault,
             IsActive = r.IsActive,
+
             SsDataSource = r.SsDataSource, SsInitialCatalog = r.SsInitialCatalog,
             SsIntegratedSecurity = r.SsIntegratedSecurity, SsUserId = r.SsUserId, SsPassword = r.SsPassword,
             SsApplicationIntent = r.SsApplicationIntent, SsEncrypt = r.SsEncrypt,
             SsTrustServerCertificate = r.SsTrustServerCertificate,
+            SsMultipleActiveResultSets = r.SsMultipleActiveResultSets,
+
             PgHost = r.PgHost, PgPort = r.PgPort, PgDatabase = r.PgDatabase,
             PgUsername = r.PgUsername, PgPassword = r.PgPassword,
             PgSslMode = r.PgSslMode, PgCommandTimeout = r.PgCommandTimeout, PgTimeout = r.PgTimeout,
@@ -478,7 +525,19 @@
             PgSslCertificate = r.PgSslCertificate,
             PgSslKey = r.PgSslKey,
             PgDisplayTimezone = r.PgDisplayTimezone,
-            TableFilterSql = r.TableFilterSql
+
+            TableFilterSql = r.TableFilterSql,
+            SchemaFilterSql = r.SchemaFilterSql,
+
+            // Dataverse — added 2026-05-05. Without these, opening Edit
+            // on a Dataverse row loaded blank Environment URL / Tenant
+            // ID / Client ID / Client Secret fields, then a Save would
+            // round-trip nulls back to the DB. Audit added to the
+            // comment block above.
+            DvEnvironmentUrl = r.DvEnvironmentUrl,
+            DvTenantId = r.DvTenantId,
+            DvClientId = r.DvClientId,
+            DvClientSecret = r.DvClientSecret,
         };
         _testResult = null;
         _editing = true;
@@ -598,8 +657,11 @@
         }
     }
 
-    private static string DescribeTarget(CompanyConnectionRecord r) =>
-        r.ConnectionType == "sqlserver"
-            ? $"{r.SsDataSource} / {r.SsInitialCatalog}"
-            : $"{r.PgHost}:{r.PgPort} / {r.PgDatabase}";
+    private static string DescribeTarget(CompanyConnectionRecord r) => r.ConnectionType switch
+    {
+        "sqlserver" => $"{r.SsDataSource} / {r.SsInitialCatalog}",
+        "postgres"  => $"{r.PgHost}:{r.PgPort} / {r.PgDatabase}",
+        "dataverse" => string.IsNullOrWhiteSpace(r.DvEnvironmentUrl) ? "(no env URL)" : r.DvEnvironmentUrl,
+        _           => r.ConnectionType
+    };
 }

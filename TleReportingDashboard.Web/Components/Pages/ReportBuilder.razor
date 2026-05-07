@@ -22,6 +22,7 @@
 @inject ISchemaConfigStore SchemaStore
 @inject SchemaBuilderService SchemaBrowser
 @inject ICustomPrimaryTableService CustomPrimaryTableSvc
+@inject ILibrarySectionService LibrarySectionSvc
 @inject TleReportingDashboard.Web.Services.QueryPipeline.ISqlDialectFactory DialectFactory
 @inject ILogger<ReportBuilder> Logger
 @inject AuthenticationStateProvider AuthStateProvider
@@ -120,6 +121,29 @@
                                      ResetValueOnEmptyText
                                      Adornment="Adornment.Start"
                                      AdornmentIcon="@Icons.Material.Filled.Category" />
+                </MudTooltip>
+                @* Library Section — admin-curated buckets that drive the
+                   Report Library's "All Reports" tab grouping. Different
+                   from Category (free-text filter chip): sections are
+                   FK-linked to RPT_library_sections and rendered as
+                   ordered headers above grouped report rows. Sections
+                   are managed centrally via the "Create Section" button
+                   on the Library page; this dropdown only assigns. *@
+                <MudTooltip Text="Optional sub-section for the Report Library's All Reports tab. Sections are managed via the Library's 'Create Section' button. Blank = '(Uncategorized)' bucket.">
+                    <MudSelect T="Guid?" Value="_loadedLibrarySectionId"
+                               ValueChanged="@((Guid? v) => { _loadedLibrarySectionId = v; })"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Style="max-width: 200px; font-size: 0.85rem;"
+                               Placeholder="Library Section"
+                               Clearable="true"
+                               Adornment="Adornment.Start"
+                               AdornmentIcon="@Icons.Material.Filled.Folder">
+                        <MudSelectItem T="Guid?" Value="@((Guid?)null)">— None —</MudSelectItem>
+                        @foreach (var s in _availableLibrarySections.OrderBy(s => s.SortOrder).ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)s.Id)">@s.Name</MudSelectItem>
+                        }
+                    </MudSelect>
                 </MudTooltip>
             </MudStack>
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
@@ -610,22 +634,19 @@
                                    Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                                    Style="min-width: 240px;">
                             <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
-                            @{
-                                var detailHidden = _currentConfig.HiddenColumns is { Count: > 0 }
-                                    ? new HashSet<string>(_currentConfig.HiddenColumns, StringComparer.OrdinalIgnoreCase)
-                                    : null;
-                            }
+                            @* Hidden-in-table-view fields are still valid
+                               drill-down group-by keys — hiding affects the
+                               table grid, not what the report can be ordered/
+                               grouped by. *@
                             @foreach (var f in _selectedFieldDefinitions
-                                .Where(f => string.IsNullOrWhiteSpace(f.SqlExpression)
-                                         && (detailHidden is null || !detailHidden.Contains(f.Id))))
+                                .Where(f => string.IsNullOrWhiteSpace(f.SqlExpression)))
                             {
                                 <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
                             }
                             @* SQL-mode table calcs are real columns in the
                                SELECT; sortable / groupable via their Key alias. *@
                             @foreach (var cc in (_currentConfig.TableCalculatedColumns ?? new())
-                                .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression)
-                                         && (detailHidden is null || !detailHidden.Contains(c.Key))))
+                                .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression)))
                             {
                                 <MudSelectItem T="string" Value="@cc.Key">@cc.Label (*)</MudSelectItem>
                             }
@@ -650,23 +671,17 @@
                                    Style="min-width: 240px;">
                             <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
                             @{
-                                var detailSortHidden = _currentConfig.HiddenColumns is { Count: > 0 }
-                                    ? new HashSet<string>(_currentConfig.HiddenColumns, StringComparer.OrdinalIgnoreCase)
-                                    : null;
                                 var sortSelectedSet = new HashSet<string>(_selectedFieldIds, StringComparer.OrdinalIgnoreCase);
-                                // Combine selected fields with the rest of the schema.
-                                // Selected fields filter out hidden columns (admin chose
-                                // to hide; honor that for sort too). Non-selected fields
-                                // are eligible regardless of hidden state — they're
-                                // already invisible in the grid by virtue of not being
-                                // in _selectedFieldIds.
+                                // Hidden-in-table-view fields are still valid
+                                // sort keys — hiding affects the grid, not the
+                                // ORDER BY surface. Selected and non-selected
+                                // fields both appear; non-selected get the
+                                // "(+)" marker so admins know QueryBuilder
+                                // will add them silently to the SELECT.
                                 var sortFieldOptions = _domains
                                     .SelectMany(d => d.Fields)
                                     .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
                                     .Select(g => g.First())
-                                    .Where(f => !sortSelectedSet.Contains(f.Id)
-                                             || detailSortHidden is null
-                                             || !detailSortHidden.Contains(f.Id))
                                     .OrderByDescending(f => sortSelectedSet.Contains(f.Id))
                                     .ThenBy(f => f.Label, StringComparer.OrdinalIgnoreCase);
                             }
@@ -686,8 +701,7 @@
                                 <MudSelectItem T="string" Value="@f.Id">@sortLabel</MudSelectItem>
                             }
                             @foreach (var cc in (_currentConfig.TableCalculatedColumns ?? new())
-                                .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression)
-                                         && (detailSortHidden is null || !detailSortHidden.Contains(c.Key))))
+                                .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression)))
                             {
                                 <MudSelectItem T="string" Value="@cc.Key">@cc.Label (*)</MudSelectItem>
                             }
@@ -717,21 +731,16 @@
                                    Style="min-width: 220px;">
                             <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
                             @{
-                                // Re-derive locally — Razor's @{} blocks don't share variable
-                                // scope across sibling MudSelect children, so we can't reuse
-                                // the detailSortHidden from the primary Sort By picker above.
-                                var thenByHidden = _currentConfig.HiddenColumns is { Count: > 0 }
-                                    ? new HashSet<string>(_currentConfig.HiddenColumns, StringComparer.OrdinalIgnoreCase)
-                                    : null;
                                 var thenBySelectedSet = new HashSet<string>(_selectedFieldIds, StringComparer.OrdinalIgnoreCase);
+                                // Hidden-in-table-view fields are still valid
+                                // tiebreaker sort keys — same rationale as the
+                                // primary Sort By dropdown. Excluded only when
+                                // already chosen as the primary sort.
                                 var thenByFieldOptions = _domains
                                     .SelectMany(d => d.Fields)
                                     .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
                                     .Select(g => g.First())
-                                    .Where(f => (!thenBySelectedSet.Contains(f.Id)
-                                                 || thenByHidden is null
-                                                 || !thenByHidden.Contains(f.Id))
-                                             && !string.Equals(f.Id, _detailSortFieldId, StringComparison.OrdinalIgnoreCase))
+                                    .Where(f => !string.Equals(f.Id, _detailSortFieldId, StringComparison.OrdinalIgnoreCase))
                                     .OrderByDescending(f => thenBySelectedSet.Contains(f.Id))
                                     .ThenBy(f => f.Label, StringComparer.OrdinalIgnoreCase);
                             }
@@ -747,7 +756,6 @@
                             }
                             @foreach (var cc in (_currentConfig.TableCalculatedColumns ?? new())
                                 .Where(c => !string.IsNullOrWhiteSpace(c.SqlExpression)
-                                         && (thenByHidden is null || !thenByHidden.Contains(c.Key))
                                          && !string.Equals(c.Key, _detailSortFieldId, StringComparison.OrdinalIgnoreCase)))
                             {
                                 <MudSelectItem T="string" Value="@cc.Key">@cc.Label (*)</MudSelectItem>
@@ -807,14 +815,8 @@
                                 InitialSort="@_initialSortTuples"
                                 OnSortChanged="HandleSortChanged"
                                 CalcColumns="_currentConfig.TableCalculatedColumns"
+                                ColumnLabelOverrides="_templateColumnLabels"
                                 FillViewport="true" />
-                </MudTabPanel>
-                <MudTabPanel Text="Chart" Icon="@Icons.Material.Filled.BarChart">
-                    <ChartBuilder Data="_queryData" AvailableColumns="_queryData.Columns"
-                                  InitialChartType="@_currentConfig.ChartType"
-                                  InitialXField="@_currentConfig.ChartXField"
-                                  InitialYField="@_currentConfig.ChartYField"
-                                  OnConfigChanged="HandleChartConfigChanged" />
                 </MudTabPanel>
                 <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
                     <DashboardView @ref="_dashboardView" Data="_queryData"
@@ -826,6 +828,7 @@
                                    AllDimensionFields="_allDimensionFields"
                                    TableCalcColumns="_currentConfig.TableCalculatedColumns"
                                    InitialHiddenColumns="_currentConfig.HiddenColumns"
+                                   ColumnLabelOverrides="_templateColumnLabels"
                                    OnExtraFieldRequired="HandleExtraFieldRequired" />
                 </MudTabPanel>
             </MudTabs>
@@ -959,6 +962,11 @@
     private List<string> _activeKpiIds = new() { "total_volume", "funded_count", "avg_loan_amount" };
     private DashboardView? _dashboardView;
     private ReportGrid? _reportGrid;
+    // Column-rename overrides from the linked grid template. Forwarded
+    // to ReportGrid as ColumnLabelOverrides so the Table tab renders the
+    // template's renamed headers. Null when the report isn't templated
+    // or the template doesn't customize any labels.
+    private Dictionary<string, string>? _templateColumnLabels;
     // Materialized list passed to ReportGrid.InitialSort. Built from
     // _currentConfig.TableSort on report load, and also when a template's
     // default sort resolves to a multi-sort. Rebuilt rather than bound live so
@@ -1024,6 +1032,10 @@
     // Optional grouping shown as a chip + filter in the Report Library.
     // Empty = uncategorized.
     private string? _loadedCategory;
+    // Library Section selection — bound to the dropdown next to Category
+    // in the header. Persisted on save into RPT_saved_reports.library_section_id.
+    private Guid? _loadedLibrarySectionId;
+    private List<LibrarySection> _availableLibrarySections = new();
     // Cache of distinct categories already in use across the system.
     // Powers the Category autocomplete suggestions; refreshed lazily when
     // the autocomplete first searches and again after each save.
@@ -1270,6 +1282,7 @@
             _loadedReportName = report.Name;
             _loadedInternalName = report.InternalName;
             _loadedCategory = report.Category;
+            _loadedLibrarySectionId = report.LibrarySectionId;
             _currentConfig.ConnectionId = report.ConnectionId;
             _currentConfig.PrimaryTable = report.PrimaryTable;
             // Reload the field catalog to match this report's connection.
@@ -1291,6 +1304,10 @@
                     _currentConfig.HiddenColumns = resolvedTemplate.HiddenColumns;
                     _currentConfig.DefaultSortField = resolvedTemplate.DefaultSortField;
                     _currentConfig.DefaultSortDirection = resolvedTemplate.DefaultSortDirection;
+                    // Per-template column rename overrides — flow into the
+                    // Table grid via ColumnLabelOverrides without touching
+                    // the report's saved ColumnState.
+                    _templateColumnLabels = resolvedTemplate.CustomColumnLabels;
                 }
             }
             else
@@ -1372,20 +1389,6 @@
                     {
                         _currentConfig.CustomFilterIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(cfElement.GetRawText());
                     }
-
-                    // Chart-tab config — the picks the user made on
-                    // the Chart tab (type + axis fields). Persisted
-                    // here so navigating away and back, or running
-                    // the report from the Library, restores the same
-                    // visualization. Master Dashboard tile rendering
-                    // also reads these (via ReportConfig.ChartType)
-                    // to decide whether to show its chart icon.
-                    if (root.TryGetProperty("ChartType", out var ctEl))
-                        _currentConfig.ChartType = ctEl.GetString();
-                    if (root.TryGetProperty("ChartXField", out var cxEl))
-                        _currentConfig.ChartXField = cxEl.GetString();
-                    if (root.TryGetProperty("ChartYField", out var cyEl))
-                        _currentConfig.ChartYField = cyEl.GetString();
 
                     // Table-view calculated columns. Independent of the
                     // dashboard's calc columns (those live inside
@@ -1875,18 +1878,6 @@
         _currentConfig.TableSort = sort
             .Select(t => new TableSortSpec { Field = t.Field, Direction = t.Direction })
             .ToList();
-        return Task.CompletedTask;
-    }
-
-    // Mirrors HandleSortChanged for the Chart tab — pushes the user's
-    // type / X / Y picks into _currentConfig so BuildColumnStateJson
-    // emits them on the next save. ChartBuilder fires this on every
-    // user change; in-memory only until Save.
-    private Task HandleChartConfigChanged((string ChartType, string XField, string YField) cfg)
-    {
-        _currentConfig.ChartType = string.IsNullOrWhiteSpace(cfg.ChartType) ? null : cfg.ChartType;
-        _currentConfig.ChartXField = string.IsNullOrWhiteSpace(cfg.XField) ? null : cfg.XField;
-        _currentConfig.ChartYField = string.IsNullOrWhiteSpace(cfg.YField) ? null : cfg.YField;
         return Task.CompletedTask;
     }
 
@@ -2428,6 +2419,21 @@
         _domains = await SchemaService.GetDomainGroupsAsync(connectionId: _currentConfig.ConnectionId);
         _customFilters = await SchemaService.GetCustomFiltersAsync(_currentConfig.ConnectionId);
 
+        // Library Sections are scoped per-company. Resolve the connection's
+        // company id, then load that company's section list so the dropdown
+        // in the header reflects the right catalog. Empty list when the
+        // connection has no company yet (admin partway through setup) —
+        // dropdown just shows "(None)".
+        if (_currentConfig.ConnectionId is Guid cid
+            && _connectionCompanyIdByConnectionId.TryGetValue(cid, out var companyId))
+        {
+            _availableLibrarySections = await LibrarySectionSvc.GetSectionsAsync(companyId);
+        }
+        else
+        {
+            _availableLibrarySections = new();
+        }
+
         // Dashboard group-by dropdown pulls from this list. Must rebuild on every
         // connection change or a saved-report load — otherwise it stays pinned to
         // whichever connection was active at page init (typically TLE).
@@ -2860,6 +2866,10 @@
 
         _linkedTemplateId = null;
         _linkedTemplateName = null;
+        // Template-scoped column-rename overrides only make sense while a
+        // template is linked. Drop them on unlink — both Clone and Don't
+        // clone branches — so the Table grid reverts to schema labels.
+        _templateColumnLabels = null;
         Snackbar.Add(cloneFields == true
             ? "Template unlinked. Fields cloned — edit freely."
             : "Template unlinked. Fields cleared.", Severity.Info);
@@ -2877,6 +2887,11 @@
         _currentConfig.HiddenColumns = resolved.HiddenColumns;
         _currentConfig.DefaultSortField = resolved.DefaultSortField;
         _currentConfig.DefaultSortDirection = resolved.DefaultSortDirection;
+        // Capture per-template column-rename overrides so the Table tab
+        // and Dashboard drill-down render the template's renamed headers
+        // immediately after Apply — not just on next page load. Mirrors
+        // what the initial-load path at line ~1271 already does.
+        _templateColumnLabels = resolved.CustomColumnLabels;
         return Task.CompletedTask;
     }
 
@@ -3020,6 +3035,7 @@
                     existing.Category = string.IsNullOrWhiteSpace(_loadedCategory)
                         ? null
                         : _loadedCategory.Trim();
+                    existing.LibrarySectionId = _loadedLibrarySectionId;
                     existing.FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds);
                     existing.Filters = _currentConfig.Filters.Any()
                         ? System.Text.Json.JsonSerializer.Serialize(_currentConfig.Filters)
@@ -3057,6 +3073,7 @@
                 Category = string.IsNullOrWhiteSpace(_loadedCategory)
                     ? null
                     : _loadedCategory.Trim(),
+                LibrarySectionId = _loadedLibrarySectionId,
                 OwnerId = _userId,
                 OwnerEmail = _userEmail,
                 FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds),
@@ -3207,9 +3224,12 @@
             foreach (var id in _currentConfig.HiddenColumns) hidden.Add(id);
         foreach (var id in AggregateFieldIds) hidden.Add(id);
 
-        if (hidden.Count == 0) return source;
-        var visibleColumns = source.Columns.Where(c => !hidden.Contains(c.FieldId)).ToList();
-        if (visibleColumns.Count == source.Columns.Count) return source;
+        var hasOverrides = _templateColumnLabels is { Count: > 0 };
+        if (hidden.Count == 0 && !hasOverrides) return source;
+
+        var visibleColumns = source.Columns
+            .Where(c => !hidden.Contains(c.FieldId))
+            .WithLabelOverrides(_templateColumnLabels);
         return new QueryResponse
         {
             Columns = visibleColumns,
@@ -3288,16 +3308,6 @@
         // Custom filter IDs
         if (_currentConfig.CustomFilterIds is not null && _currentConfig.CustomFilterIds.Count > 0)
             state["CustomFilterIds"] = _currentConfig.CustomFilterIds;
-
-        // Chart-tab config. Only persisted when at least one piece is
-        // populated — keeps legacy reports clean of phantom keys when
-        // the author never visited the Chart tab.
-        if (!string.IsNullOrWhiteSpace(_currentConfig.ChartType))
-            state["ChartType"] = _currentConfig.ChartType;
-        if (!string.IsNullOrWhiteSpace(_currentConfig.ChartXField))
-            state["ChartXField"] = _currentConfig.ChartXField;
-        if (!string.IsNullOrWhiteSpace(_currentConfig.ChartYField))
-            state["ChartYField"] = _currentConfig.ChartYField;
 
         // Multi-column sort — ordered list of {Field, Direction}. Primary first.
         // This is the only sort source new saves emit. The legacy TableSortField
@@ -3491,9 +3501,38 @@
                         foreach (var ec in liveDashConfig.ExtraColumns)
                             measures.Add((ec.FieldId, ec.Aggregation));
 
-                    dashboardSql = QueryBuilder.BuildDashboardPreviewSql(
-                        sql, dims, measures, fieldConfigs, dialect,
-                        liveDashConfig.DefaultSortColumn, liveDashConfig.DefaultSortDirection);
+                    // Build a SEPARATE inner query for the dashboard preview
+                    // whose FieldIds = saved report fields ∪ dashboard
+                    // dimensions ∪ measure fields. The outer GROUP BY needs
+                    // to reference columns the inner actually projects;
+                    // without this augmentation, dashboards that group by a
+                    // field NOT in the saved field set (e.g. agent_team
+                    // when the report only saved processor / loan_officer)
+                    // emit "Invalid column name 'agent_team'" SQL.
+                    //
+                    // Mutate-and-restore on `request.FieldIds` keeps the
+                    // surrounding code's request shape intact for the
+                    // subsequent table / detail SQL generation.
+                    var savedFieldIds = request.FieldIds;
+                    var augmented = savedFieldIds
+                        .Concat(dims)
+                        .Concat(measures.Select(m => m.FieldId))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    request.FieldIds = augmented;
+                    try
+                    {
+                        var (dashInnerSql, _) = QueryBuilder.BuildQuery(
+                            request, fieldConfigs, joinConfigs, customFilters, lookups, dialect,
+                            _currentConfig.PrimaryTable);
+                        dashboardSql = QueryBuilder.BuildDashboardPreviewSql(
+                            dashInnerSql, dims, measures, fieldConfigs, dialect,
+                            liveDashConfig.DefaultSortColumn, liveDashConfig.DefaultSortDirection);
+                    }
+                    finally
+                    {
+                        request.FieldIds = savedFieldIds;
+                    }
                 }
             }
 

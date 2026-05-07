@@ -195,6 +195,14 @@
                         </MudMenuItem>
                         @if (_hasAdminAccess)
                         {
+                            @* Admin-only Report Library shortcut. Lives next
+                               to Admin in the user menu so admins can jump
+                               to it from any page (Master Dashboard, Schema
+                               Builder, etc.) without bouncing through nav. *@
+                            <MudMenuItem Icon="@Icons.Material.Filled.LibraryBooks"
+                                         OnClick="@(() => Navigation.NavigateTo("/reports"))">
+                                Report Library
+                            </MudMenuItem>
                             @* Admin entry moved off the Report Library's top
                                bar (where it was oddly scoped to that page)
                                into the user menu — reachable from every page.
@@ -904,10 +912,11 @@
                     }
                     else
                     {
-                        var segments = path.Split('/');
-                        var reportId = segments.Length > 1 ? segments[1] : null;
+                        // Library Run jumps straight to /viewer/{id}/detail and
+                        // we don't want the user to see (or visit) the tabbed
+                        // Report Viewer as an intermediate step. Two crumbs
+                        // only: Report Library → Detail View.
                         crumbs.Add(new("Report Library", "/reports"));
-                        crumbs.Add(new("Report Viewer", reportId is not null ? $"/viewer/{reportId}" : null));
                         crumbs.Add(new("Detail View", null));
                     }
                 }

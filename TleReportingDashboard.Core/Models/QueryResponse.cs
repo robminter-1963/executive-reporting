@@ -11,6 +11,38 @@ public class ColumnMeta
     public string? Format { get; set; }
 }
 
+// Helpers for the ColumnMeta list. Used by every export path that needs
+// to apply grid-template column-rename overrides to the headers it
+// emits — keeps the override logic + the "what counts as an override"
+// rule in one place.
+public static class ColumnMetaExtensions
+{
+    public static List<ColumnMeta> WithLabelOverrides(
+        this IEnumerable<ColumnMeta> columns,
+        Dictionary<string, string>? overrides)
+    {
+        if (overrides is null || overrides.Count == 0)
+            return columns.ToList();
+        return columns.Select(c =>
+        {
+            if (overrides.TryGetValue(c.FieldId, out var v)
+                && !string.IsNullOrWhiteSpace(v))
+            {
+                return new ColumnMeta
+                {
+                    FieldId = c.FieldId,
+                    Label = v,
+                    DataType = c.DataType,
+                    MaxLength = c.MaxLength,
+                    ValueSortOrder = c.ValueSortOrder,
+                    Format = c.Format
+                };
+            }
+            return c;
+        }).ToList();
+    }
+}
+
 public class QueryResponse
 {
     public List<ColumnMeta> Columns { get; set; } = new();

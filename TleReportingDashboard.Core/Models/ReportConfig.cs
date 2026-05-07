@@ -3,9 +3,6 @@ namespace TleReportingDashboard.Web.Models;
 public class ReportConfig
 {
     public List<string> SelectedFieldIds { get; set; } = new();
-    public string? ChartType { get; set; }
-    public string? ChartXField { get; set; }
-    public string? ChartYField { get; set; }
     public Dictionary<string, object?> Filters { get; set; } = new();
     public string? SortField { get; set; }
     public string? SortDirection { get; set; }

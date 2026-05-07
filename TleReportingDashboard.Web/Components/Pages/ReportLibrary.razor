@@ -9,6 +9,7 @@
 @inject IAdminService AdminService
 @inject IAdminAccessService AdminAccess
 @inject ICompanyConnectionAdminService ConnectionAdminSvc
+@inject ILibrarySectionService LibrarySectionSvc
 @inject ICompanyRegistry CompanyRegistry
 @inject IMasterDashboardService MasterService
 @inject IUserManagementService UserManagement
@@ -52,6 +53,19 @@
            the bottom of the page. */
         .rl-grow .mud-table { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
         .rl-grow .mud-table-container { flex: 1 1 auto; min-height: 0; }
+        /* Section-list wrapper for the My Reports + Other Users' tabs.
+           Those tabs render N MudPapers (one per section) instead of a
+           single MudTable that fills the panel — so the parent panel's
+           flex chain has nothing to size against and content past the
+           viewport bottom would be unreachable. Scoped overflow-y: auto
+           on this wrapper restores scrolling without affecting tabs that
+           still use the single-MudTable layout (Shared / Recent). */
+        .rl-section-list {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
     </style>
 </HeadContent>
 
@@ -81,21 +95,17 @@
                 <MudIconButton Icon="@Icons.Material.Filled.DashboardCustomize" Color="Color.Default"
                                OnClick="@(() => Navigation.NavigateTo("/"))" />
             </MudTooltip>
+            @* Cross-user view moved off this header into a dedicated
+               "Other Users' Reports" tab — visible only to global admins.
+               My Reports stays strictly owner-scoped. The Grid Templates
+               shortcut is still admin-relevant; surface it inline so
+               admins don't have to dig. *@
             @if (_isAdmin)
             {
-                <MudTooltip Text="@(_isAdminView ? "Admin view: showing every user's reports" : "Normal view: showing your reports")"
-                            Placement="Placement.Bottom">
-                    <MudSwitch T="bool" Value="_isAdminView" ValueChanged="OnAdminViewToggled"
-                               Color="Color.Warning" Size="Size.Small"
-                               Label="@(_isAdminView ? "Admin view" : "Normal view")" />
+                <MudTooltip Text="Grid Templates" Placement="Placement.Bottom">
+                    <MudIconButton Icon="@Icons.Material.Filled.GridView" Color="Color.Default"
+                                   OnClick="@(() => Navigation.NavigateTo("/grid-templates"))" />
                 </MudTooltip>
-                @if (_isAdminView)
-                {
-                    <MudTooltip Text="Grid Templates" Placement="Placement.Bottom">
-                        <MudIconButton Icon="@Icons.Material.Filled.GridView" Color="Color.Default"
-                                       OnClick="@(() => Navigation.NavigateTo("/grid-templates"))" />
-                    </MudTooltip>
-                }
             }
             @* Admin moved to the MainLayout user menu — reachable from any
                page, not just here. *@
@@ -118,18 +128,6 @@
     <MudAlert Severity="Severity.Warning" Dense Variant="Variant.Filled"
               Style="border-radius: 0; background: #F9AB00; color: #202124;">
         DEV MODE — Authentication Stubbed
-    </MudAlert>
-}
-
-@* ── Admin view banner ── Signals to the admin that they're looking at
-   every user's reports, not just their own. Edit/Delete stay scoped to
-   ownership; this banner keeps the broadened context obvious. *@
-@if (_isAdminView)
-{
-    <MudAlert Severity="Severity.Info" Dense Variant="Variant.Filled"
-              Icon="@Icons.Material.Filled.AdminPanelSettings"
-              Style="border-radius: 0;">
-        Admin view — My Reports tab shows every user's reports. Edit and Delete still require ownership.
     </MudAlert>
 }
 
@@ -191,21 +189,63 @@
            Edit / Share / Schedule which are inappropriate for the role. *@
         @if (!_isViewerOnly)
         {
-        <MudTabPanel Text="@(_isAdminView ? "All Reports" : "My Reports")" Icon="@Icons.Material.Filled.Folder">
+        <MudTabPanel Text="My Reports" Icon="@Icons.Material.Filled.Folder">
+            @* Section management toolbar — only meaningful when a single
+               company is in scope (sections are per-company). The Create
+               Section button opens a small dialog to add an empty section
+               so admins can pre-define structure before assigning reports. *@
+            @if (_selectedCompanyId is not null)
+            {
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.CreateNewFolder"
+                               OnClick="OpenCreateSectionDialog">
+                        Create Section
+                    </MudButton>
+                    @if (_librarySections.Any())
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @_librarySections.Count section(s) defined
+                        </MudText>
+                    }
+                </MudStack>
+            }
             @if (FilteredMyReports.Any())
             {
-                <MudTable Items="@FilteredMyReports" Hover Striped Dense FixedHeader
-                          T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
-                          Height="100%"
-                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged"
-                          CurrentPage="@CurrentPageFor(MyReportsTab)"
-                          CurrentPageChanged="@(p => SetCurrentPageFor(MyReportsTab, p))">
+                @* Manual section rendering — one collapsible block per
+                   section. Replaces MudTable's GroupBy because GroupBy
+                   resets expand state on page remount (navigate to
+                   Builder / Detail Viewer and back). State now lives in
+                   LibraryNavState.ExpandedSections, which is per-circuit
+                   so the user's expand picks survive any in-app
+                   navigation. (Uncategorized) starts open on first visit
+                   per session; admin-defined sections start collapsed.
+                   Per-section MudTable preserves sort + hover + pager;
+                   sections are typically small enough that per-section
+                   pagination is fine. The .rl-section-list wrapper owns
+                   the scroll so a tall stack of expanded sections doesn't
+                   push content past the viewport bottom unreachably. *@
+                <div class="rl-section-list">
+                @foreach (var section in BuildOrderedSections(FilteredMyReports))
+                {
+                    var sectionName = section.Name;
+                    var sectionReports = section.Reports;
+                    var expanded = IsSectionExpanded(sectionName);
+                    <MudPaper Elevation="0" Class="mb-1" Style="border: 1px solid #DADCE0; border-radius: 4px;">
+                        <div style="padding: 6px 12px; background: #F1F3F4; cursor: pointer; display: flex; align-items: center; gap: 4px; user-select: none;"
+                             @onclick="() => ToggleSection(sectionName)">
+                            <MudIcon Icon="@(expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" Style="color: #5F6368;" />
+                            <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Style="color: #5F6368;" />
+                            <MudText Typo="Typo.body2" Style="font-weight: 600;">@sectionName</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 4px;">(@sectionReports.Count)</MudText>
+                        </div>
+                        @if (expanded)
+                        {
+                <MudTable Items="@sectionReports" Hover Striped Dense FixedHeader
+                          T="SavedReport" Elevation="0"
+                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
                     <HeaderContent>
                         <MudTh>Name</MudTh>
-                        @if (_isAdminView)
-                        {
-                            <MudTh>Owner</MudTh>
-                        }
                         <MudTh>Connection</MudTh>
                         <MudTh>Fields</MudTh>
                         <MudTh>Last Run</MudTh>
@@ -216,6 +256,11 @@
                     </HeaderContent>
                     <RowTemplate>
                         <MudTd DataLabel="Name">
+                            @* Anchor for the "scroll the last-selected row
+                               back into view" behavior. Hidden span so it
+                               adds no visual footprint; OnAfterRenderAsync
+                               pulls its parent <tr> via JS and scrolls. *@
+                            <span id="@($"report-row-{context.Id}")" style="display: none;"></span>
                             @* Library is admin-facing — primary is the
                                admin disambiguator (InternalName) when set;
                                otherwise just the public Name. When the two
@@ -264,12 +309,6 @@
                                 </MudText>
                             }
                         </MudTd>
-                        @if (_isAdminView)
-                        {
-                            <MudTd DataLabel="Owner">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">@context.OwnerEmail</MudText>
-                            </MudTd>
-                        }
                         <MudTd DataLabel="Connection">
                             <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
                         </MudTd>
@@ -350,33 +389,23 @@
                             </MudStack>
                         </MudTd>
                     </RowTemplate>
-                    <NoRecordsContent>
-                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4">
-                            No reports match your search.
-                        </MudText>
-                    </NoRecordsContent>
                     <PagerContent>
                         <MudTablePager PageSizeOptions="new[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }" />
                     </PagerContent>
                 </MudTable>
+                        }
+                    </MudPaper>
+                }
+                </div>
             }
             else if (!_isLoading)
             {
-                @if (_isAdminView)
-                {
-                    <EmptyState Icon="@Icons.Material.Filled.FilterAltOff"
-                                Heading="No reports match your filters"
-                                Body="Try clearing the company filter or search box. Admin view shows reports across every user and company you have access to." />
-                }
-                else
-                {
-                    <EmptyState Icon="@Icons.Material.Filled.NoteAdd"
-                                Heading="You haven't created any reports yet"
-                                Body="Reports turn raw connection data into something readable. Pick fields, filters, and sorting in the builder and save the result here."
-                                CtaLabel="Create your first report"
-                                CtaIcon="@Icons.Material.Filled.Add"
-                                OnCtaClick="@(() => Navigation.NavigateTo("/builder"))" />
-                }
+                <EmptyState Icon="@Icons.Material.Filled.NoteAdd"
+                            Heading="You haven't created any reports yet"
+                            Body="Reports turn raw connection data into something readable. Pick fields, filters, and sorting in the builder and save the result here."
+                            CtaLabel="Create your first report"
+                            CtaIcon="@Icons.Material.Filled.Add"
+                            OnCtaClick="@(() => Navigation.NavigateTo("/builder"))" />
             }
         </MudTabPanel>
         }
@@ -403,6 +432,11 @@
                     </HeaderContent>
                     <RowTemplate>
                         <MudTd DataLabel="Name">
+                            @* Anchor for the "scroll the last-selected row
+                               back into view" behavior. Hidden span so it
+                               adds no visual footprint; OnAfterRenderAsync
+                               pulls its parent <tr> via JS and scrolls. *@
+                            <span id="@($"report-row-{context.Id}")" style="display: none;"></span>
                             @* Library is admin-facing — primary is the
                                admin disambiguator (InternalName) when set;
                                otherwise just the public Name. When the two
@@ -518,6 +552,11 @@
                     </HeaderContent>
                     <RowTemplate>
                         <MudTd DataLabel="Name">
+                            @* Anchor for the "scroll the last-selected row
+                               back into view" behavior. Hidden span so it
+                               adds no visual footprint; OnAfterRenderAsync
+                               pulls its parent <tr> via JS and scrolls. *@
+                            <span id="@($"report-row-{context.Id}")" style="display: none;"></span>
                             @* Library is admin-facing — primary is the
                                admin disambiguator (InternalName) when set;
                                otherwise just the public Name. When the two
@@ -605,6 +644,118 @@
             }
         </MudTabPanel>
         }
+
+        @* ── Tab 4: Other Users' Reports (admin-only) ──
+           Cross-user view, replaces the previous Admin-View toggle on
+           My Reports. Admins use this tab to add other users' reports
+           to dashboards or to clean up after departed users. Edit /
+           Share / Clone are intentionally absent — admins shouldn't
+           modify other users' work; only Run (preview) and Delete
+           (admin override) are exposed. *@
+        @if (_isAdmin)
+        {
+        <MudTabPanel Text="Other Users' Reports" Icon="@Icons.Material.Filled.GroupWork">
+            @if (FilteredOtherUserReports.Any())
+            {
+                <div class="rl-section-list">
+                @foreach (var section in BuildOrderedSections(FilteredOtherUserReports))
+                {
+                    var sectionName = section.Name;
+                    var sectionReports = section.Reports;
+                    var expanded = IsSectionExpanded(sectionName);
+                    <MudPaper Elevation="0" Class="mb-1" Style="border: 1px solid #DADCE0; border-radius: 4px;">
+                        <div style="padding: 6px 12px; background: #F1F3F4; cursor: pointer; display: flex; align-items: center; gap: 4px; user-select: none;"
+                             @onclick="() => ToggleSection(sectionName)">
+                            <MudIcon Icon="@(expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" Style="color: #5F6368;" />
+                            <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Style="color: #5F6368;" />
+                            <MudText Typo="Typo.body2" Style="font-weight: 600;">@sectionName</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 4px;">(@sectionReports.Count)</MudText>
+                        </div>
+                        @if (expanded)
+                        {
+                            <MudTable Items="@sectionReports" Hover Striped Dense FixedHeader
+                                      T="SavedReport" Elevation="0"
+                                      RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
+                                <HeaderContent>
+                                    <MudTh>Name</MudTh>
+                                    <MudTh>Owner</MudTh>
+                                    <MudTh>Connection</MudTh>
+                                    <MudTh>Last Run</MudTh>
+                                    <MudTh Style="text-align: center;">On Dashboard</MudTh>
+                                    <MudTh Style="text-align: right;">Actions</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd DataLabel="Name">
+                                        <span id="@($"report-row-{context.Id}")" style="display: none;"></span>
+                                        <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
+                                            <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                                @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
+                                            </MudText>
+                                            @if (!string.IsNullOrWhiteSpace(context.Category))
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
+                                                         Style="height: 18px; font-size: 0.65rem;"
+                                                         Icon="@Icons.Material.Filled.Category">
+                                                    @context.Category
+                                                </MudChip>
+                                            }
+                                        </MudStack>
+                                    </MudTd>
+                                    <MudTd DataLabel="Owner">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.OwnerEmail</MudText>
+                                    </MudTd>
+                                    <MudTd DataLabel="Connection">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
+                                    </MudTd>
+                                    <MudTd DataLabel="Last Run">
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                            @(context.LastRunAt?.ToString("MMM dd, yyyy h:mm tt") ?? "Never")
+                                        </MudText>
+                                    </MudTd>
+                                    <MudTd DataLabel="On Dashboard" Style="text-align: center;">
+                                        @if (_dashboardTabsByReport.TryGetValue(context.Id, out var onTabs))
+                                        {
+                                            var onTabsLabel = string.Join(", ", onTabs);
+                                            <MudTooltip Text="@($"Pinned on Master Dashboard tab: {onTabsLabel}")">
+                                                <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Justify="Justify.Center">
+                                                    <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Success" />
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@onTabsLabel</MudText>
+                                                </MudStack>
+                                            </MudTooltip>
+                                        }
+                                    </MudTd>
+                                    <MudTd DataLabel="Actions" Style="text-align: right;">
+                                        <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                            <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                                           Color="Color.Primary" title="Run / preview"
+                                                           OnClick="() => ViewReport(context.Id)" />
+                                            @* Admin override delete — same flow as the
+                                               My Reports admin-delete path. ConfirmDelete
+                                               surfaces the owner's email so the click
+                                               is informed. *@
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                           Color="Color.Error" title="Delete (admin override)"
+                                                           OnClick="() => ConfirmDelete(context)" />
+                                        </MudStack>
+                                    </MudTd>
+                                </RowTemplate>
+                                <PagerContent>
+                                    <MudTablePager PageSizeOptions="new[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }" />
+                                </PagerContent>
+                            </MudTable>
+                        }
+                    </MudPaper>
+                }
+                </div>
+            }
+            else if (!_isLoading)
+            {
+                <EmptyState Icon="@Icons.Material.Filled.GroupWork"
+                            Heading="No other users' reports"
+                            Body="When other users in the companies you administer save reports, they'll appear here. Pin them to dashboards or clean up after departed users from this tab." />
+            }
+        </MudTabPanel>
+        }
     </MudTabs>
 </MudContainer>
 
@@ -624,6 +775,12 @@
     private bool _isAdmin;
 
     private List<SavedReport> _myReports = new();
+    // Reports owned by OTHER users. Populated only for global admins via
+    // GetAllReportsAsync filtered to !owned-by-me. Surfaced on a dedicated
+    // tab so My Reports stays a pure self-scoped view; admins use this
+    // tab to add other users' reports to dashboards or to clean up after
+    // departed users.
+    private List<SavedReport> _otherUserReports = new();
     private List<SavedReport> _sharedWithMe = new();
     private HashSet<Guid> _scheduledReportIds = new();
     private Dictionary<Guid, List<string>> _dashboardTabsByReport = new();
@@ -644,15 +801,36 @@
     // Distinct categories drawn from the reports actually loaded for this
     // user. Recomputed inside ReloadAsync after the report lists are set.
     private List<string> _availableCategories = new();
+    // Library Sections for the currently-selected company. Drives the
+    // "Create Section" toolbar above My Reports and the section grouping
+    // applied to the table itself. Empty when no company is selected
+    // (no sections to load) or the migration hasn't run.
+    private List<LibrarySection> _librarySections = new();
+    // Lookup keyed by section id for fast name resolution in the
+    // GroupBy selector — recomputed every time _librarySections changes.
+    private Dictionary<Guid, string> _librarySectionNameById =
+        new(EqualityComparer<Guid>.Default);
     private int _libraryPageSize = 15;
 
     // Stable indices for the three tabs that have their own MudTable
     // pager. Must match the tab order in the Razor markup; if a tab is
     // ever added between these, bump the constants AND update the tab
     // panel order so the saved page state still maps correctly.
-    private const int MyReportsTab     = 0;
-    private const int SharedReportsTab = 1;
-    private const int RecentReportsTab = 2;
+    private const int MyReportsTab        = 0;
+    private const int SharedReportsTab    = 1;
+    private const int RecentReportsTab    = 2;
+    // Admin-only tab — shows reports owned by other users. Hidden for
+    // non-admins (MudTabs simply doesn't render the panel). The index is
+    // stable: when the panel is hidden, MudTabs still uses sequential
+    // ActivePanelIndex values for visible panels, so non-admins never
+    // land on this index.
+    private const int OtherUsersReportsTab = 3;
+
+    // Filtered + sorted other-users' reports for the admin tab. Mirrors
+    // the FilteredMyReports pipeline (search → category → company →
+    // ordered by display label) so behavior is consistent.
+    private IEnumerable<SavedReport> FilteredOtherUserReports =>
+        ApplySearch(ApplyCategory(ApplyCompany(_otherUserReports)).OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase));
 
     // Restore-on-render helpers for the per-tab CurrentPage binding.
     // Stored in NavState so navigating to Builder/Viewer and back
@@ -662,12 +840,6 @@
 
     private void SetCurrentPageFor(int tabIdx, int p) =>
         NavState.PageByTab[tabIdx] = p;
-
-    // Admin-only toggle. When true, the My Reports tab loads every user's
-    // reports via GetAllReportsAsync and renders an Owner column. Mirrored
-    // into LibraryNavState so the toggle state survives navigation to the
-    // builder/viewer and back within the same session.
-    private bool _isAdminView;
 
     // True when the user has no Editor / Admin grant on any company —
     // i.e. their role is Viewer (or absent) everywhere they have access.
@@ -743,10 +915,15 @@
     private IEnumerable<SavedReport> ApplyCompany(IEnumerable<SavedReport> reports)
     {
         if (_selectedCompanyId is not Guid companyId) return reports;
-        return reports.Where(r =>
-            r.ConnectionId is Guid cid
-            && _connectionCompanyById.TryGetValue(cid, out var cc)
-            && cc == companyId);
+        // Match against the report's own CompanyId (set at save time via
+        // SELECT company_id FROM RPT_company_connections), NOT a runtime
+        // dict lookup of the connection. Indirect lookup dropped reports
+        // whose connection was deactivated, deleted, or simply absent
+        // from the loaded connection list (e.g., admin-view shows reports
+        // from companies whose connections this admin can't enumerate).
+        // The owner couldn't see their own report after a connection
+        // change for that exact reason.
+        return reports.Where(r => r.CompanyId == companyId);
     }
 
     private async Task OnCompanyChanged(Guid? newId)
@@ -758,6 +935,17 @@
         // changes; those go through @bind-Value so we hook them via
         // OnParametersSet below.
         ResetPagingForAllTabs();
+        // Library Sections are per-company — wipe the previous
+        // company's catalog so stale section headers don't bleed into
+        // the My Reports grouping for the new company.
+        await ReloadLibrarySectionsAsync();
+        // New company's data → re-seed section expand defaults so the
+        // catch-all bucket is visible by default after the swap. The
+        // user's previous-company expand picks for the OLD company's
+        // sections stay in NavState, harmless (those section names
+        // won't appear in the new company's BuildOrderedSections list).
+        NavState.SectionExpansionInitialized = false;
+        EnsureSectionDefaults();
         await PersistSelectedCompanyAsync();
     }
 
@@ -775,6 +963,26 @@
             _searchTextLast = _searchText;
             _selectedCategoryLast = _selectedCategory;
             ResetPagingForAllTabs();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Scroll the last-clicked report row back into view after a return
+        // from Builder / Detail Viewer. Consume-once: clearing the field
+        // prevents a manual page refresh from re-scrolling indefinitely.
+        // Best-effort — the row may be absent (filtered out, on a
+        // different page, deleted), in which case the JS no-ops silently.
+        if (NavState.LastSelectedReportId is Guid id)
+        {
+            NavState.LastSelectedReportId = null;
+            try
+            {
+                await JS.InvokeVoidAsync("eval",
+                    "(function(){var el=document.getElementById('report-row-" + id + "');"
+                    + "if(el){var row=el.closest('tr');if(row){row.scrollIntoView({block:'center',behavior:'smooth'});}}})()");
+            }
+            catch { /* JS prerender / circuit-not-ready — nicety, not correctness. */ }
         }
     }
 
@@ -816,11 +1024,6 @@
             _isDevMode = Env.IsDevelopment()
                 && string.IsNullOrEmpty(Configuration["AzureAd:ClientId"]);
             _isAdmin = AdminService.IsAdmin(_userEmail);
-            // Admin view only makes sense for admins. If the session flag
-            // drifted (role change mid-session, impersonation, etc.) clamp
-            // it back to false so a non-admin can't get stuck seeing all
-            // reports after a role removal.
-            _isAdminView = _isAdmin && NavState.IsAdminView;
 
             // Priority: explicit ?tab= in URL wins (e.g. returning from builder with tab context),
             // otherwise restore the last tab the user was on this session.
@@ -843,12 +1046,16 @@
             _libraryPageSize = prefs.ReportLibraryPageSize > 0 ? prefs.ReportLibraryPageSize : 15;
             _selectedCompanyId = prefs.ReportLibraryCompanyId;
 
-            // Admin view broadens the My Reports tab to every user's report.
-            // Shared / Recent stay user-scoped — admin view is about cross-
-            // user visibility, not collapsing the library's mental model.
-            var myReportsTask = _isAdminView
+            // My Reports is strictly owner-scoped. Admins access other
+            // users' reports via the dedicated "Other Users' Reports"
+            // tab below — separate query, separate UX, no merging.
+            var myReportsTask = ReportService.GetReportsAsync(_userId);
+            // Cross-user reports for the admin tab. Filter to !owned-by-me
+            // client-side so My Reports and Other Users' Reports never
+            // overlap. Skipped for non-admins.
+            var otherUsersTask = _isAdmin
                 ? ReportService.GetAllReportsAsync()
-                : ReportService.GetReportsAsync(_userId);
+                : Task.FromResult(new List<SavedReport>());
             var sharedTask = SharingService.GetSharedWithMeAsync(_userId);
             var schedulesTask = ScheduleService.GetSchedulesForUserAsync(_userId);
             var companiesTask = CompanyRegistry.GetActiveAsync();
@@ -861,7 +1068,7 @@
                 ? MasterService.GetPlacedReportTabsAsync(pinCid)
                 : Task.FromResult(new Dictionary<Guid, List<string>>());
 
-            await Task.WhenAll(myReportsTask, sharedTask, schedulesTask, companiesTask, placedTask);
+            await Task.WhenAll(myReportsTask, otherUsersTask, sharedTask, schedulesTask, companiesTask, placedTask);
 
             _companies = await companiesTask;
 
@@ -927,6 +1134,11 @@
             }
 
             _myReports = await myReportsTask;
+            // Strip my own reports out so the Other Users' tab stays a
+            // pure cross-user view — no overlap with My Reports.
+            _otherUserReports = (await otherUsersTask)
+                .Where(r => !string.Equals(r.OwnerId, _userId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
             _sharedWithMe = await sharedTask;
             _dashboardTabsByReport = await placedTask;
 
@@ -945,6 +1157,15 @@
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+
+            // Library Sections — load for whichever company is in scope.
+            // No company picked = no sections (the "All companies" view
+            // doesn't have a single sections catalog to render against).
+            await ReloadLibrarySectionsAsync();
+            // Seed default expand state on first visit this session
+            // so (Uncategorized) is open and admin-defined sections
+            // start collapsed. After any user toggle the flag pins.
+            EnsureSectionDefaults();
             // If the previously-picked category vanished (e.g., its only
             // backing report just got deleted), drop the pin so the user
             // doesn't end up looking at an empty filtered list with no
@@ -1030,8 +1251,30 @@
     // Carry the current tab index forward so the builder/viewer can bounce the user
     // back to the same tab when they're done.
 
-    private void ViewReport(Guid id) => Navigation.NavigateTo($"/viewer/{id}?tab={_activeTabIndex}");
-    private void EditReport(Guid id) => Navigation.NavigateTo($"/builder/{id}?tab={_activeTabIndex}");
+    // Run = open the Detail Viewer (grouped/sorted per the report's saved
+    // Detail-view config). Matches what Master Dashboard tile drill-downs
+    // show, so a report renders identically whether the user clicked Run
+    // from the Library or drilled in from a tile. Edit still goes to the
+    // Builder.
+    //
+    // No `tab` query param: the Detail Viewer reads `tab` as a dashboard
+    // tab NAME to prepend to its heading (so a tile drill-down reads as
+    // "Pipeline - Monthly Funding"). Passing the Library's int tab index
+    // would render the heading as "0 - Monthly Funding". The Library
+    // Run-flow has no dashboard-tab context to carry, so omit it.
+    //
+    // LastSelectedReportId is stashed on NavState so the return trip
+    // scrolls the matching row back into view.
+    private void ViewReport(Guid id)
+    {
+        NavState.LastSelectedReportId = id;
+        Navigation.NavigateTo($"/viewer/{id}/detail");
+    }
+    private void EditReport(Guid id)
+    {
+        NavState.LastSelectedReportId = id;
+        Navigation.NavigateTo($"/builder/{id}?tab={_activeTabIndex}");
+    }
 
     // Back button — prefer the browser's history stack so we land where the
     // user came from. Falls back to the company picker when there's no prior
@@ -1049,32 +1292,6 @@
     {
         _activeTabIndex = index;
         NavState.LastActiveTab = index;
-    }
-
-    // Swap in/out of admin scope. Reloads the primary reports list so the
-    // table reflects the new scope immediately — cheap query, single round
-    // trip, and the user just clicked so some latency is expected.
-    private async Task OnAdminViewToggled(bool on)
-    {
-        if (!_isAdmin) return;
-        _isAdminView = on;
-        NavState.IsAdminView = on;
-        _isLoading = true;
-        _dashboardEnabledCache.Clear();
-        try
-        {
-            _myReports = on
-                ? await ReportService.GetAllReportsAsync()
-                : await ReportService.GetReportsAsync(_userId);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to reload reports: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _isLoading = false;
-        }
     }
 
     // Persists the chosen page size to the user's preferences so the Report
@@ -1098,6 +1315,124 @@
         }
     }
 
+    // ── Library Sections ──
+
+    private async Task ReloadLibrarySectionsAsync()
+    {
+        if (_selectedCompanyId is Guid cid)
+        {
+            _librarySections = await LibrarySectionSvc.GetSectionsAsync(cid);
+        }
+        else
+        {
+            // "All companies" — no single section catalog to render. The
+            // table falls back to ungrouped rows.
+            _librarySections = new();
+        }
+        _librarySectionNameById = _librarySections
+            .ToDictionary(s => s.Id, s => s.Name);
+    }
+
+    // Builds the ordered (section, reports) list the My Reports tab
+    // renders. (Uncategorized) goes first when it has any orphan reports
+    // so admins always see the catch-all bucket near the top. Admin-
+    // defined sections follow in their saved sort_order. Sections with
+    // zero reports are dropped — the UI stays compact (creating a
+    // section without assigning anything to it doesn't render an empty
+    // header). If you want empty sections to show, add an
+    // includeEmpty flag and walk _librarySections too.
+    private List<(string Name, List<SavedReport> Reports)> BuildOrderedSections(IEnumerable<SavedReport> reports)
+    {
+        var byName = reports
+            .GroupBy(r => ResolveLibrarySectionName(r), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var ordered = new List<(string, List<SavedReport>)>();
+        if (byName.TryGetValue(UncategorizedSectionLabel, out var uncats))
+            ordered.Add((UncategorizedSectionLabel, uncats));
+
+        foreach (var s in _librarySections.OrderBy(x => x.SortOrder).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            if (byName.TryGetValue(s.Name, out var rs))
+                ordered.Add((s.Name, rs));
+        }
+        return ordered;
+    }
+
+    // First-time-into-the-library default: only the catch-all is open.
+    // Once the user toggles ANY section, SectionExpansionInitialized is
+    // set so this default never re-applies and overrides their picks.
+    private void EnsureSectionDefaults()
+    {
+        if (NavState.SectionExpansionInitialized) return;
+        NavState.ExpandedSections[UncategorizedSectionLabel] = true;
+        NavState.SectionExpansionInitialized = true;
+    }
+
+    private bool IsSectionExpanded(string name) =>
+        NavState.ExpandedSections.TryGetValue(name, out var v) && v;
+
+    private void ToggleSection(string name)
+    {
+        // First user toggle pins the user's choice; future renders skip
+        // EnsureSectionDefaults' opinionated initial state.
+        NavState.SectionExpansionInitialized = true;
+        NavState.ExpandedSections[name] = !IsSectionExpanded(name);
+    }
+
+    // GroupBy selector — resolves a report's LibrarySectionId to the
+    // section's name for the MudTable group header. Reports without a
+    // section (or whose section is no longer in the catalog) collapse
+    // into the catch-all bucket.
+    private const string UncategorizedSectionLabel = "(Uncategorized)";
+    private string ResolveLibrarySectionName(SavedReport r) =>
+        r.LibrarySectionId is Guid id
+        && _librarySectionNameById.TryGetValue(id, out var name)
+            ? name
+            : UncategorizedSectionLabel;
+
+    private async Task OpenCreateSectionDialog()
+    {
+        if (_selectedCompanyId is not Guid cid)
+        {
+            Snackbar.Add("Pick a company first — sections are scoped per company.", Severity.Info);
+            return;
+        }
+
+        var parameters = new DialogParameters<RenameDialog>
+        {
+            { x => x.InitialValue, string.Empty },
+            { x => x.Title, "Create Library Section" },
+            { x => x.Label, "Section name" }
+        };
+        var dlg = await DialogService.ShowAsync<RenameDialog>("Create Library Section", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+        var result = await dlg.Result;
+        if (result is null || result.Canceled || result.Data is not string name) return;
+        name = name.Trim();
+        if (string.IsNullOrEmpty(name)) return;
+
+        try
+        {
+            // Append to the end of the existing list so newly-created
+            // sections show up at the bottom, predictable position.
+            var nextSort = _librarySections.Count == 0
+                ? 0
+                : _librarySections.Max(s => s.SortOrder) + 1;
+            await LibrarySectionSvc.CreateSectionAsync(cid, name, nextSort);
+            await ReloadLibrarySectionsAsync();
+            Snackbar.Add($"Section \"{name}\" created.", Severity.Success);
+        }
+        catch (InvalidOperationException ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to create section: {ex.Message}", Severity.Error);
+        }
+    }
+
     // ── Clone ──
 
     private async Task CloneReport(SavedReport source)
@@ -1108,12 +1443,16 @@
             {
                 Id = Guid.NewGuid(),
                 Name = $"{source.Name} (Copy)",
+                InternalName = source.InternalName,
+                Category = source.Category,
+                LibrarySectionId = source.LibrarySectionId,
                 OwnerId = _userId,
                 OwnerEmail = _userEmail,
                 FieldIds = source.FieldIds,
                 Filters = source.Filters,
                 Aggregations = source.Aggregations,
                 ColumnState = source.ColumnState,
+                GridTemplateId = source.GridTemplateId,
                 ConnectionId = source.ConnectionId,
                 PrimaryTable = source.PrimaryTable,
                 LastRunAt = null,
@@ -1148,16 +1487,40 @@
 
     private async Task ConfirmDelete(SavedReport report)
     {
+        var ownedByMe = string.Equals(report.OwnerId, _userId, StringComparison.OrdinalIgnoreCase);
+        // Admin path needs an extra-clear prompt — deleting someone else's
+        // work is a higher-stakes click than deleting your own. Show the
+        // owner's email so the admin double-checks they're cleaning up the
+        // right user's reports (the typical "user departed" flow).
+        var prompt = ownedByMe
+            ? $"Are you sure you want to delete \"{report.Name}\"? This action cannot be undone."
+            : $"Delete \"{report.Name}\" owned by {report.OwnerEmail}? This is an admin override and cannot be undone.";
         var result = await DialogService.ShowMessageBoxAsync(
             "Delete Report",
-            $"Are you sure you want to delete \"{report.Name}\"? This action cannot be undone.",
+            prompt,
             yesText: "Delete", cancelText: "Cancel");
 
         if (result == true)
         {
             try
             {
-                await ReportService.DeleteReportAsync(report.Id, _userId);
+                if (ownedByMe)
+                {
+                    await ReportService.DeleteReportAsync(report.Id, _userId);
+                }
+                else if (_isAdmin)
+                {
+                    // Cleanup path for departed users — bypasses the
+                    // owner_id filter. Gated to global admins only;
+                    // limited-access roles never see the Delete button
+                    // for other users' reports.
+                    await ReportService.DeleteReportAsAdminAsync(report.Id);
+                }
+                else
+                {
+                    Snackbar.Add("You can only delete reports you own.", Severity.Warning);
+                    return;
+                }
                 _myReports.RemoveAll(r => r.Id == report.Id);
             }
             catch (Exception ex)

@@ -36,9 +36,15 @@ public sealed class CompanyAdminService : ICompanyAdminService
                 // Include logo + logo_content_type so the admin tab can render a
                 // preview thumbnail without a second round-trip. The logo bytes
                 // are typically < 500 KB so pulling them up-front is cheap.
-                await using var cmd = new SqlCommand(
-                    "SELECT id, code, name, data_source_type, connection_ref, is_active, created_at, updated_at, logo, logo_content_type, display_order, website_url FROM EMPOWER.RPT_companies ORDER BY is_active DESC, display_order, name",
-                    conn);
+                // is_hidden read defensively via COL_LENGTH for envs that
+                // haven't applied the 2026-05-05_18-00 migration yet.
+                await using var cmd = new SqlCommand(@"
+                    SELECT id, code, name, data_source_type, connection_ref, is_active,
+                           created_at, updated_at, logo, logo_content_type, display_order, website_url,
+                           CASE WHEN COL_LENGTH('EMPOWER.RPT_companies','is_hidden') IS NULL
+                                THEN CAST(0 AS BIT) ELSE is_hidden END AS is_hidden
+                      FROM EMPOWER.RPT_companies
+                     ORDER BY is_active DESC, display_order, name;", conn);
                 await using var reader = await cmd.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct))
                 {
@@ -55,7 +61,8 @@ public sealed class CompanyAdminService : ICompanyAdminService
                         Logo = reader.IsDBNull(8) ? null : (byte[])reader.GetValue(8),
                         LogoContentType = reader.IsDBNull(9) ? null : reader.GetString(9),
                         DisplayOrder = reader.GetInt32(10),
-                        WebsiteUrl = reader.IsDBNull(11) ? null : reader.GetString(11)
+                        WebsiteUrl = reader.IsDBNull(11) ? null : reader.GetString(11),
+                        IsHidden = reader.GetBoolean(12)
                     });
                 }
                 return rows;
@@ -122,17 +129,30 @@ public sealed class CompanyAdminService : ICompanyAdminService
     }
 
     public async Task UpdateAsync(Guid id, string code, string name, string dataSourceType, string connectionRef,
-                                   string? websiteUrl, bool isActive, CancellationToken ct = default)
+                                   string? websiteUrl, bool isActive, bool isHidden, CancellationToken ct = default)
     {
         Validate(code, name, dataSourceType, connectionRef);
 
+        // Conditional UPDATE form: assigns is_hidden only when the column
+        // exists, so this method works on envs that haven't yet applied
+        // the 2026-05-05_18-00 migration. Once every env has migrated,
+        // collapse to a plain UPDATE.
+        var hasHiddenColumn = await ColumnExistsAsync("EMPOWER.RPT_companies", "is_hidden", ct);
+        var sql = hasHiddenColumn
+            ? @"UPDATE EMPOWER.RPT_companies
+                   SET code = @code, name = @name, data_source_type = @type, connection_ref = @ref,
+                       website_url = @url, is_active = @active, is_hidden = @hidden,
+                       updated_at = SYSUTCDATETIME()
+                 WHERE id = @id;"
+            : @"UPDATE EMPOWER.RPT_companies
+                   SET code = @code, name = @name, data_source_type = @type, connection_ref = @ref,
+                       website_url = @url, is_active = @active,
+                       updated_at = SYSUTCDATETIME()
+                 WHERE id = @id;";
+
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand(@"
-            UPDATE EMPOWER.RPT_companies
-            SET code = @code, name = @name, data_source_type = @type, connection_ref = @ref,
-                website_url = @url, is_active = @active, updated_at = SYSUTCDATETIME()
-            WHERE id = @id;", conn);
+        await using var cmd = new SqlCommand(sql, conn);
         cmd.Parameters.Add(new SqlParameter("@id", id));
         cmd.Parameters.Add(new SqlParameter("@code", code));
         cmd.Parameters.Add(new SqlParameter("@name", name));
@@ -140,11 +160,27 @@ public sealed class CompanyAdminService : ICompanyAdminService
         cmd.Parameters.Add(new SqlParameter("@ref", connectionRef));
         cmd.Parameters.Add(new SqlParameter("@url", (object?)NormalizeUrl(websiteUrl) ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@active", isActive));
+        if (hasHiddenColumn)
+            cmd.Parameters.Add(new SqlParameter("@hidden", isHidden));
         await cmd.ExecuteNonQueryAsync(ct);
 
         _registry.Invalidate();
         _cache.Invalidate("CompanyAdminService:");
-        _logger.LogInformation("Company updated: {Id} ({Code}), active={IsActive}", id, code, isActive);
+        _logger.LogInformation(
+            "Company updated: {Id} ({Code}), active={IsActive}, hidden={IsHidden}",
+            id, code, isActive, hasHiddenColumn ? isHidden.ToString() : "n/a (pre-migration)");
+    }
+
+    private async Task<bool> ColumnExistsAsync(string fullTableName, string column, CancellationToken ct)
+    {
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(
+            "SELECT CASE WHEN COL_LENGTH(@t, @c) IS NULL THEN 0 ELSE 1 END;", conn);
+        cmd.Parameters.Add(new SqlParameter("@t", fullTableName));
+        cmd.Parameters.Add(new SqlParameter("@c", column));
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is int i && i == 1;
     }
 
     // Empty/whitespace → null; bare "example.com" → "https://example.com" so
@@ -176,6 +212,31 @@ public sealed class CompanyAdminService : ICompanyAdminService
         _registry.Invalidate();
         _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company active-state changed: {Id} → {IsActive}", id, isActive);
+    }
+
+    public async Task SetHiddenAsync(Guid id, bool isHidden, CancellationToken ct = default)
+    {
+        // No-op gracefully on pre-migration envs — the toggle in the
+        // admin UI will appear unchanged but the row stays not-hidden
+        // (column doesn't exist yet). Apply the migration to enable.
+        if (!await ColumnExistsAsync("EMPOWER.RPT_companies", "is_hidden", ct))
+        {
+            _logger.LogWarning("SetHiddenAsync called before is_hidden column exists — skipping update for {Id}", id);
+            return;
+        }
+
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(
+            "UPDATE EMPOWER.RPT_companies SET is_hidden = @hidden, updated_at = SYSUTCDATETIME() WHERE id = @id",
+            conn);
+        cmd.Parameters.Add(new SqlParameter("@id", id));
+        cmd.Parameters.Add(new SqlParameter("@hidden", isHidden));
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        _registry.Invalidate();
+        _cache.Invalidate("CompanyAdminService:");
+        _logger.LogInformation("Company hidden-state changed: {Id} → {IsHidden}", id, isHidden);
     }
 
     public async Task UploadLogoAsync(Guid id, byte[] bytes, string contentType, CancellationToken ct = default)

@@ -44,6 +44,23 @@
                     <MudSelectItem T="string" Value="@("MIN")">Min</MudSelectItem>
                 </MudSelect>
 
+                @* Primary measure picker. Defaults to the first
+                   currency/money column on first load (see
+                   OnParametersSet auto-pick), but the admin can swap it
+                   to any numeric field here without going through the
+                   "+ Measure" extras flow. Disabled under COUNT — that
+                   aggregation just counts rows and doesn't read the
+                   measure value. *@
+                <MudSelect T="string" @bind-Value="_measureField" @bind-Value:after="OnMeasureFieldChanged"
+                           Label="Measure" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Dense Style="max-width: 200px;"
+                           Disabled="@(string.Equals(_aggregation, "COUNT", StringComparison.OrdinalIgnoreCase))">
+                    @foreach (var col in MeasureFieldOptions)
+                    {
+                        <MudSelectItem T="string" Value="@col.FieldId">@col.Label</MudSelectItem>
+                    }
+                </MudSelect>
+
                 <MudMenu Icon="@Icons.Material.Filled.AddCircleOutline" Variant="Variant.Text"
                          Color="Color.Primary" Dense Size="Size.Small" Label="+ Measure"
                          AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
@@ -84,6 +101,23 @@
                     <MudSelectItem T="string" Value="@("Pie")">Pie</MudSelectItem>
                     <MudSelectItem T="string" Value="@("Line")">Line</MudSelectItem>
                 </MudSelect>
+                <HelpHint Text="The chart's X-axis is the Group By field; the Y-axis is the Measure (or Count when there's no measure picked). Pick a Group By and a Measure / Aggregation to populate the chart." />
+                @* Live axis hint — shown only when chart is enabled, so the
+                   user sees exactly which fields are flowing into the chart
+                   without hovering the help icon. Empty Group By or Measure
+                   reads as "(pick one)" so the gap is obvious. *@
+                @if (!string.IsNullOrEmpty(_chartTypeStr))
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary"
+                             Style="margin-left: 4px; font-style: italic;">
+                        X: @(string.IsNullOrEmpty(_groupByField) ? "(pick a Group By)" : GetGroupByLabel())
+                        · Y: @(string.Equals(_aggregation, "COUNT", StringComparison.OrdinalIgnoreCase)
+                                ? "Count"
+                                : string.IsNullOrEmpty(_measureField)
+                                    ? "(pick a Measure)"
+                                    : $"{_aggregation} {GetMeasureLabel()}")
+                    </MudText>
+                }
 
                 <MudSwitch T="bool" @bind-Value="_showCountColumn" @bind-Value:after="OnCountToggled"
                            Label="Count" Color="Color.Primary" Size="Size.Small"
@@ -232,11 +266,16 @@
                 <MudGrid Spacing="@(Compact ? 0 : 3)" Style="@(Compact ? "flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column;" : "")">
                     @if (ShowChart && Compact)
                     {
-                        @* Compact mode: chart takes full space, table is hidden *@
-                        <MudItem xs="12" Style="padding: 4px !important; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                        @* Compact mode: chart takes full space, table is hidden.
+                           tile-chart-compact CSS (in the <style> block below)
+                           reflows the inner MudChart so the SVG shrinks to
+                           fit and the legend stays visible — passing a fixed
+                           Height to MudChart pegs the SVG and pushes the
+                           legend out the bottom of the tile. *@
+                        <MudItem xs="12" Class="tile-chart-compact" Style="padding: 4px !important;">
                             <MudChart T="double" ChartType="_chartType" ChartSeries="_chartSeries"
                                       ChartLabels="_chartLabels"
-                                      Width="100%" Height="@(GridHeight ?? "350px")" />
+                                      Width="100%" Height="100%" />
                         </MudItem>
                     }
                     else if (ShowChart)
@@ -519,16 +558,20 @@
                                                                Surfaces the full group label when the cell ellipsises
                                                                at narrow tile widths. *@
                                                             var gkText = FormatGroupKey(row.GroupKey);
+                                                            @* Group key cell — first column of each summary row
+                                                               when a group-by is active. Inherits font-weight from
+                                                               the parent .dash-summary-table tbody td (normal /
+                                                               400) so it visually matches the measure / count /
+                                                               percent cells in the same row. Earlier code wrapped
+                                                               the text in a `<span style="font-weight: 500">` for
+                                                               a slight emphasis vs the numeric cells, but the 500
+                                                               weight rendered as visibly bolder than the rest of
+                                                               the row, surprising admins who'd toggled nothing
+                                                               theme-side. If we ever want a non-default weight
+                                                               here, give it its own theme token rather than
+                                                               hardcoding. *@
                                                             <td title="@gkText" style="@AlignToCss(GetAlign("groupBy", IsNumericDataType(GetGroupByDataType()) ? "right" : "left"))">
-                                                                @* Group key cell — first column of each summary
-                                                                   row when a group-by is active. Inherits the Grid
-                                                                   header's text formatting (weight / style / deco /
-                                                                   font / size) so admins toggling "Grid header text"
-                                                                   bold in Admin → Theme see consistent bolding
-                                                                   across BOTH the column header row AND the group-
-                                                                   key cells. Previously hardcoded `font-weight: 500`,
-                                                                   which silently ignored the theme. *@
-                                                                <span style="font-weight: var(--dashboard-grid-header-weight, 500); font-style: var(--dashboard-grid-header-style, normal); text-decoration: var(--dashboard-grid-header-deco, none); font-family: var(--dashboard-grid-header-font, inherit);">@gkText</span>
+                                                                @gkText
                                                             </td>
                                                         }
                                                         else if (ck == "measure")
@@ -674,6 +717,7 @@
                                 InitialHiddenColumns="InitialHiddenColumns"
                                 DefaultSortField="@TableSortField"
                                 DefaultSortDirection="@TableSortDirection"
+                                ColumnLabelOverrides="ColumnLabelOverrides"
                                 ReadOnly="true" />
                 </MudPaper>
             }
@@ -702,6 +746,38 @@
 }
 
 <style>
+    /* Compact-mode chart on Master Dashboard tiles. Without these rules,
+       MudChart's SVG sticks to the explicit Height value and pushes the
+       legend below the tile's clipping boundary — losing legend rows on
+       Pie charts in particular. Flex layout lets the SVG shrink while
+       the legend keeps its natural height (with internal scroll as a
+       fallback when there are many series). */
+    .tile-chart-compact {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .tile-chart-compact .mud-chart {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        height: auto !important;
+    }
+    .tile-chart-compact .mud-chart > svg {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto !important;
+        max-height: 100%;
+    }
+    .tile-chart-compact .mud-chart-legend {
+        flex: 0 0 auto;
+        max-height: 50%;
+        overflow-y: auto;
+    }
+
     .dash-summary-grid {
         margin-bottom: 0 !important;
         flex: 1;
@@ -897,6 +973,12 @@
     // client-side per-row from numeric inputs and don't make sense as
     // dimensions.
     [Parameter] public List<TableCalcColumnDef>? TableCalcColumns { get; set; }
+    // Forwarded to the drill-down ReportGrid (when an admin expands a
+    // group row) so the inline detail table also picks up grid-template
+    // column-rename overrides. Doesn't drive dashboard summary header
+    // labels — those use the per-key CustomLabels system bound to
+    // groupBy / measure / count / pct / dim:* / extra:* keys.
+    [Parameter] public Dictionary<string, string>? ColumnLabelOverrides { get; set; }
 
     private string _groupByField = string.Empty;
     private string _measureField = string.Empty;
@@ -977,15 +1059,13 @@
     {
         get
         {
-            var hidden = InitialHiddenColumns is { Count: > 0 }
-                ? new HashSet<string>(InitialHiddenColumns, StringComparer.OrdinalIgnoreCase)
-                : null;
-
+            // Hidden-in-table-view fields are still valid dashboard group-by
+            // candidates — hiding affects the detail grid, not the
+            // dashboard's grouping surface. Don't filter by InitialHiddenColumns here.
             var fromData = (Data?.Columns ?? []).Where(c =>
-                (c.DataType.Equals("text", StringComparison.OrdinalIgnoreCase) ||
-                 c.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
-                 c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase))
-                && (hidden is null || !hidden.Contains(c.FieldId)));
+                c.DataType.Equals("text", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase));
 
             var existingIds = new HashSet<string>(fromData.Select(c => c.FieldId), StringComparer.OrdinalIgnoreCase);
 
@@ -1008,9 +1088,7 @@
                     .Concat(calcDims)
                     .OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase);
 
-            var extra = AllDimensionFields.Where(c =>
-                !existingIds.Contains(c.FieldId)
-                && (hidden is null || !hidden.Contains(c.FieldId)));
+            var extra = AllDimensionFields.Where(c => !existingIds.Contains(c.FieldId));
             return fromData
                 .Concat(calcDims)
                 .Concat(extra)
@@ -1025,6 +1103,34 @@
 
     private IEnumerable<ColumnMeta> AvailableExtraMeasures =>
         Data?.Columns ?? [];
+
+    // Numeric fields eligible to be the primary measure. Same datatype
+    // set the deleted ChartBuilder used for its Y-axis picker — anything
+    // SUM/AVG/MAX/MIN can meaningfully fold over. Always includes the
+    // currently-selected measure even if its DataType wouldn't normally
+    // qualify, so a saved non-numeric measure still appears in its own
+    // dropdown (otherwise the closed display would render blank).
+    private IEnumerable<ColumnMeta> MeasureFieldOptions
+    {
+        get
+        {
+            bool IsNumeric(ColumnMeta c) =>
+                c.DataType.Equals("currency", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("money", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("decimal", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("float", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("double", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("numeric", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("percent", StringComparison.OrdinalIgnoreCase) ||
+                c.DataType.Equals("percentage", StringComparison.OrdinalIgnoreCase);
+
+            return (Data?.Columns ?? Enumerable.Empty<ColumnMeta>())
+                .Where(c => IsNumeric(c) || string.Equals(c.FieldId, _measureField, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase);
+        }
+    }
 
     // Non-numeric columns that aren't already the primary group-by or an
     // existing extra dimension. Plus any AllDimensionFields not yet in Data
@@ -1042,16 +1148,13 @@
                 c.DataType.Equals("int", StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrEmpty(c.DataType);
 
-            var hidden = InitialHiddenColumns is { Count: > 0 }
-                ? new HashSet<string>(InitialHiddenColumns, StringComparer.OrdinalIgnoreCase)
-                : null;
-            bool NotHidden(ColumnMeta c) => hidden is null || !hidden.Contains(c.FieldId);
-
+            // Hidden-in-table-view fields are still valid dashboard
+            // dimension candidates — hiding affects the detail grid, not
+            // the dashboard's grouping surface.
             var fromData = (Data?.Columns ?? Enumerable.Empty<ColumnMeta>())
                 .Where(c => IsDimensional(c)
                          && c.FieldId != _groupByField
-                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase)
-                         && NotHidden(c));
+                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase));
             var existingIds = fromData.Select(c => c.FieldId).ToHashSet(StringComparer.OrdinalIgnoreCase);
             // SQL-mode calc columns are eligible extra dimensions too — their
             // values are on each row in the row dict so the same group-key
@@ -1069,8 +1172,7 @@
             var extra = (AllDimensionFields ?? Enumerable.Empty<ColumnMeta>())
                 .Where(c => !existingIds.Contains(c.FieldId)
                          && c.FieldId != _groupByField
-                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase)
-                         && NotHidden(c));
+                         && !_extraDimensions.Contains(c.FieldId, StringComparer.OrdinalIgnoreCase));
             return fromData
                 .Concat(calcDims)
                 .Concat(extra)
@@ -1290,42 +1392,13 @@
         TableCalcColumns is not null
         && TableCalcColumns.Any(c => string.Equals(c.Key, id, StringComparison.OrdinalIgnoreCase));
 
-    // True when the saved-sort entry references a hidden field id and
-    // should be filtered out of the Default Sort dropdown. Calc keys, the
-    // built-in ("count" / "pct" / "measure"), and dashboard-internal
-    // calculated columns are never hidden by the field-visibility list.
-    private bool IsSortKeyVisible(string sortKey)
-    {
-        if (InitialHiddenColumns is null || InitialHiddenColumns.Count == 0) return true;
-        var hidden = new HashSet<string>(InitialHiddenColumns, StringComparer.OrdinalIgnoreCase);
-
-        if (sortKey == "groupBy")
-        {
-            // The primary group-by could be a real field id (filter out
-            // when hidden) or a calc Key (never filtered).
-            return string.IsNullOrEmpty(_groupByField)
-                || IsTableCalcKey(_groupByField)
-                || !hidden.Contains(_groupByField);
-        }
-        if (sortKey.StartsWith("dim:"))
-        {
-            var fid = sortKey[4..];
-            return IsTableCalcKey(fid) || !hidden.Contains(fid);
-        }
-        if (sortKey.StartsWith("extra:"))
-        {
-            // Strip the trailing aggregation suffix to recover the field id
-            // (extra Key shape is "<fieldId>_<AGG>"). Rare for an extra to
-            // share a hidden id, but cover it for symmetry.
-            var key = sortKey[6..];
-            var lastUnderscore = key.LastIndexOf('_');
-            if (lastUnderscore <= 0) return true;
-            var fid = key[..lastUnderscore];
-            return !hidden.Contains(fid);
-        }
-        // count / pct / measure / calc:<key> — not field-bound, always shown.
-        return true;
-    }
+    // Every entry in _dashColumnOrder is a column the dashboard summary
+    // actually renders (groupBy, count, pct, measure, dim:*, extra:*,
+    // calc:*). Hiding a field from the detail grid via InitialHiddenColumns
+    // doesn't remove it from the dashboard summary — group-by/dim/extra
+    // pickers explicitly allow hidden fields — so the Default Sort dropdown
+    // mirrors _dashColumnOrder unfiltered.
+    private bool IsSortKeyVisible(string sortKey) => true;
 
     // True when the sort key is bound to a calc — used to append (*) to its
     // label in the Default Sort dropdown so admins can spot calc entries.
@@ -1376,6 +1449,16 @@
         // Swapping aggregation can add or remove the "measure" column
         // (it's hidden for COUNT), so rebuild column order before redrawing.
         RebuildDashColumnOrder();
+        BuildSummary();
+    }
+
+    private void OnMeasureFieldChanged()
+    {
+        // Measure label feeds into the "measure" column header (and the
+        // chart's Y-axis caption), so RebuildDashColumnOrder isn't strictly
+        // required — the column key is still "measure". A redraw refreshes
+        // the header label and re-aggregates the summary against the new
+        // field.
         BuildSummary();
     }
 

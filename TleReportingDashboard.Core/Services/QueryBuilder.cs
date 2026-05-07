@@ -1386,15 +1386,85 @@ public static class QueryBuilder
             outerOrderBy = $"ORDER BY {dialect.QuoteIdentifier(defaultSortColumn)} {dir}";
         }
 
+        // Lift any leading CTE preamble out of innerSql before wrapping.
+        // Field SqlPreambles are emitted at the very top of the query as
+        // `WITH name AS (...)`; SQL Server doesn't allow CTEs inside a
+        // derived-table wrapper (`FROM (WITH ... SELECT ...) AS base` is
+        // a parse error: "Incorrect syntax near 'WITH'"). The CTE is
+        // statement-scoped, so move it above the outer SELECT.
+        var (ctePreamble, mainInner) = SplitCtePreamble(innerSql);
+
         var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(ctePreamble))
+        {
+            sb.AppendLine(ctePreamble);
+        }
         sb.AppendLine($"SELECT {string.Join(", ", outerColumns)}");
         sb.AppendLine("FROM (");
-        sb.AppendLine(innerSql);
+        sb.AppendLine(mainInner);
         sb.AppendLine(") AS base");
         if (groupByCols.Count > 0)
             sb.AppendLine($"GROUP BY {string.Join(", ", groupByCols)}");
         sb.AppendLine(outerOrderBy);
         return sb.ToString();
+    }
+
+    // Splits a query string into its leading `WITH ... AS (...)` preamble
+    // and the main SELECT body. Used by BuildDashboardPreviewSql so the
+    // CTE block can be lifted to the outer scope when wrapping the inner
+    // query in a derived table.
+    //
+    // Walks character-by-character tracking paren depth and string-literal
+    // state. The main SELECT begins at the first depth-0 occurrence of
+    // `SELECT` after the CTE header — which is `WITH name(args) AS (body),
+    // name2(...) AS (...)`-ish text, balanced parens included. Returns
+    // (preamble, mainSql) with the preamble trimmed; if the input doesn't
+    // start with a CTE, returns ("", input) unchanged.
+    private static (string Preamble, string Main) SplitCtePreamble(string sql)
+    {
+        var leading = 0;
+        while (leading < sql.Length && char.IsWhiteSpace(sql[leading])) leading++;
+        if (leading + 5 > sql.Length
+            || !sql.Substring(leading, 5).Equals("WITH ", StringComparison.OrdinalIgnoreCase))
+        {
+            return (string.Empty, sql);
+        }
+
+        var depth = 0;
+        var inString = false;
+        for (var i = leading; i < sql.Length; i++)
+        {
+            var c = sql[i];
+            if (inString)
+            {
+                if (c == '\'')
+                {
+                    // Doubled '' is an escaped quote, not a terminator.
+                    if (i + 1 < sql.Length && sql[i + 1] == '\'') { i++; continue; }
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '\'')        { inString = true;  continue; }
+            if (c == '(')         { depth++;          continue; }
+            if (c == ')')         { depth--;          continue; }
+
+            // At depth 0 outside a string, look for the `SELECT` keyword
+            // that begins the main query. Must be word-boundary-isolated
+            // so we don't false-match an identifier like `SELECTED`.
+            if (depth == 0 && i > leading
+                && (char.IsWhiteSpace(sql[i - 1]) || sql[i - 1] == ')')
+                && i + 6 <= sql.Length
+                && sql.Substring(i, 6).Equals("SELECT", StringComparison.OrdinalIgnoreCase)
+                && (i + 6 == sql.Length || !char.IsLetterOrDigit(sql[i + 6])))
+            {
+                return (sql[..i].TrimEnd(), sql[i..]);
+            }
+        }
+        // Fell off the end without finding a top-level SELECT — return the
+        // original unsplit so the caller emits something rather than
+        // silently dropping the whole query.
+        return (string.Empty, sql);
     }
 
     private static List<string>? ExtractStringList(object? value)

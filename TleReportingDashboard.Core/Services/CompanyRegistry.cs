@@ -63,8 +63,14 @@ public sealed class CompanyRegistry : ICompanyRegistry
             // the picker page can render every card without a second query.
             // Logo bytes are typically small (< 500 KB) so the cache cost is
             // bounded by the company count.
+            // is_hidden is read defensively via COL_LENGTH so envs that
+            // haven't applied the 2026-05-05_18-00 migration still load
+            // existing companies — they default to "not hidden" until
+            // the column exists.
             await using var cmd = new SqlCommand(@"
-                SELECT id, code, name, is_active, display_order, logo, logo_content_type, website_url
+                SELECT id, code, name, is_active, display_order, logo, logo_content_type, website_url,
+                       CASE WHEN COL_LENGTH('EMPOWER.RPT_companies','is_hidden') IS NULL
+                            THEN CAST(0 AS BIT) ELSE is_hidden END AS is_hidden
                   FROM EMPOWER.RPT_companies
                  WHERE is_active = 1
                  ORDER BY display_order, name;", conn);
@@ -80,7 +86,8 @@ public sealed class CompanyRegistry : ICompanyRegistry
                     DisplayOrder = reader.GetInt32(4),
                     Logo = reader.IsDBNull(5) ? null : (byte[])reader.GetValue(5),
                     LogoContentType = reader.IsDBNull(6) ? null : reader.GetString(6),
-                    WebsiteUrl = reader.IsDBNull(7) ? null : reader.GetString(7)
+                    WebsiteUrl = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    IsHidden = reader.GetBoolean(8)
                 });
             }
         }

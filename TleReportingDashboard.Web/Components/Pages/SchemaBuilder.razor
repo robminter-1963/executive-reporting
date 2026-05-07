@@ -361,7 +361,7 @@
                                         <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.Id</MudText>
                                     </CellTemplate>
                                 </TemplateColumn>
-                                <TemplateColumn T="FieldEntry" title="Domain" HeaderStyle="min-width: 100px;">
+                                <TemplateColumn T="FieldEntry" title="Field Section" HeaderStyle="min-width: 100px;">
                                     <CellTemplate>
                                         <MudText Typo="Typo.body2">@context.Item.Domain</MudText>
                                     </CellTemplate>
@@ -449,6 +449,103 @@
         @* ── Tab 2: Joins ── *@
         <MudTabPanel Text="Joins" Icon="@Icons.Material.Filled.Link">
             <MudStack Spacing="2" Class="pa-2">
+                @* Suggested Joins panel — provider-discovered relationships
+                   for the currently-selected entity. Today this is Dataverse-
+                   only (Metadata API M:1 / 1:M); other providers don't show
+                   the panel at all. The "Add" button promotes a suggestion
+                   to a real JoinEntry with logical names + JOIN ON pre-
+                   filled, so admins don't have to know the publisher-prefixed
+                   FK column name to author a join. The panel renders even
+                   when no table is selected (with a hint to pick one) so
+                   the feature is discoverable from this tab. *@
+                @if (IsDataverseConnectionSelected())
+                {
+                    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                                @if (_selectedTable is not null)
+                                {
+                                    <span>Suggested Joins for @_selectedTable.TableName</span>
+                                    @if (!_loadingSuggestedJoins)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Inline="true"> (@_suggestedJoins.Count)</MudText>
+                                    }
+                                }
+                                else
+                                {
+                                    <span>Suggested Joins</span>
+                                }
+                            </MudText>
+                            @if (_loadingSuggestedJoins)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                            }
+                        </MudStack>
+                        @if (_selectedTable is null)
+                        {
+                            <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+                                Pick an entity on the <strong>Tables</strong> tab to discover its
+                                Dataverse relationships (lookups in / lookups out). Each suggestion
+                                here can be added as a join with one click.
+                            </MudAlert>
+                        }
+                        else if (_loadingSuggestedJoins)
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">Discovering relationships…</MudText>
+                        }
+                        else if (_suggestedJoins.Any())
+                        {
+                            <MudDataGrid T="SuggestedJoin" Items="_suggestedJoins" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                                <Columns>
+                                    <TemplateColumn T="SuggestedJoin" title="Direction" HeaderStyle="width: 11%;" CellStyle="width: 11%;">
+                                        <CellTemplate>
+                                            <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small"
+                                                     Color="@(context.Item.Direction == "many-to-one" ? Color.Primary : Color.Secondary)">
+                                                @context.Item.Direction
+                                            </MudChip>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                    <TemplateColumn T="SuggestedJoin" title="From → To" HeaderStyle="width: 28%;" CellStyle="width: 28%;">
+                                        <CellTemplate>
+                                            <MudText Typo="Typo.body2">
+                                                @context.Item.SourceTable → @context.Item.TargetTable
+                                            </MudText>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                    <TemplateColumn T="SuggestedJoin" title="On" HeaderStyle="width: 36%;" CellStyle="width: 36%;">
+                                        <CellTemplate>
+                                            <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.75rem;">
+                                                @context.Item.SourceColumn = @context.Item.TargetColumn
+                                            </MudText>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                    <TemplateColumn T="SuggestedJoin" title="Relationship" HeaderStyle="width: 18%;" CellStyle="width: 18%;">
+                                        <CellTemplate>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.RelationshipName</MudText>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                    <TemplateColumn T="SuggestedJoin" title="" HeaderStyle="width: 90px; text-align: right;" CellStyle="width: 90px; text-align: right;">
+                                        <CellTemplate>
+                                            @{ var sjRow = context.Item; }
+                                            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary"
+                                                       StartIcon="@Icons.Material.Filled.Add"
+                                                       OnClick="() => AddSuggestedJoin(sjRow)">
+                                                Add
+                                            </MudButton>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                </Columns>
+                            </MudDataGrid>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                No relationships discovered for @_selectedTable.TableName.
+                            </MudText>
+                        }
+                    </MudPaper>
+                }
+
                 <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
                     <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
                         <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
@@ -671,10 +768,10 @@
                                 </TemplateColumn>
                                 @* GroupName surfaces in the Report Builder as the
                                    bucket header these presets cluster under —
-                                   typically a Domain like "Loan" / "Borrower".
+                                   typically a Field Section like "Loan" / "Borrower".
                                    Em-dash for blank so admins can spot uncategorized
                                    filters at a glance. *@
-                                <TemplateColumn T="CustomFilterEntry" title="Domain" HeaderStyle="width: 10%;" CellStyle="width: 10%;">
+                                <TemplateColumn T="CustomFilterEntry" title="Field Section" HeaderStyle="width: 10%;" CellStyle="width: 10%;">
                                     <CellTemplate>
                                         @if (string.IsNullOrWhiteSpace(context.Item.GroupName))
                                         {
@@ -735,17 +832,17 @@
             </MudStack>
         </MudTabPanel>
 
-        @* ── Tab: Domains ── *@
-        <MudTabPanel Text="Domains" Icon="@Icons.Material.Filled.Category">
+        @* ── Tab: Field Sections ── *@
+        <MudTabPanel Text="Field Sections" Icon="@Icons.Material.Filled.Category">
             <MudStack Spacing="2" Class="pa-2">
                 <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
                     <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
                         <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
-                            Domains (@_domainList.Count)
+                            Field Sections (@_domainList.Count)
                         </MudText>
                         <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
                             <MudTextField @bind-Value="_newDomainName"
-                                          Label="New domain" Variant="Variant.Outlined"
+                                          Label="New field section" Variant="Variant.Outlined"
                                           Margin="Margin.Dense" Style="max-width: 240px;"
                                           OnKeyDown="OnNewDomainKeyDown" />
                             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
@@ -757,8 +854,8 @@
                     </MudStack>
 
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
-                        Domains are the groups shown in the Field Picker (e.g. Loan, Borrower, Dates).
-                        A domain can't be deleted while fields still reference it.
+                        Field Sections are the groups shown in the Field Picker (e.g. Loan, Borrower, Dates).
+                        A field section can't be deleted while fields still reference it.
                     </MudText>
 
                     @if (_domainList.Any())
@@ -799,7 +896,7 @@
                     else
                     {
                         <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            No domains defined yet. Add one above — fields created after will be able to pick it.
+                            No field sections defined yet. Add one above — fields created after will be able to pick it.
                         </MudText>
                     }
                 </MudPaper>
@@ -919,6 +1016,13 @@
 
     // Joins
     private List<JoinEntry> _joins = new();
+    // Provider-suggested joins for the currently-selected table. Populated
+    // from SchemaBuilderService.GetSuggestedJoinsAsync — today only Dataverse
+    // returns hits (via Metadata API ManyToOne / OneToMany endpoints), but
+    // the shape is provider-agnostic so SQL Server / Postgres FK discovery
+    // can slot in here later. Cleared on table / connection change.
+    private List<SuggestedJoin> _suggestedJoins = new();
+    private bool _loadingSuggestedJoins;
 
     // Lookups
     private List<LookupEntry> _lookups = new();
@@ -1062,10 +1166,20 @@
         _selectedConnectionId = newId;
         // Column cache is per-DB: switching connections invalidates it.
         _columnCache.Clear();
+        // Suggested-join hints are per-table and depend on the connection's
+        // metadata source — wipe both on connection swap.
+        _suggestedJoins.Clear();
         LoadCurrentConfig();
         await LoadTableAliasesAsync();
         await PersistSelectedConnectionAsync();
     }
+
+    // True when the currently-selected connection is Dataverse — gates the
+    // Suggested Joins panel (which only has data for relationship-aware
+    // providers).
+    private bool IsDataverseConnectionSelected() =>
+        _selectedConnectionId is Guid id
+        && _availableConnections.FirstOrDefault(c => c.Id == id)?.ConnectionType is "dataverse";
 
     // Renders a Guid? connection id to its display label by looking it up in
     // _availableConnections. Matches the MudSelectItem child content so the
@@ -1525,6 +1639,7 @@
     {
         _selectedTable = table;
         _selectedTableType = TableType.LoanSingle;
+        _suggestedJoins.Clear();
         try
         {
             // Service returns columns in ORDINAL_POSITION (DB-declared order).
@@ -1548,6 +1663,93 @@
         {
             Snackbar.Add($"Failed to load columns: {ex.Message}", Severity.Error);
         }
+
+        // Relationship discovery for providers that expose it. Today this
+        // is Dataverse only (Metadata API M:1 / 1:M endpoints); other
+        // providers return an empty list and the Suggested Joins panel
+        // simply doesn't render.
+        if (IsDataverseConnectionSelected())
+        {
+            _loadingSuggestedJoins = true;
+            try
+            {
+                _suggestedJoins = await DbService.GetSuggestedJoinsAsync(_selectedConnectionId, table.TableName);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Failed to load suggested joins: {ex.Message}", Severity.Warning);
+            }
+            finally
+            {
+                _loadingSuggestedJoins = false;
+            }
+        }
+    }
+
+    // Promotes a discovered relationship into a real JoinEntry. Aliases are
+    // the target's logical name (Dataverse logical names are short and
+    // unique enough — e.g. "account", "contact" — and admins can rename in
+    // the join dialog if a collision shows up). The OnClause shape is the
+    // same JOIN ... ON ... a TDS endpoint accepts unchanged.
+    //
+    // For many-to-one (the entity holds the FK to a parent), the FK is on
+    // the source side: source.fkCol = target.pkCol.
+    // For one-to-many (children link back to this entity), the FK is on
+    // the new target side: target.fkCol = source.pkCol.
+    private void AddSuggestedJoin(SuggestedJoin sj)
+    {
+        // The "selected entity" is the source the admin is building from
+        // — it's already in the FROM clause of any report that uses this
+        // table. The relationship's other side becomes the new target.
+        var selected = _selectedTable?.TableName ?? string.Empty;
+        var isManyToOne = string.Equals(sj.Direction, "many-to-one", StringComparison.OrdinalIgnoreCase);
+
+        // Source = the side that's already in FROM (the selected entity).
+        // Target = the new side being joined in.
+        var sourceTable = selected;
+        var targetTable = string.Equals(sj.SourceTable, selected, StringComparison.OrdinalIgnoreCase)
+            ? sj.TargetTable   // typical M:1 case — selected entity holds the FK
+            : sj.SourceTable;  // 1:M — children point at the selected entity
+
+        var sourceAlias = sourceTable;
+        var targetAlias = targetTable;
+
+        string onClause;
+        if (isManyToOne)
+        {
+            // FK on the source (the selected entity).
+            onClause = $"{sourceAlias}.{sj.SourceColumn} = {targetAlias}.{sj.TargetColumn}";
+        }
+        else
+        {
+            // 1:M — FK is on the target (the children pointing back).
+            onClause = $"{targetAlias}.{sj.SourceColumn} = {sourceAlias}.{sj.TargetColumn}";
+        }
+
+        // Stable join id from the relationship name; fall back to a counter
+        // if a relationship comes back without one.
+        var joinId = !string.IsNullOrWhiteSpace(sj.RelationshipName)
+            ? sj.RelationshipName.ToLowerInvariant()
+            : $"join_{_joins.Count + 1}";
+
+        if (_joins.Any(j => string.Equals(j.Id, joinId, StringComparison.OrdinalIgnoreCase)))
+        {
+            Snackbar.Add($"A join with id '{joinId}' already exists.", Severity.Info);
+            return;
+        }
+
+        _joins.Add(new JoinEntry
+        {
+            Id = joinId,
+            JoinType = "LEFT JOIN",
+            TargetTable = targetTable,
+            Alias = targetAlias,
+            OnClause = onClause,
+            SourceTable = sourceTable,
+            SourceAlias = sourceAlias
+        });
+        SortJoins();
+        Snackbar.Add($"Added join {joinId}: {sourceTable} → {targetTable}", Severity.Success);
     }
 
     private List<JoinEntry> GetMatchingJoins()
@@ -2122,7 +2324,7 @@
         if (string.IsNullOrWhiteSpace(name)) return;
         if (_domainList.Any(d => string.Equals(d, name, StringComparison.OrdinalIgnoreCase)))
         {
-            Snackbar.Add($"Domain \"{name}\" already exists.", Severity.Warning);
+            Snackbar.Add($"Field Section \"{name}\" already exists.", Severity.Warning);
             return;
         }
         _domainList.Add(name);
@@ -2140,10 +2342,10 @@
         var parameters = new DialogParameters<RenameDialog>
         {
             { x => x.InitialValue, oldName },
-            { x => x.Title, "Rename domain" },
-            { x => x.Label, "Domain name" }
+            { x => x.Title, "Rename Field Section" },
+            { x => x.Label, "Field Section name" }
         };
-        var dlg = await DialogService.ShowAsync<RenameDialog>("Rename domain", parameters,
+        var dlg = await DialogService.ShowAsync<RenameDialog>("Rename Field Section", parameters,
             new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
         var result = await dlg.Result;
         if (result is null || result.Canceled || result.Data is not string newName) return;
@@ -2153,7 +2355,7 @@
         if (_domainList.Any(d => string.Equals(d, newName, StringComparison.OrdinalIgnoreCase)
                                  && !string.Equals(d, oldName, StringComparison.Ordinal)))
         {
-            Snackbar.Add($"Domain \"{newName}\" already exists.", Severity.Warning);
+            Snackbar.Add($"Field Section \"{newName}\" already exists.", Severity.Warning);
             return;
         }
 
@@ -2183,8 +2385,8 @@
             return;
         }
         var confirmed = await DialogService.ShowMessageBoxAsync(
-            "Delete domain",
-            $"Remove \"{name}\" from the domain list?",
+            "Delete Field Section",
+            $"Remove \"{name}\" from the Field Sections list?",
             yesText: "Delete", cancelText: "Cancel");
         if (confirmed != true) return;
 

@@ -30,13 +30,15 @@ public interface ICompanyConnectionAdminService
 public sealed record ConnectionTestResult(bool Success, string? Error, long LatencyMs);
 
 // Full-shape row for the admin connection editor. Null fields are intentional
-// — connection_type='sqlserver' rows leave the Pg* fields null and vice versa.
+// — each connection-type row leaves the unrelated field groups null
+// (e.g. 'sqlserver' rows leave Pg* and Dv* null; 'dataverse' rows
+// leave Ss* and Pg* null).
 public sealed class CompanyConnectionRecord
 {
     public Guid Id { get; set; }
     public Guid CompanyId { get; set; }
     public string Name { get; set; } = string.Empty;
-    public string ConnectionType { get; set; } = "sqlserver";    // 'sqlserver' | 'postgres'
+    public string ConnectionType { get; set; } = "sqlserver";    // 'sqlserver' | 'postgres' | 'dataverse'
     public bool IsDefault { get; set; }
     public bool IsActive { get; set; } = true;
 
@@ -68,6 +70,26 @@ public sealed class CompanyConnectionRecord
     // get wrapped as "(expr AT TIME ZONE '<tz>')" at emission time. Null /
     // blank = no wrapping regardless of field flags.
     public string? PgDisplayTimezone { get; set; }
+
+    // ── Dataverse (Microsoft Power Platform / Dynamics 365) ──
+    // Setup-only as of v1: the values below are persisted by the admin
+    // editor but no consumer reads them yet (query pipeline / scope
+    // resolver / schema builder still gate on sqlserver|postgres).
+    // Auth model is Entra OAuth2 client_credentials — no SQL user/pass.
+    //
+    //   * DvEnvironmentUrl — full env URL ending without trailing slash,
+    //                       e.g. "https://contoso.crm.dynamics.com".
+    //   * DvTenantId       — Entra tenant GUID where the app is registered.
+    //   * DvClientId       — Entra app (client) ID with the
+    //                       Dataverse user_impersonation API permission.
+    //   * DvClientSecret   — App secret. Stored in plain NVARCHAR for
+    //                       parity with the existing SsPassword /
+    //                       PgPassword approach; will move to a sealed
+    //                       store when those do.
+    public string? DvEnvironmentUrl { get; set; }
+    public string? DvTenantId { get; set; }
+    public string? DvClientId { get; set; }
+    public string? DvClientSecret { get; set; }
 
     // Optional WHERE-fragments used by every table-listing path (Schema
     // Builder browser, Admin → Table Aliases picker). Both are appended after

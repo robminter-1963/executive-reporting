@@ -72,7 +72,10 @@
                 {
                     <MudSelect T="int?" @bind-Value="_teamId" Label="Team"
                                Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
-                        @foreach (var t in _availableTeams)
+                        @* Sort in-foreach so a freshly-added team in
+                           Team Builder shows up alphabetically without
+                           re-fetching the list. *@
+                        @foreach (var t in _availableTeams.OrderBy(t => t.TeamName ?? $"team {t.TeamId}", StringComparer.OrdinalIgnoreCase))
                         {
                             <MudSelectItem T="int?" Value="@((int?)t.TeamId)">
                                 @(t.TeamName ?? $"team {t.TeamId}")

@@ -302,6 +302,7 @@
                             DefaultSortDirection="@_tableSortDirection"
                             InitialSort="@_initialSortTuples"
                             CalcColumns="_tableCalcColumns"
+                            ColumnLabelOverrides="_templateColumnLabels"
                             DisableUserSort="true"
                             ReadOnly="true"
                             FillViewport="true"
@@ -358,6 +359,10 @@
     // Per-report SQL calc columns. Hydrated from ColumnState so the
     // detail query SELECTs them and rows carry their values for the grid.
     private List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? _tableCalcColumns;
+    // Column-rename overrides from the linked grid template. Forwarded to
+    // ReportGrid as ColumnLabelOverrides so the drilled-in detail grid
+    // also renders the template's renamed headers.
+    private Dictionary<string, string>? _templateColumnLabels;
     private string? _tableSortField;
     private string? _tableSortDirection;
     // Multi-column sort read from the report's ColumnState. Same semantics as
@@ -572,6 +577,7 @@
                 if (resolved is not null)
                 {
                     fieldIds = resolved.FieldIds;
+                    _templateColumnLabels = resolved.CustomColumnLabels;
                     // Template-linked: template owns the column order and default sort so the
                     // detail grid stays in sync with the template. Per-report show/hide is
                     // preserved but trimmed to fields still in the template.
@@ -842,7 +848,16 @@
             ordered = _detailData.Columns.Concat(calcsByKey.Values);
         }
 
-        return ordered.Where(c => !hidden.Contains(c.FieldId)).ToList();
+        // Apply grid-template column-rename overrides at the visible-
+        // columns boundary so EVERY downstream consumer (the grouped
+        // detail render's <th>, the inline detail row, group footers,
+        // the grand-total row, and the ReportGrid no-grouping fallback)
+        // sees the renamed labels. WithLabelOverrides clones each
+        // ColumnMeta when an override is present and returns the source
+        // ref otherwise, so this is cheap on un-templated reports.
+        return ordered
+            .Where(c => !hidden.Contains(c.FieldId))
+            .WithLabelOverrides(_templateColumnLabels);
     }
 
     private bool IsCurrencyColumn(ColumnMeta c) =>
@@ -1124,10 +1139,15 @@
     // export loop iterates Columns, so dropped fields never get emitted.
     private QueryResponse BuildExportData(QueryResponse source)
     {
-        if (_hiddenColumns is null || _hiddenColumns.Count == 0) return source;
-        var hidden = new HashSet<string>(_hiddenColumns, StringComparer.OrdinalIgnoreCase);
-        var visibleColumns = source.Columns.Where(c => !hidden.Contains(c.FieldId)).ToList();
-        if (visibleColumns.Count == source.Columns.Count) return source;
+        var hidden = _hiddenColumns is { Count: > 0 }
+            ? new HashSet<string>(_hiddenColumns, StringComparer.OrdinalIgnoreCase)
+            : null;
+        var hasOverrides = _templateColumnLabels is { Count: > 0 };
+        if (hidden is null && !hasOverrides) return source;
+        var visibleColumns = (hidden is null
+            ? source.Columns
+            : source.Columns.Where(c => !hidden.Contains(c.FieldId)))
+            .WithLabelOverrides(_templateColumnLabels);
         return new QueryResponse
         {
             Columns = visibleColumns,

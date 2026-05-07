@@ -25,5 +25,11 @@ public record ResolvedTemplate(
     List<string>? ColumnOrder,
     List<string>? HiddenColumns,
     string? DefaultSortField,
-    string? DefaultSortDirection);
+    string? DefaultSortDirection,
+    // Per-template column-header overrides — key = field id, value =
+    // custom label. Reports applying this template render the override
+    // in the Table grid; missing keys fall back to the schema field's
+    // Label. Null when the template was saved before this feature
+    // existed (legacy templates) or no admin set any overrides.
+    Dictionary<string, string>? CustomColumnLabels);
 

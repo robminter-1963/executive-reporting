@@ -127,7 +127,7 @@ else
                         var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
                         var align = GetCellAlign(col.DataType);
                         var c = col;
-                        <TemplateColumn T="Dictionary<string, object?>" Title="@col.Label"
+                        <TemplateColumn T="Dictionary<string, object?>" Title="@ResolveColumnLabel(col.FieldId, col.Label)"
                                         Field="@col.FieldId"
                                         PropertyName="@col.FieldId"
                                         Sortable="true"
@@ -145,14 +145,14 @@ else
                         var ccLocal = cc;
                         var (ccMin, ccMax) = GetCalcColumnWidths(cc);
                         var ccAlign = GetCellAlign(cc.DataType ?? "decimal");
-                        <TemplateColumn T="Dictionary<string, object?>" Title="@cc.Label"
+                        <TemplateColumn T="Dictionary<string, object?>" Title="@ResolveColumnLabel(cc.Key, cc.Label)"
                                         Sortable="true"
                                         SortBy="@(row => CalcSortValue(row, ccLocal))"
                                         HeaderStyle="@($"width: {ccMax}px; max-width: {ccMax}px; white-space: nowrap; overflow: hidden; {ccAlign}")"
                                         CellStyle="@($"width: {ccMax}px; min-width: {ccMin}px; max-width: {ccMax}px; overflow: hidden; text-overflow: ellipsis; {ccAlign}")">
                             <HeaderTemplate>
                                 <MudTooltip Text="@(string.IsNullOrWhiteSpace(ccLocal.SqlExpression) ? $"Formula: {ccLocal.Formula}" : $"SQL: {ccLocal.SqlExpression}")">
-                                    <span>@ccLocal.Label</span>
+                                    <span>@ResolveColumnLabel(ccLocal.Key, ccLocal.Label)</span>
                                 </MudTooltip>
                             </HeaderTemplate>
                             <CellTemplate>
@@ -339,6 +339,11 @@ else
     // calc columns shown. Independent of any template lock — calc columns
     // are admin derivations on top of the template's field set.
     [Parameter] public List<TableCalcColumnDef>? CalcColumns { get; set; }
+    // Per-column header overrides keyed by field id (or calc Key). Used
+    // by grid templates to rename column headers without editing the
+    // underlying schema. Missing entries fall back to the column's
+    // default Label. Empty / null = no overrides.
+    [Parameter] public Dictionary<string, string>? ColumnLabelOverrides { get; set; }
     [Parameter] public bool ReadOnly { get; set; }
     // When true, the grid fills the browser viewport (minus a small allowance
     // for the page header above it). Once the user picks a specific rows-per-
@@ -362,6 +367,22 @@ else
     // as a fallback). Used by Report Viewer where sort is locked to what
     // was saved with the report.
     [Parameter] public bool DisableUserSort { get; set; }
+
+    // Resolves the visible header label for a column. Override (from a
+    // grid template's CustomColumnLabels) wins; default is the column's
+    // own Label. Empty / whitespace overrides are treated as "no override"
+    // so admins can clear a rename by blanking the input.
+    private string ResolveColumnLabel(string fieldIdOrKey, string defaultLabel)
+    {
+        if (ColumnLabelOverrides is { Count: > 0 }
+            && !string.IsNullOrEmpty(fieldIdOrKey)
+            && ColumnLabelOverrides.TryGetValue(fieldIdOrKey, out var v)
+            && !string.IsNullOrWhiteSpace(v))
+        {
+            return v;
+        }
+        return defaultLabel;
+    }
 
     private int _pageSize = 100;
     private int _readOnlyPage = 1;

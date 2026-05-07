@@ -170,6 +170,7 @@
                     <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Column Order & Visibility</MudText>
                     <MudText Typo="Typo.caption" Color="Color.Secondary">
                         Drag a row by its handle to reorder. Click the eye icon to hide a column from the grid (it stays in the query for dashboards).
+                        Use the Custom Label box to rename the column header for any report applying this template — leave blank to keep the schema's default label.
                     </MudText>
                     @* Plain HTML table instead of MudTable so each <tr> can
                        carry HTML5 drag-and-drop attributes directly. MudTable
@@ -183,6 +184,7 @@
                                 <th style="width: 40px;">#</th>
                                 <th>Field</th>
                                 <th>Type</th>
+                                <th style="width: 220px;">Custom Label</th>
                                 <th style="width: 60px;">Visible</th>
                             </tr>
                         </thead>
@@ -218,6 +220,21 @@
                                         </div>
                                     </td>
                                     <td><span style="font-size: 0.75rem; color: #5F6368;">@fld.DataType</span></td>
+                                    <td>
+                                        @* Two-way bind via the helper methods so
+                                           empty input drops the dict entry and
+                                           non-empty creates / updates it. Saves
+                                           one branch in the Save() flow and keeps
+                                           the JSON payload minimal. *@
+                                        <MudTextField Value="@GetCustomLabel(fld.Id)"
+                                                      ValueChanged="@((string v) => SetCustomLabel(fld.Id, v))"
+                                                      T="string"
+                                                      Placeholder="@fld.Label"
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense" Dense
+                                                      Immediate="true"
+                                                      Style="font-size: 0.8rem;" />
+                                    </td>
                                     <td>
                                         <MudIconButton Icon="@(_hiddenColumns.Contains(fld.Id) ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
                                                        Size="Size.Small"
@@ -299,6 +316,12 @@
     private int _orderDragSource = -1;
     private int _orderDropTarget = -1;
     private HashSet<string> _hiddenColumns = new();
+    // Per-template column header overrides. Key = field id, value =
+    // custom label. Reports applying this template render the override
+    // in the Table grid instead of the schema field's Label. Empty /
+    // missing entries fall back to the schema label, so admins only
+    // need to fill in the columns they want renamed.
+    private Dictionary<string, string> _customColumnLabels = new(StringComparer.OrdinalIgnoreCase);
     private string _defaultSortField = string.Empty;
     private string _defaultSortDir = "asc";
     private string _fieldSearch = string.Empty;
@@ -362,6 +385,12 @@
                         {
                             var hc = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcEl.GetRawText());
                             if (hc is not null) _hiddenColumns = new HashSet<string>(hc, StringComparer.OrdinalIgnoreCase);
+                        }
+                        if (doc.RootElement.TryGetProperty("CustomColumnLabels", out var clEl))
+                        {
+                            var cl = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(clEl.GetRawText());
+                            if (cl is not null)
+                                _customColumnLabels = new Dictionary<string, string>(cl, StringComparer.OrdinalIgnoreCase);
                         }
                         if (doc.RootElement.TryGetProperty("TableSortField", out var sfEl))
                             _defaultSortField = sfEl.GetString() ?? string.Empty;
@@ -446,6 +475,20 @@
     {
         if (!_hiddenColumns.Remove(fieldId))
             _hiddenColumns.Add(fieldId);
+    }
+
+    private string GetCustomLabel(string fieldId)
+        => _customColumnLabels.TryGetValue(fieldId, out var v) ? v : string.Empty;
+
+    private void SetCustomLabel(string fieldId, string? value)
+    {
+        // Empty / whitespace = "no override, fall back to schema label".
+        // Drop the entry rather than storing an empty string so Save's
+        // serialization stays minimal.
+        if (string.IsNullOrWhiteSpace(value))
+            _customColumnLabels.Remove(fieldId);
+        else
+            _customColumnLabels[fieldId] = value.Trim();
     }
 
     // ── Column-order drag-and-drop ──
@@ -534,6 +577,13 @@
         var colOrder = _orderedFields.Select(f => f.Id).ToList();
         if (colOrder.Count > 0) state["TableColumnOrder"] = colOrder;
         if (_hiddenColumns.Count > 0) state["HiddenColumns"] = _hiddenColumns.ToList();
+        // Drop empty / whitespace overrides on save so the JSON payload
+        // stays clean and the resolver can short-circuit when no admin
+        // ever touched the column-rename UI.
+        var trimmedLabels = _customColumnLabels
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Value))
+            .ToDictionary(kv => kv.Key, kv => kv.Value.Trim(), StringComparer.OrdinalIgnoreCase);
+        if (trimmedLabels.Count > 0) state["CustomColumnLabels"] = trimmedLabels;
         if (!string.IsNullOrEmpty(_defaultSortField))
         {
             state["TableSortField"] = _defaultSortField;

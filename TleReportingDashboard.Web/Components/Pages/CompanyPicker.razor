@@ -187,7 +187,15 @@
             _userId = user.FindFirst("oid")?.Value
                       ?? user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
-            var all = await CompanyRegistry.GetActiveAsync();
+            // Drop hidden companies BEFORE the role-based filtering below.
+            // is_hidden is intentionally global (admins included) — the
+            // intent is "don't render this tile on the picker grid."
+            // Admins who need to reach a hidden company can navigate
+            // directly via /master-dashboard/{code} or the Admin →
+            // Companies tab, both of which still surface hidden rows.
+            var all = (await CompanyRegistry.GetActiveAsync())
+                .Where(c => !c.IsHidden)
+                .ToList();
             var isAdmin = AdminService.IsAdmin(_userEmail);
             // Roles with any admin-section access (Administrator, System
             // Support, etc.) bypass the per-company grant list — they need

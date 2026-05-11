@@ -6,9 +6,9 @@ namespace TleReportingDashboard.Web.Services;
 public interface ICompanyAdminService
 {
     Task<List<CompanyRecord>> GetAllAsync(CancellationToken ct = default);
-    Task<CompanyRecord> CreateAsync(string code, string name, string dataSourceType, string connectionRef,
+    Task<CompanyRecord> CreateAsync(string code, string name,
                                      string? websiteUrl, string? createdBy, CancellationToken ct = default);
-    Task UpdateAsync(Guid id, string code, string name, string dataSourceType, string connectionRef,
+    Task UpdateAsync(Guid id, string code, string name,
                      string? websiteUrl, bool isActive, bool isHidden, CancellationToken ct = default);
     Task SetActiveAsync(Guid id, bool isActive, CancellationToken ct = default);
     // Toggle the picker-tile visibility flag. Distinct from SetActiveAsync
@@ -30,16 +30,14 @@ public interface ICompanyAdminService
     Task UpdateDisplayOrderAsync(IReadOnlyList<Guid> orderedIds, CancellationToken ct = default);
 }
 
-// Full-shape row for the admin UI. Distinct from CompanySummary (which hides
-// inactive rows and the connection_ref pointer). Logo bytes come along on
-// read so the admin tab can render a preview thumbnail without a second
-// round-trip; callers that don't need the blob can ignore the property.
+// Full-shape row for the admin UI. Distinct from CompanySummary (which
+// hides inactive rows). Logo bytes come along on read so the admin tab
+// can render a preview thumbnail without a second round-trip; callers
+// that don't need the blob can ignore the property.
 public sealed record CompanyRecord(
     Guid Id,
     string Code,
     string Name,
-    string DataSourceType,
-    string ConnectionRef,
     bool IsActive,
     DateTime CreatedAt,
     DateTime UpdatedAt)

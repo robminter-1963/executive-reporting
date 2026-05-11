@@ -83,6 +83,7 @@
                     </MudTooltip>
                 }
                 <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
+                            OnExportPdf="ExportPdf"
                             Disabled="@(_queryData is null || !_queryData.Rows.Any())" />
             </MudStack>
         </MudStack>
@@ -663,6 +664,14 @@
         var bytes = ExportService.ExportToCsv(BuildExportData(_queryData));
         await JS.InvokeVoidAsync("downloadFile", $"{_reportName ?? "report"}.csv",
             Convert.ToBase64String(bytes), "text/csv");
+    }
+
+    private async Task ExportPdf()
+    {
+        if (_queryData is null) return;
+        var bytes = ExportService.ExportToPdf(BuildExportData(_queryData), _reportName ?? "Report");
+        await JS.InvokeVoidAsync("downloadFile", $"{_reportName ?? "report"}.pdf",
+            Convert.ToBase64String(bytes), "application/pdf");
     }
 
     // Mirrors what the grid shows: drops columns hidden in the saved report so

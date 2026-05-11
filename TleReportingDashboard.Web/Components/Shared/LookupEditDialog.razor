@@ -1,4 +1,5 @@
 @using TleReportingDashboard.Web.Components.Pages
+@inject IDialogService DialogService
 
 <MudDialog>
     <TitleContent>
@@ -34,7 +35,7 @@
         </MudGrid>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
                    Disabled="@(string.IsNullOrWhiteSpace(_edited.Id) || string.IsNullOrWhiteSpace(_edited.Label) || string.IsNullOrWhiteSpace(_edited.SqlPreamble))">
             OK
@@ -58,6 +59,10 @@
 
     private SchemaBuilder.LookupEntry _edited = new();
 
+    // JSON snapshot at OnInitialized — IsDirty compares a fresh snapshot
+    // against this to drive the unsaved-changes prompt on dismiss.
+    private string _initialSnapshot = string.Empty;
+
     protected override void OnInitialized()
     {
         if (Lookup is not null)
@@ -70,8 +75,44 @@
                 SqlJoin = Lookup.SqlJoin
             };
         }
+
+        _initialSnapshot = BuildSnapshot();
     }
 
-    private void Cancel() => MudDialog?.Cancel();
+    private string BuildSnapshot() =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            _edited.Id,
+            _edited.Label,
+            _edited.SqlPreamble,
+            _edited.SqlJoin
+        });
+
+    private bool IsDirty =>
+        !string.Equals(_initialSnapshot, BuildSnapshot(), StringComparison.Ordinal);
+
+    // Routes Cancel through the unsaved-changes prompt. Save only re-enters
+    // Ok() when the OK button's enable conditions are met.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (!string.IsNullOrWhiteSpace(_edited.Id)
+                        && !string.IsNullOrWhiteSpace(_edited.Label)
+                        && !string.IsNullOrWhiteSpace(_edited.SqlPreamble)) Ok();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return;
+                case UnsavedChangesResult.DontSave:
+                    break;
+            }
+        }
+        MudDialog?.Cancel();
+    }
+
     private void Ok() => MudDialog?.Close(DialogResult.Ok(_edited));
 }

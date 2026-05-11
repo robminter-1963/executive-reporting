@@ -1,4 +1,11 @@
 @inject ICodeSetService CodeSetService
+@inject IDialogService DialogService
+
+@* Dirty-tracked: any reorder vs. the initial entry list triggers the
+   unsaved-changes prompt on any non-explicit dismiss. Callers must open
+   this dialog with DialogOptions { BackdropClick = false,
+   CloseOnEscapeKey = false } so backdrop / Esc routes through
+   TryCancelAsync rather than firing MudDialog's default cancel directly. *@
 
 <MudDialog>
     <TitleContent>
@@ -62,7 +69,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton OnClick="ResetAlphabetical" Color="Color.Warning" Disabled="!_entries.Any()">
             Reset (Alphabetical)
         </MudButton>
@@ -110,6 +117,12 @@
     private int _dragSource = -1;
     private int _dropTarget = -1;
 
+    // Snapshot of the ordered Value list captured after OnInitializedAsync
+    // populates _entries. The dirty check compares the current order against
+    // this — any reorder, alphabetical reset, or other mutation of the list
+    // counts as dirty.
+    private List<string> _initialOrder = new();
+
     protected override async Task OnInitializedAsync()
     {
         if (!CodeSetId.HasValue && (Initial is null || Initial.Count == 0)) return;
@@ -146,6 +159,22 @@
         {
             _loading = false;
         }
+
+        _initialOrder = _entries.Select(e => e.Value ?? string.Empty).ToList();
+    }
+
+    private bool IsDirty
+    {
+        get
+        {
+            if (_entries.Count != _initialOrder.Count) return true;
+            for (var i = 0; i < _entries.Count; i++)
+            {
+                if (!string.Equals(_entries[i].Value ?? string.Empty, _initialOrder[i], StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
     }
 
     private void OnDrop(int targetIndex)
@@ -178,6 +207,30 @@
     }
 
     private void Cancel() => MudDialog?.Cancel();
+
+    // Routes every dismiss path (Cancel button, Esc, backdrop) through the
+    // unsaved-changes prompt so an accidental close never silently throws
+    // away a hand-tuned reorder.
+    private async Task TryCancelAsync()
+    {
+        if (!IsDirty)
+        {
+            MudDialog?.Cancel();
+            return;
+        }
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                if (_entries.Any()) Save();
+                return;
+            case UnsavedChangesResult.Cancel:
+                return;
+            case UnsavedChangesResult.DontSave:
+                MudDialog?.Cancel();
+                return;
+        }
+    }
 
     private void Save()
     {

@@ -5,6 +5,7 @@
 @inject ISharingService SharingService
 @inject IScheduleService ScheduleService
 @inject IUserPreferenceService PreferenceService
+@inject IFavoriteService FavoriteSvc
 @inject UserPreferenceState PreferenceState
 @inject IAdminService AdminService
 @inject IAdminAccessService AdminAccess
@@ -267,6 +268,13 @@
                                differ, surface the public Name as a small
                                caption so admins know which label users see. *@
                             <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
+                                @{ var fav = _favoriteIds.Contains(context.Id); }
+                                <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                               Size="Size.Small"
+                                               Color="@(fav ? Color.Warning : Color.Default)"
+                                               title="@(fav ? "Unfavorite" : "Add to favorites")"
+                                               OnClick="() => ToggleFavoriteAsync(context.Id)"
+                                               Style="padding: 2px;" />
                                 <MudText Typo="Typo.body2" Style="font-weight: 500;">
                                     @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
                                 </MudText>
@@ -442,9 +450,18 @@
                                otherwise just the public Name. When the two
                                differ, surface the public Name as a small
                                caption so admins know which label users see. *@
-                            <MudText Typo="Typo.body2" Style="font-weight: 500;">
-                                @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
-                            </MudText>
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                @{ var fav = _favoriteIds.Contains(context.Id); }
+                                <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                               Size="Size.Small"
+                                               Color="@(fav ? Color.Warning : Color.Default)"
+                                               title="@(fav ? "Unfavorite" : "Add to favorites")"
+                                               OnClick="() => ToggleFavoriteAsync(context.Id)"
+                                               Style="padding: 2px;" />
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                    @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
+                                </MudText>
+                            </MudStack>
                             @if (!string.IsNullOrWhiteSpace(context.InternalName)
                                  && !string.Equals(context.InternalName, context.Name, StringComparison.Ordinal))
                             {
@@ -562,9 +579,18 @@
                                otherwise just the public Name. When the two
                                differ, surface the public Name as a small
                                caption so admins know which label users see. *@
-                            <MudText Typo="Typo.body2" Style="font-weight: 500;">
-                                @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
-                            </MudText>
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                @{ var fav = _favoriteIds.Contains(context.Id); }
+                                <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                               Size="Size.Small"
+                                               Color="@(fav ? Color.Warning : Color.Default)"
+                                               title="@(fav ? "Unfavorite" : "Add to favorites")"
+                                               OnClick="() => ToggleFavoriteAsync(context.Id)"
+                                               Style="padding: 2px;" />
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                    @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
+                                </MudText>
+                            </MudStack>
                             @if (!string.IsNullOrWhiteSpace(context.InternalName)
                                  && !string.Equals(context.InternalName, context.Name, StringComparison.Ordinal))
                             {
@@ -688,6 +714,13 @@
                                     <MudTd DataLabel="Name">
                                         <span id="@($"report-row-{context.Id}")" style="display: none;"></span>
                                         <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
+                                            @{ var fav = _favoriteIds.Contains(context.Id); }
+                                            <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                                           Size="Size.Small"
+                                                           Color="@(fav ? Color.Warning : Color.Default)"
+                                                           title="@(fav ? "Unfavorite" : "Add to favorites")"
+                                                           OnClick="() => ToggleFavoriteAsync(context.Id)"
+                                                           Style="padding: 2px;" />
                                             <MudText Typo="Typo.body2" Style="font-weight: 500;">
                                                 @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
                                             </MudText>
@@ -755,6 +788,113 @@
                             Body="When other users in the companies you administer save reports, they'll appear here. Pin them to dashboards or clean up after departed users from this tab." />
             }
         </MudTabPanel>
+
+        @* ── Tab 5: Scheduled (admin-only) ──
+           Cross-user view of every report that has at least one active
+           schedule. Useful for admins to quickly find "what's currently
+           set to fire" without tab-hopping per owner. Flat MudTable
+           (no per-section grouping) — schedule status is the natural
+           grouping; sections aren't meaningful here. *@
+        <MudTabPanel Text="Scheduled" Icon="@Icons.Material.Filled.Schedule">
+            @if (_scheduledAdminReports.Count > 0)
+            {
+                <MudTable Items="@_scheduledAdminReports.OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase)"
+                          Hover Striped Dense FixedHeader
+                          T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
+                          Height="100%"
+                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Owner</MudTh>
+                        <MudTh>Connection</MudTh>
+                        <MudTh Style="text-align: center;">Schedules</MudTh>
+                        <MudTh>Next Run</MudTh>
+                        <MudTh>Last Run</MudTh>
+                        <MudTh Style="text-align: right;">Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
+                                @{ var fav = _favoriteIds.Contains(context.Id); }
+                                <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                               Size="Size.Small"
+                                               Color="@(fav ? Color.Warning : Color.Default)"
+                                               title="@(fav ? "Unfavorite" : "Add to favorites")"
+                                               OnClick="() => ToggleFavoriteAsync(context.Id)"
+                                               Style="padding: 2px;" />
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                    @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
+                                </MudText>
+                                @if (!string.IsNullOrWhiteSpace(context.Category))
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
+                                             Style="height: 18px; font-size: 0.65rem;"
+                                             Icon="@Icons.Material.Filled.Category">
+                                        @context.Category
+                                    </MudChip>
+                                }
+                            </MudStack>
+                        </MudTd>
+                        <MudTd DataLabel="Owner">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.OwnerEmail</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Connection">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Schedules" Style="text-align: center;">
+                            @if (_scheduleCountByReport.TryGetValue(context.Id, out var count))
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                         Style="height: 20px; font-size: 0.7rem;"
+                                         Icon="@Icons.Material.Filled.Schedule">
+                                    @count active
+                                </MudChip>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Next Run">
+                            @if (_nextRunByReport.TryGetValue(context.Id, out var nextRun))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @nextRun.ToString("MMM d, h:mm tt")
+                                </MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Last Run">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                @(context.LastRunAt?.ToString("MMM dd, yyyy h:mm tt") ?? "Never")
+                            </MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Actions" Style="text-align: right;">
+                            @* Read-only audit surface — this tab is "what's
+                               firing on a schedule today" for admin visibility,
+                               not a management surface. Schedule editing lives
+                               in Admin → Schedules so the two surfaces don't
+                               drift in capability. Run is preserved so admins
+                               can preview a scheduled report's output without
+                               leaving the page. *@
+                            <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                               Color="Color.Primary" title="Run / preview"
+                                               OnClick="() => ViewReport(context.Id)" />
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+                    <PagerContent>
+                        <MudTablePager PageSizeOptions="new[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }" />
+                    </PagerContent>
+                </MudTable>
+            }
+            else if (!_isLoading)
+            {
+                <EmptyState Icon="@Icons.Material.Filled.Schedule"
+                            Heading="No active schedules"
+                            Body="When any user sets up a recurring delivery for a report, it'll show up here. Use this tab to quickly find and audit every fire-on-schedule report across owners." />
+            }
+        </MudTabPanel>
         }
     </MudTabs>
 </MudContainer>
@@ -783,6 +923,21 @@
     private List<SavedReport> _otherUserReports = new();
     private List<SavedReport> _sharedWithMe = new();
     private HashSet<Guid> _scheduledReportIds = new();
+    // Admin-only: every scheduled report across every owner. Drives
+    // the "Scheduled" tab below — populated alongside _allSchedules so
+    // the admin sees one row per report regardless of who owns it.
+    // Empty for non-admins (the tab simply isn't rendered).
+    private List<SavedReport> _scheduledAdminReports = new();
+    // Active-schedule count per report id, for the "Scheduled" tab's
+    // count chip. A report can have multiple schedules (one Daily +
+    // one Monthly, etc.); admins benefit from seeing the count without
+    // expanding each row.
+    private Dictionary<Guid, int> _scheduleCountByReport = new();
+    // Reports the current user has starred. Drives the star toggle on every
+    // row and the "Pinned" strip above the Master Dashboard tabs. Loaded
+    // once per page mount; mutated locally on toggle so the icon flips
+    // without a round-trip-then-reload.
+    private HashSet<Guid> _favoriteIds = new();
     private Dictionary<Guid, List<string>> _dashboardTabsByReport = new();
     private Dictionary<Guid, DateTime> _nextRunByReport = new();
     private Dictionary<Guid, string> _connectionNamesById = new();
@@ -825,6 +980,11 @@
     // ActivePanelIndex values for visible panels, so non-admins never
     // land on this index.
     private const int OtherUsersReportsTab = 3;
+    // Admin-only — same gating as OtherUsersReportsTab. Shows every
+    // report in the system that has at least one active schedule, in a
+    // single flat MudTable (no per-section grouping; admins want a
+    // global view of "what's currently set to fire").
+    private const int ScheduledReportsTab = 4;
 
     // Filtered + sorted other-users' reports for the admin tab. Mirrors
     // the FilteredMyReports pipeline (search → category → company →
@@ -855,6 +1015,26 @@
         connectionId is Guid id && _connectionNamesById.TryGetValue(id, out var name)
             ? name
             : "—";
+
+    // Star toggle handler — used by every per-row star button. Optimistic
+    // update: flip the local set first so the icon repaints instantly,
+    // then persist. On failure we surface a snackbar but leave the local
+    // flip alone (the user's click stays honored visually until a reload).
+    private async Task ToggleFavoriteAsync(Guid reportId)
+    {
+        var willBeFavorite = !_favoriteIds.Contains(reportId);
+        if (willBeFavorite) _favoriteIds.Add(reportId);
+        else _favoriteIds.Remove(reportId);
+        try
+        {
+            if (willBeFavorite) await FavoriteSvc.AddAsync(_userId, reportId);
+            else await FavoriteSvc.RemoveAsync(_userId, reportId);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Couldn't update favorite: {ex.Message}", Severity.Warning);
+        }
+    }
 
     // Renders the dropdown value explicitly so the select never falls back
     // to Guid.ToString() during a state transition.
@@ -1058,6 +1238,12 @@
                 : Task.FromResult(new List<SavedReport>());
             var sharedTask = SharingService.GetSharedWithMeAsync(_userId);
             var schedulesTask = ScheduleService.GetSchedulesForUserAsync(_userId);
+            // Admin-only — every schedule in the system, drives the
+            // "Scheduled" admin tab. Skipped for non-admins so this
+            // diagnostic query doesn't fire from non-privileged sessions.
+            var allSchedulesTask = _isAdmin
+                ? ScheduleService.GetAllSchedulesAsync()
+                : Task.FromResult(new List<ReportSchedule>());
             var companiesTask = CompanyRegistry.GetActiveAsync();
             // Reports the user currently has pinned on any master dashboard tab,
             // along with which tab(s) — surfaced as the "On Dashboard" column.
@@ -1068,7 +1254,7 @@
                 ? MasterService.GetPlacedReportTabsAsync(pinCid)
                 : Task.FromResult(new Dictionary<Guid, List<string>>());
 
-            await Task.WhenAll(myReportsTask, otherUsersTask, sharedTask, schedulesTask, companiesTask, placedTask);
+            await Task.WhenAll(myReportsTask, otherUsersTask, sharedTask, schedulesTask, allSchedulesTask, companiesTask, placedTask);
 
             _companies = await companiesTask;
 
@@ -1145,6 +1331,53 @@
             var schedules = await schedulesTask;
             _scheduledReportIds = schedules.Where(s => s.IsActive).Select(s => s.ReportId).ToHashSet();
             _nextRunByReport = ComputeNextRuns(schedules);
+
+            // Build the admin-only "Scheduled" tab data — every active
+            // schedule across every owner, joined to the report set the
+            // admin can see (own + cross-user). Inactive schedules are
+            // excluded; admins manage them via Edit Schedules per row.
+            // For non-admins, allSchedulesTask returned an empty list,
+            // so this is a no-op.
+            if (_isAdmin)
+            {
+                var allSchedules = await allSchedulesTask;
+                var activeByReport = allSchedules
+                    .Where(s => s.IsActive)
+                    .GroupBy(s => s.ReportId)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                _scheduleCountByReport = activeByReport
+                    .ToDictionary(kv => kv.Key, kv => kv.Value.Count);
+
+                // Source pool — admin's own reports + every other user's
+                // (otherUsersTask already pulled the cross-user set). Dedupe
+                // by Id since GetAllReportsAsync returns admin-owned rows
+                // too and they'd collide with _myReports otherwise.
+                var allReports = (await myReportsTask)
+                    .Concat(await otherUsersTask)
+                    .GroupBy(r => r.Id)
+                    .Select(g => g.First())
+                    .ToList();
+
+                _scheduledAdminReports = allReports
+                    .Where(r => activeByReport.ContainsKey(r.Id))
+                    .ToList();
+
+                // Merge cross-user next-run data into _nextRunByReport so
+                // the Scheduled tab can show the next fire time without
+                // its own per-tab dictionary. _nextRunByReport already
+                // holds the admin's own schedules; adding cross-user
+                // entries here is additive.
+                foreach (var (rid, fireAt) in ComputeNextRuns(allSchedules))
+                {
+                    _nextRunByReport.TryAdd(rid, fireAt);
+                }
+            }
+
+            // Favorites are per-user, not per-company. One pull for the page;
+            // ToggleFavorite mutates the set locally so the icon flips
+            // immediately without a re-fetch.
+            _favoriteIds = (await FavoriteSvc.GetReportIdsAsync(_userId)).ToHashSet();
 
             // Recompute available categories from everything the user can see
             // here (their own + shared). Sorted alphabetically; case-folded
@@ -1336,11 +1569,11 @@
     // Builds the ordered (section, reports) list the My Reports tab
     // renders. (Uncategorized) goes first when it has any orphan reports
     // so admins always see the catch-all bucket near the top. Admin-
-    // defined sections follow in their saved sort_order. Sections with
-    // zero reports are dropped — the UI stays compact (creating a
-    // section without assigning anything to it doesn't render an empty
-    // header). If you want empty sections to show, add an
-    // includeEmpty flag and walk _librarySections too.
+    // defined sections follow in their saved sort_order. Empty admin-
+    // defined sections still render so a freshly-created section gives
+    // the admin immediate visual feedback ("I added it; I can see it");
+    // the empty Uncategorized bucket is still dropped because there's
+    // nothing actionable about it.
     private List<(string Name, List<SavedReport> Reports)> BuildOrderedSections(IEnumerable<SavedReport> reports)
     {
         var byName = reports
@@ -1353,8 +1586,12 @@
 
         foreach (var s in _librarySections.OrderBy(x => x.SortOrder).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
         {
-            if (byName.TryGetValue(s.Name, out var rs))
-                ordered.Add((s.Name, rs));
+            // Use the matching reports if any exist; otherwise an empty
+            // list so the section header still renders with a "0" count.
+            // Walking _librarySections (instead of byName) makes this
+            // include freshly-created sections that have no reports yet.
+            var rs = byName.TryGetValue(s.Name, out var matched) ? matched : new List<SavedReport>();
+            ordered.Add((s.Name, rs));
         }
         return ordered;
     }
@@ -1406,7 +1643,8 @@
             { x => x.Label, "Section name" }
         };
         var dlg = await DialogService.ShowAsync<RenameDialog>("Create Library Section", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true,
+                                BackdropClick = false, CloseOnEscapeKey = false });
         var result = await dlg.Result;
         if (result is null || result.Canceled || result.Data is not string name) return;
         name = name.Trim();
@@ -1479,7 +1717,13 @@
             { x => x.ReportName, report.Name },
             { x => x.CurrentUserId, _userId }
         };
-        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            BackdropClick = false,
+            CloseOnEscapeKey = false
+        };
         await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, options);
     }
 

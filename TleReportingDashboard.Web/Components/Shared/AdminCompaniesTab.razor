@@ -21,14 +21,10 @@
                               Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 140px;" />
                 <MudTextField @bind-Value="_newName" Label="Name" HelperText="Display name"
                               Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 240px;" />
-                <MudSelect T="string" @bind-Value="_newDataSourceType" Label="Data Source Type"
-                           Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;">
-                    <MudSelectItem Value="@("sqlserver")">SQL Server</MudSelectItem>
-                    <MudSelectItem Value="@("postgres")">Postgres</MudSelectItem>
-                </MudSelect>
-                <MudTextField @bind-Value="_newConnectionRef" Label="Connection Ref"
-                              HelperText="Legacy label; actual connection lives in DB Connections tab"
-                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 200px;" />
+                @* Per-company connections (with type + auth + host) live
+                   in Admin → DB Connections — one company can have many
+                   of mixed types, so the previous "single data source
+                   per company" picker was dropped (2026-05-09_18-00). *@
                 <MudTextField @bind-Value="_newWebsiteUrl" Label="Website URL"
                               HelperText="Optional — clicking the logo on the master dashboard opens this in a new tab"
                               Placeholder="https://example.com"
@@ -51,8 +47,6 @@
                 <MudTh Style="width: 150px; text-align: center;">Logo</MudTh>
                 <MudTh>Code</MudTh>
                 <MudTh>Name</MudTh>
-                <MudTh>Data Source</MudTh>
-                <MudTh>Connection Ref</MudTh>
                 <MudTh>Website</MudTh>
                 <MudTh>Active</MudTh>
                 <MudTh>Hidden</MudTh>
@@ -74,15 +68,6 @@
                     </MudTd>
                     <MudTd>
                         <MudTextField @bind-Value="_editName" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                    </MudTd>
-                    <MudTd>
-                        <MudSelect T="string" @bind-Value="_editDataSourceType" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 150px;">
-                            <MudSelectItem Value="@("sqlserver")">SQL Server</MudSelectItem>
-                            <MudSelectItem Value="@("postgres")">Postgres</MudSelectItem>
-                        </MudSelect>
-                    </MudTd>
-                    <MudTd>
-                        <MudTextField @bind-Value="_editConnectionRef" Variant="Variant.Outlined" Margin="Margin.Dense" />
                     </MudTd>
                     <MudTd>
                         <MudTextField @bind-Value="_editWebsiteUrl" Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -125,8 +110,6 @@
                     </MudTd>
                     <MudTd><strong>@context.Code</strong></MudTd>
                     <MudTd>@context.Name</MudTd>
-                    <MudTd>@context.DataSourceType</MudTd>
-                    <MudTd>@context.ConnectionRef</MudTd>
                     <MudTd>
                         @if (!string.IsNullOrEmpty(context.WebsiteUrl))
                         {
@@ -198,15 +181,11 @@
 
     private string _newCode = string.Empty;
     private string _newName = string.Empty;
-    private string _newDataSourceType = "sqlserver";
-    private string _newConnectionRef = string.Empty;
     private string _newWebsiteUrl = string.Empty;
 
     private Guid? _editingId;
     private string _editCode = string.Empty;
     private string _editName = string.Empty;
-    private string _editDataSourceType = "sqlserver";
-    private string _editConnectionRef = string.Empty;
     private string _editWebsiteUrl = string.Empty;
     private bool _editIsActive;
     private bool _editIsHidden;
@@ -233,19 +212,16 @@
 
     private bool CanAdd() =>
         !string.IsNullOrWhiteSpace(_newCode)
-        && !string.IsNullOrWhiteSpace(_newName)
-        && !string.IsNullOrWhiteSpace(_newConnectionRef);
+        && !string.IsNullOrWhiteSpace(_newName);
 
     private async Task AddCompany()
     {
         try
         {
             await CompanyAdminSvc.CreateAsync(_newCode.Trim().ToLowerInvariant(), _newName.Trim(),
-                _newDataSourceType, _newConnectionRef.Trim(),
                 string.IsNullOrWhiteSpace(_newWebsiteUrl) ? null : _newWebsiteUrl.Trim(),
                 createdBy: null);
-            _newCode = _newName = _newConnectionRef = _newWebsiteUrl = string.Empty;
-            _newDataSourceType = "sqlserver";
+            _newCode = _newName = _newWebsiteUrl = string.Empty;
             await ReloadAsync();
             if (_addIndicator is not null) _ = _addIndicator.Flash("Added");
         }
@@ -264,8 +240,6 @@
         _editingId = c.Id;
         _editCode = c.Code;
         _editName = c.Name;
-        _editDataSourceType = c.DataSourceType;
-        _editConnectionRef = c.ConnectionRef;
         _editWebsiteUrl = c.WebsiteUrl ?? string.Empty;
         _editIsActive = c.IsActive;
         _editIsHidden = c.IsHidden;
@@ -318,7 +292,6 @@
         try
         {
             await CompanyAdminSvc.UpdateAsync(id, _editCode.Trim().ToLowerInvariant(), _editName.Trim(),
-                _editDataSourceType, _editConnectionRef.Trim(),
                 string.IsNullOrWhiteSpace(_editWebsiteUrl) ? null : _editWebsiteUrl.Trim(),
                 _editIsActive, _editIsHidden);
             _editingId = null;

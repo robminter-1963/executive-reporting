@@ -13,6 +13,7 @@
 @inject TleReportingDashboard.Web.Services.IThemeService ThemeSvc
 @inject IWebHostEnvironment HostEnv
 @inject IConfiguration Configuration
+@inject TleReportingDashboard.Web.Services.IAppSettingsService AppSettingsSvc
 @inject ILogger<MainLayout> Logger
 @implements IDisposable
 
@@ -189,30 +190,34 @@
                         </MudButton>
                     </ActivatorContent>
                     <ChildContent>
-                        <MudMenuItem Icon="@Icons.Material.Filled.Settings"
-                                     OnClick="@(() => Navigation.NavigateTo("/preferences"))">
-                            User Preferences
-                        </MudMenuItem>
+                        @* Order: Report Library → Admin → User Preferences →
+                           Worker Jobs. Report Library + Admin are admin-only
+                           and lead the menu so admins land on the entries
+                           they reach for most. User Preferences is universal
+                           and sits below the admin block. Worker Jobs is the
+                           rarest click and only appears at all when the
+                           Worker URL is configured (Admin → App Settings). *@
                         @if (_hasAdminAccess)
                         {
-                            @* Admin-only Report Library shortcut. Lives next
-                               to Admin in the user menu so admins can jump
-                               to it from any page (Master Dashboard, Schema
-                               Builder, etc.) without bouncing through nav. *@
                             <MudMenuItem Icon="@Icons.Material.Filled.LibraryBooks"
                                          OnClick="@(() => Navigation.NavigateTo("/reports"))">
                                 Report Library
                             </MudMenuItem>
-                            @* Admin entry moved off the Report Library's top
-                               bar (where it was oddly scoped to that page)
-                               into the user menu — reachable from every page.
-                               Visible whenever the user has access to ANY
-                               admin section (global admins always do; the
-                               System Support role gets it via
-                               RPT_roles.admin_sections). *@
                             <MudMenuItem Icon="@Icons.Material.Filled.AdminPanelSettings"
                                          OnClick="@(() => Navigation.NavigateTo("/admin"))">
                                 Admin
+                            </MudMenuItem>
+                        }
+                        <MudMenuItem Icon="@Icons.Material.Filled.Settings"
+                                     OnClick="@(() => Navigation.NavigateTo("/preferences"))">
+                            User Preferences
+                        </MudMenuItem>
+                        @if (_hasAdminAccess && !string.IsNullOrWhiteSpace(_workerDashboardUrl))
+                        {
+                            <MudMenuItem Icon="@Icons.Material.Filled.Engineering"
+                                         Href="@_workerDashboardUrl"
+                                         Target="_blank">
+                                Worker Jobs
                             </MudMenuItem>
                         }
                         @if (_isDevMode && _simUsers.Count > 0)
@@ -394,6 +399,15 @@
     </MudMainContent>
 </MudLayout>
 
+@* Cmd/Ctrl-K palette. Mounted at the layout root so the keybinding
+   listener is registered once per circuit and the overlay can render
+   above any page. Self-contained — owns its open/closed state and the
+   global keydown listener. *@
+@if (!_envAccessDenied)
+{
+    <UniversalSearch />
+}
+
 @code {
     private record Crumb(string Label, string? Url);
 
@@ -426,6 +440,12 @@
     // Admin entry in the user menu — limited-access users like System
     // Support need it visible without being elevated to global admin.
     private bool _hasAdminAccess;
+    // Hangfire dashboard URL surfaced as a "Worker Jobs" link in the
+    // user menu. Loaded from the RPT_app_settings table (admin-set via
+    // Admin → App Settings) with a fallback to the appsettings.json
+    // `Worker:DashboardUrl` key for envs that pre-date the table. Null /
+    // whitespace = hide the menu item entirely.
+    private string? _workerDashboardUrl;
     // TEMP: surface the user's job-function role + per-company access type
     // under their name in the app bar so admins can sanity-check what role
     // they're running as while the role/scope features bake. Refreshed when
@@ -491,14 +511,18 @@
         Navigation.LocationChanged += OnLocationChanged;
         UpdateCurrentPage();
 
-        // Theme tokens load once per layout mount — the theme is global
-        // and changes are admin-driven, so refreshing at this cadence is
-        // fine. A future hook could subscribe to a ThemeSvc.OnChanged
-        // event to re-render every active circuit when an admin saves;
-        // for v1, the next page load picks up the new palette.
+        // Theme tokens load once per layout mount. Per-company override
+        // when CurrentCompany has resolved; otherwise the global default
+        // (master picker, before company is set). The theme service falls
+        // back through company → global → AppTheme.Default in one call,
+        // so the layout doesn't need conditional logic. A future hook could
+        // subscribe to a ThemeSvc.OnChanged event to re-render every active
+        // circuit when an admin saves; for v1, the next page load picks
+        // up the new palette.
         try
         {
-            var theme = await ThemeSvc.GetAsync();
+            var scopeCompanyId = CurrentCompany?.Id == Guid.Empty ? null : CurrentCompany?.Id;
+            var theme = await ThemeSvc.GetAsync(scopeCompanyId);
             _themeCss = theme.ToCssBlock();
         }
         catch (Exception ex)
@@ -591,6 +615,19 @@
                 // Section-scoped admin access (e.g. System Support role).
                 // True for global admins too — they always see Admin.
                 _hasAdminAccess = await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
+
+                // Worker dashboard URL — admin-set via Admin → App Settings.
+                // Falls back to the appsettings.json `Worker:DashboardUrl`
+                // for backward compat with any env that pre-dates the
+                // App Settings table. Empty/null means "hide the link" so
+                // the user menu never dangles a dead Worker Jobs entry.
+                if (_hasAdminAccess)
+                {
+                    var fromDb = await AppSettingsSvc.GetAsync(AppSettingKeys.WorkerDashboardUrl);
+                    _workerDashboardUrl = !string.IsNullOrWhiteSpace(fromDb)
+                        ? fromDb
+                        : Configuration["Worker:DashboardUrl"];
+                }
 
                 // Environment-level role gate. Staging restricts the app to
                 // a configured subset of roles (Admin + QA by default); other

@@ -95,11 +95,17 @@
 
                 <MudSelect T="string" @bind-Value="_chartTypeStr" @bind-Value:after="BuildSummary"
                            Label="Chart" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
-                           Style="max-width: 120px;">
+                           Style="max-width: 160px;">
                     <MudSelectItem T="string" Value="@("")">None</MudSelectItem>
                     <MudSelectItem T="string" Value="@("Bar")">Bar</MudSelectItem>
-                    <MudSelectItem T="string" Value="@("Pie")">Pie</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("HorizontalBar")">Horizontal Bar</MudSelectItem>
+                    @* StackedBar visually equals Bar with a single series. It
+                       only differs once the report has calc columns or
+                       multiple measures — each becomes a stack segment. *@
+                    <MudSelectItem T="string" Value="@("StackedBar")">Stacked Bar</MudSelectItem>
                     <MudSelectItem T="string" Value="@("Line")">Line</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Pie")">Pie</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Donut")">Donut</MudSelectItem>
                 </MudSelect>
                 <HelpHint Text="The chart's X-axis is the Group By field; the Y-axis is the Measure (or Count when there's no measure picked). Pick a Group By and a Measure / Aggregation to populate the chart." />
                 @* Live axis hint — shown only when chart is enabled, so the
@@ -273,9 +279,16 @@
                            Height to MudChart pegs the SVG and pushes the
                            legend out the bottom of the tile. *@
                         <MudItem xs="12" Class="tile-chart-compact" Style="padding: 4px !important;">
-                            <MudChart T="double" ChartType="_chartType" ChartSeries="_chartSeries"
-                                      ChartLabels="_chartLabels"
-                                      Width="100%" Height="100%" />
+                            @if (IsHorizontalBar)
+                            {
+                                @RenderHorizontalBar(true)
+                            }
+                            else
+                            {
+                                <MudChart T="double" ChartType="_chartType" ChartSeries="_chartSeries"
+                                          ChartLabels="_chartLabels"
+                                          Width="100%" Height="100%" />
+                            }
                         </MudItem>
                     }
                     else if (ShowChart)
@@ -283,9 +296,16 @@
                         @* Normal mode: chart and table side by side *@
                         <MudItem xs="12" md="6">
                             <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px; height: 100%;">
-                                <MudChart T="double" ChartType="_chartType" ChartSeries="_chartSeries"
-                                          ChartLabels="_chartLabels"
-                                          Width="100%" Height="350px" />
+                                @if (IsHorizontalBar)
+                                {
+                                    @RenderHorizontalBar(false)
+                                }
+                                else
+                                {
+                                    <MudChart T="double" ChartType="_chartType" ChartSeries="_chartSeries"
+                                              ChartLabels="_chartLabels"
+                                              Width="100%" Height="350px" />
+                                }
                             </MudPaper>
                         </MudItem>
                     }
@@ -995,12 +1015,111 @@
     [Parameter] public EventCallback<string> OnExtraFieldRequired { get; set; }
     public bool HasChart => !string.IsNullOrEmpty(_chartTypeStr) && _chartLabels.Length > 0;
     private bool ShowChart => HasChart && !HideChart;
+    // HorizontalBar is rendered via a custom HTML/CSS path — MudChart
+    // doesn't ship a horizontal variant. The switch returns Bar as a
+    // benign fallback so the few callers that touch _chartType outside
+    // the render guard don't NRE; the actual render is gated by
+    // IsHorizontalBar before MudChart is invoked.
     private ChartType _chartType => _chartTypeStr switch
     {
-        "Pie" => ChartType.Pie,
-        "Line" => ChartType.Line,
-        _ => ChartType.Bar
+        "Pie"        => ChartType.Pie,
+        "Donut"      => ChartType.Donut,
+        "Line"       => ChartType.Line,
+        "StackedBar" => ChartType.StackedBar,
+        _            => ChartType.Bar
     };
+
+    // Custom render flag — gates the HTML/CSS bar list in place of
+    // <MudChart>. Cheap to compute; checked from the render block.
+    private bool IsHorizontalBar => string.Equals(_chartTypeStr, "HorizontalBar", StringComparison.Ordinal);
+
+    // Horizontal-bar palette mirrors MudChart's default 4-tone primary
+    // ramp so the new chart type doesn't visually drift from the rest
+    // of the suite. Series cycle through the palette by index; a single
+    // series uses the first color (a calm primary blue).
+    private static readonly string[] HorizontalBarPalette =
+    {
+        "#1A73E8", "#1E88E5", "#42A5F5", "#90CAF9",
+        "#34A853", "#FBBC04", "#EA4335", "#9334E8"
+    };
+
+    // Custom horizontal-bar renderer. Reuses the already-built
+    // _chartSeries / _chartLabels so it benefits from any data
+    // transforms upstream (truncated labels, calc columns, etc.).
+    // compact = true → tile context; smaller paddings + no header row.
+    private RenderFragment RenderHorizontalBar(bool compact) => __builder =>
+    {
+        if (_chartLabels.Length == 0 || _chartSeries.Count == 0) return;
+
+        // Max across every series + every bar — drives the percent
+        // width so the longest bar fills the row. Empty / all-zero data
+        // collapses to a 1.0 floor so we don't divide by zero and every
+        // bar still renders at 0% width. ChartSeries.Data is MudBlazor's
+        // ChartData<double>; .Values exposes the raw IReadOnlyList<double>.
+        var maxValue = _chartSeries.SelectMany(s => s.Data.Values).DefaultIfEmpty(0).Max();
+        if (maxValue <= 0) maxValue = 1;
+
+        var rowGap = compact ? "2px" : "6px";
+        var labelFont = compact ? "0.7rem" : "0.8rem";
+        var valueFont = compact ? "0.7rem" : "0.8rem";
+
+        <div style="display: flex; flex-direction: column; gap: @rowGap; padding: @(compact ? "4px" : "8px"); width: 100%; height: 100%; overflow-y: auto;">
+            @* Multi-series legend (only when there's more than one series). *@
+            @if (_chartSeries.Count > 1)
+            {
+                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px;">
+                    @for (var si = 0; si < _chartSeries.Count; si++)
+                    {
+                        var color = HorizontalBarPalette[si % HorizontalBarPalette.Length];
+                        var name = _chartSeries[si].Name;
+                        <div style="display: inline-flex; align-items: center; gap: 4px; font-size: @labelFont; color: #5F6368;">
+                            <span style="display: inline-block; width: 10px; height: 10px; background: @color; border-radius: 2px;"></span>
+                            @name
+                        </div>
+                    }
+                </div>
+            }
+            @for (var li = 0; li < _chartLabels.Length; li++)
+            {
+                var labelIdx = li;
+                var label = _chartLabels[labelIdx];
+                <div style="display: flex; flex-direction: column; gap: 2px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: @labelFont; color: #202124;">
+                        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%;">@label</span>
+                        @if (_chartSeries.Count == 1)
+                        {
+                            <span style="font-size: @valueFont; color: #5F6368; font-variant-numeric: tabular-nums;">
+                                @FormatBarValue(_chartSeries[0].Data.Values, labelIdx)
+                            </span>
+                        }
+                    </div>
+                    @* One row of bars per series. Each bar's width is its
+                       own value relative to the global max. With multiple
+                       series the bars stack vertically per label so the
+                       comparison stays readable. *@
+                    @for (var si2 = 0; si2 < _chartSeries.Count; si2++)
+                    {
+                        var color2 = HorizontalBarPalette[si2 % HorizontalBarPalette.Length];
+                        var values = _chartSeries[si2].Data.Values;
+                        var v = labelIdx < values.Count ? values[labelIdx] : 0;
+                        var pct = maxValue > 0 ? Math.Max(0, Math.Min(100, (v / maxValue) * 100)) : 0;
+                        <div title="@($"{_chartSeries[si2].Name}: {v:N2}")"
+                             style="height: 10px; background: #F1F3F4; border-radius: 2px; overflow: hidden;">
+                            <div style="width: @($"{pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}%"); height: 100%; background: @color2; transition: width 240ms ease-out;"></div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    };
+
+    private static string FormatBarValue(IReadOnlyList<double> values, int idx)
+    {
+        if (idx < 0 || idx >= values.Count) return string.Empty;
+        var v = values[idx];
+        if (double.IsNaN(v) || double.IsInfinity(v)) return "—";
+        return Math.Abs(v) >= 1000 ? v.ToString("N0") : v.ToString("N2");
+    }
     private string _selectedGroup = string.Empty;
     private bool _configLoaded;
     private Dictionary<string, string> _customLabels = new();
@@ -2212,7 +2331,7 @@
         var dialog = await DialogService.ShowAsync<CalculatedColumnDialog>(
             existing is null ? "Add Calculated Column" : "Edit Calculated Column",
             parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
 
         var result = await dialog.Result;
         if (result is null || result.Canceled) return;

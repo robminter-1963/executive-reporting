@@ -1,0 +1,81 @@
+@using TleReportingDashboard.Web.Services
+@using MudBlazor
+@inject IAppSettingsService AppSettingsSvc
+@inject ISnackbar Snackbar
+
+<MudStack Spacing="3" Class="pa-2">
+    <MudText Typo="Typo.body2" Color="Color.Secondary" Style="max-width: 720px;">
+        Runtime knobs that ops normally sets in <code>appsettings.json</code>.
+        Putting them here keeps redeploys out of the loop — change a value,
+        click Save, and the new value takes effect on the next page load.
+    </MudText>
+
+    <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px; max-width: 720px;">
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Worker Dashboard URL</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                Full URL to the Hangfire dashboard on the worker host
+                (e.g. <code>https://worker.example.com/hangfire</code>). When
+                set, admins see a <strong>Worker Jobs</strong> link in the
+                user menu that opens this URL in a new tab. Leave blank to
+                hide the link entirely.
+            </MudText>
+            <MudTextField @bind-Value="_workerDashboardUrl"
+                          Placeholder="https://worker.example.com/hangfire"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Engineering" />
+            <MudStack Row Justify="Justify.FlexEnd">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Save"
+                           Disabled="@_saving"
+                           OnClick="Save">
+                    Save
+                </MudButton>
+            </MudStack>
+        </MudStack>
+    </MudPaper>
+</MudStack>
+
+@code {
+    [Parameter] public string CurrentUserEmail { get; set; } = string.Empty;
+
+    private string? _workerDashboardUrl;
+    private bool _saving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _workerDashboardUrl = await AppSettingsSvc.GetAsync(AppSettingKeys.WorkerDashboardUrl);
+    }
+
+    private async Task Save()
+    {
+        // Light client-side validation — the read path normalizes empty
+        // strings to NULL anyway, but trimming here keeps the UI consistent
+        // with what's stored. We don't validate the URL shape further;
+        // ops paste env-specific URLs and weird shapes (host:port without
+        // scheme, etc.) sometimes work in restricted networks.
+        var trimmed = _workerDashboardUrl?.Trim();
+        if (!string.IsNullOrEmpty(trimmed)
+            && !trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && !trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            Snackbar.Add("URL should start with http:// or https://", Severity.Warning);
+            return;
+        }
+        _saving = true;
+        try
+        {
+            await AppSettingsSvc.SetAsync(AppSettingKeys.WorkerDashboardUrl, trimmed, CurrentUserEmail);
+            Snackbar.Add("Worker Dashboard URL saved.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

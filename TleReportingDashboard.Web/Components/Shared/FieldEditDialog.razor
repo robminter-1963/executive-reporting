@@ -1,5 +1,6 @@
 @using TleReportingDashboard.Web.Components.Pages
 @using TleReportingDashboard.Web.Services
+@inject IDialogService DialogService
 
 <MudDialog>
     <TitleContent>
@@ -251,7 +252,7 @@
         </MudGrid>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
                    Disabled="@(string.IsNullOrWhiteSpace(_edited.Id) || string.IsNullOrWhiteSpace(_edited.Label))">
             OK
@@ -296,6 +297,12 @@
     private bool _useSqlExpression;
     private HashSet<string> _selectedLookupIds = new();
     private HashSet<string> _selectedJoinIds = new();
+
+    // JSON snapshot of the editable state at OnInitialized — compared to a
+    // fresh snapshot in IsDirty so any user-visible change (including
+    // multi-select toggles) routes dismissals through the unsaved-changes
+    // prompt. Cheap relative to the dialog's lifetime.
+    private string _initialSnapshot = string.Empty;
 
     // Columns for the currently-picked source table. Loaded on demand via
     // LoadColumnsAsync; synthetic entry injected if the field's current
@@ -402,7 +409,42 @@
         _domainIsLegacy = !string.IsNullOrWhiteSpace(_edited.Domain)
             && AvailableDomains is not null
             && !AvailableDomains.Any(d => string.Equals(d, _edited.Domain, StringComparison.OrdinalIgnoreCase));
+
+        _initialSnapshot = BuildSnapshot();
     }
+
+    // Serialize every editable bit (the FieldEntry plus the SQL toggle and
+    // the two multi-select id sets) into a single string so IsDirty is one
+    // ordinal compare. Selected ids are sorted to make set equality stable.
+    private string BuildSnapshot() =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            _edited.Id,
+            _edited.Label,
+            _edited.Description,
+            _edited.Domain,
+            _edited.DataType,
+            _edited.FieldType,
+            _edited.MaxLength,
+            _edited.CodeSetId,
+            _edited.AllowedAggregationsStr,
+            _edited.SourceTable,
+            _edited.SourceColumn,
+            _edited.SqlExpression,
+            _edited.SqlPreamble,
+            _edited.SqlJoin,
+            _edited.RolesRequired,
+            _edited.ValueSortOrder,
+            _edited.Format,
+            _edited.ApplyTimezoneConversion,
+            _edited.IsUnique,
+            UseSqlExpression = _useSqlExpression,
+            LookupIds = _selectedLookupIds.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
+            JoinIds = _selectedJoinIds.OrderBy(s => s, StringComparer.Ordinal).ToArray()
+        });
+
+    private bool IsDirty =>
+        !string.Equals(_initialSnapshot, BuildSnapshot(), StringComparison.Ordinal);
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -557,7 +599,29 @@
         _selectedJoinIds = joinIds.ToHashSet();
     }
 
-    private void Cancel() => MudDialog?.Cancel();
+    // Routes every dismiss path through the unsaved-changes prompt. Save
+    // re-enters Ok() (which validates Id/Label internally — if either is
+    // blank the dialog stays open and the prompt is effectively a no-op).
+    // DontSave dismisses; Cancel keeps the user where they were.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (!string.IsNullOrWhiteSpace(_edited.Id)
+                        && !string.IsNullOrWhiteSpace(_edited.Label)) Ok();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return;
+                case UnsavedChangesResult.DontSave:
+                    break;
+            }
+        }
+        MudDialog?.Cancel();
+    }
 
     private void Ok()
     {

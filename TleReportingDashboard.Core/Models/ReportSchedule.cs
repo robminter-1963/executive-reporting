@@ -10,6 +10,24 @@ public enum ScheduleKind
     Individual = 1
 }
 
+// For Individual schedules, drives WHO inside the team gets a copy.
+//   Members — one email per team member, each scope-filtered to their
+//             own ext id. (Existing default; matches legacy behavior.)
+//   Manager — one email to the team's manager only, scope-filtered to
+//             the team's roll-up. All-access managers receive the
+//             unfiltered report.
+//   Both    — manager AND every member, each with the appropriate
+//             scope.
+// Persisted as the lower-case string in RPT_report_schedules.team_fanout
+// (CHECK constraint enforces values). Distribution schedules ignore
+// this field entirely.
+public enum TeamFanout
+{
+    Members = 0,
+    Manager = 1,
+    Both = 2
+}
+
 public class ReportSchedule
 {
     public Guid Id { get; set; }
@@ -30,6 +48,11 @@ public class ReportSchedule
     // connection, and team_id is opaque outside that context.
     public int? TeamId { get; set; }
     public Guid? TeamConnectionId { get; set; }
+
+    // Individual fan-out strategy — Members (legacy default), Manager,
+    // or Both. See TeamFanout for semantics. Distribution schedules
+    // ignore this field.
+    public TeamFanout TeamFanout { get; set; } = TeamFanout.Members;
 
     // Distribution mode — required when Kind == Distribution and
     // the schedule isn't relying on the legacy owner-email fallback.

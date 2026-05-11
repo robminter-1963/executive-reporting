@@ -41,5 +41,15 @@
     <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.2" />
     <PackageReference Include="Npgsql" Version="9.0.2" />
+    <!--
+      QuestPDF — PDF generation for the Excel/CSV/PDF export menu and the
+      scheduled-report attachment options. Community license is free for
+      any company with annual revenue < $1M, plus open-source / non-profit
+      / personal use. License type is set programmatically at startup
+      (QuestPDF.Settings.License) in both Web/Program.cs and
+      Worker/Program.cs — re-evaluate if revenue threshold changes.
+      https://www.questpdf.com/license
+    -->
+    <PackageReference Include="QuestPDF" Version="2025.1.5" />
   </ItemGroup>
 </Project>

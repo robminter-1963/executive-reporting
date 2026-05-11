@@ -1,0 +1,184 @@
+@using MudBlazor
+@implements IDisposable
+
+@* Master Dashboard's first-impression strip. Renders a time-of-day
+   greeting + a "what changed since last visit" delta when the timestamp
+   is available.
+
+   Layout: fixed-position banner anchored just below the global app bar.
+   Doesn't take flex/flow space, so the rest of the page doesn't shift
+   when the banner appears or dismisses. CSS transform animates a smooth
+   slide-down on mount and slide-up on dismiss.
+
+   Dismissal: a close X dismisses immediately; an 8-second auto-timer
+   dismisses on its own if the user does nothing. Either path fires
+   OnDismissed so the parent can flip the once-per-session flag and
+   stop re-rendering the strip on subsequent page mounts. *@
+<div class="@($"landing-greeting {( _visible ? "visible" : "hidden")}")">
+    <MudPaper Elevation="3" Class="pa-3"
+              Style="border: 1px solid var(--border-default, #E8EAED); border-radius: 8px; background: linear-gradient(90deg, var(--surface-card, #FFFFFF) 0%, rgba(26, 115, 232, 0.06) 100%); position: relative;">
+        <MudIconButton Icon="@Icons.Material.Filled.Close"
+                       Size="Size.Small"
+                       Style="position: absolute; top: 4px; right: 4px;"
+                       title="Dismiss"
+                       OnClick="DismissAsync" />
+        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap" Spacing="2"
+                  Style="padding-right: 32px;">
+            <MudStack Spacing="0">
+                <MudText Typo="Typo.h6" Style="font-weight: 600; line-height: 1.2;">
+                    @GreetingText
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @SubText
+                </MudText>
+            </MudStack>
+            @if (UpdatedSinceCount > 0)
+            {
+                <MudChip T="string" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                         Icon="@Icons.Material.Filled.Bolt">
+                    @UpdatedSinceCount @(UpdatedSinceCount == 1 ? "report updated" : "reports updated") since your last visit
+                </MudChip>
+            }
+        </MudStack>
+    </MudPaper>
+</div>
+
+<style>
+    /* Fixed banner sits just below the app bar (MudAppBar default 64px),
+       above page content but below any modal/menu z-indices. Width
+       matches the typical page max-width with a soft horizontal cap so
+       it doesn't sprawl on ultra-wide displays. */
+    .landing-greeting {
+        position: fixed;
+        top: 72px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-120%);
+        z-index: 1100;
+        width: calc(100% - 32px);
+        max-width: 1200px;
+        opacity: 0;
+        pointer-events: none;
+        transition: transform 280ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity 220ms ease-out;
+    }
+    .landing-greeting.visible {
+        transform: translateX(-50%) translateY(0);
+        opacity: 1;
+        pointer-events: auto;
+    }
+    @@media (prefers-reduced-motion: reduce) {
+        .landing-greeting { transition: opacity 120ms ease-out; }
+        .landing-greeting,
+        .landing-greeting.visible { transform: translateX(-50%); }
+    }
+</style>
+
+@code {
+    [Parameter] public string DisplayName { get; set; } = string.Empty;
+    [Parameter] public DateTime? LastSeenUtc { get; set; }
+    [Parameter] public int UpdatedSinceCount { get; set; }
+    [Parameter] public EventCallback OnDismissed { get; set; }
+    [Parameter] public int AutoDismissSeconds { get; set; } = 8;
+
+    private bool _visible;
+    private CancellationTokenSource? _dismissCts;
+    private bool _dismissed;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Two-phase reveal: render at translateY(-120%) on first
+            // pass, then flip to .visible on the next frame so the
+            // browser actually animates the transform. Without this
+            // delay the element appears already in-position with no
+            // slide. ~16ms is one frame at 60Hz; small enough not to
+            // be noticed, large enough for the CSS class swap to
+            // register as a transition.
+            await Task.Delay(16);
+            _visible = true;
+            StateHasChanged();
+
+            _dismissCts = new CancellationTokenSource();
+            _ = AutoDismissAsync(_dismissCts.Token);
+        }
+    }
+
+    private async Task AutoDismissAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, AutoDismissSeconds)), ct);
+            await DismissAsync();
+        }
+        catch (TaskCanceledException) { /* manual dismiss won the race */ }
+    }
+
+    private async Task DismissAsync()
+    {
+        if (_dismissed) return;
+        _dismissed = true;
+        _dismissCts?.Cancel();
+        _visible = false;          // CSS slides up
+        StateHasChanged();
+        // Wait for the transform animation to finish before notifying
+        // the parent — once the parent flips its dismissed flag and
+        // re-renders, this component is removed from the DOM and the
+        // slide-up animation would be cut short mid-flight.
+        await Task.Delay(300);
+        if (OnDismissed.HasDelegate)
+            await OnDismissed.InvokeAsync();
+    }
+
+    public void Dispose()
+    {
+        _dismissCts?.Cancel();
+        _dismissCts?.Dispose();
+    }
+
+    private string GreetingText
+    {
+        get
+        {
+            var hour = DateTime.Now.Hour;
+            var partOfDay = hour switch
+            {
+                >= 5 and < 12 => "Good morning",
+                >= 12 and < 17 => "Good afternoon",
+                >= 17 and < 21 => "Good evening",
+                _ => "Welcome back"
+            };
+            var name = string.IsNullOrWhiteSpace(DisplayName) ? string.Empty : ExtractFirstName(DisplayName);
+            return string.IsNullOrEmpty(name) ? $"{partOfDay}." : $"{partOfDay}, {name}.";
+        }
+    }
+
+    private string SubText
+    {
+        get
+        {
+            if (LastSeenUtc is null)
+                return "Welcome to your dashboard.";
+            var local = LastSeenUtc.Value.ToLocalTime();
+            var span = DateTime.Now - local;
+            string when = span switch
+            {
+                { TotalMinutes: < 1 } => "moments ago",
+                { TotalMinutes: < 60 } => $"{(int)span.TotalMinutes}m ago",
+                { TotalHours: < 12 } => $"{(int)span.TotalHours}h ago",
+                { TotalDays: < 1 } => "earlier today",
+                { TotalDays: < 2 } => "yesterday",
+                { TotalDays: < 7 } => $"{(int)span.TotalDays} days ago",
+                _ => local.ToString("MMM d")
+            };
+            return $"Last visit: {when}.";
+        }
+    }
+
+    private static string ExtractFirstName(string raw)
+    {
+        var trimmed = raw.Trim();
+        if (trimmed.Contains('@')) return trimmed;
+        var space = trimmed.IndexOf(' ');
+        return space > 0 ? trimmed[..space] : trimmed;
+    }
+}

@@ -316,11 +316,11 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
             @"INSERT INTO EMPOWER.RPT_report_schedules
               (id, report_id, owner_id, owner_email, cron_expression, schedule_pattern, start_date, end_date,
                subject, recipients, cc_recipients, bcc_recipients,
-               kind, team_id, team_connection_id, dist_email,
+               kind, team_id, team_connection_id, dist_email, team_fanout,
                attachment_format, include_preview, is_active, created_at)
               VALUES (@Id, @ReportId, @OwnerId, @OwnerEmail, @Cron, @Pattern, @StartDate, @EndDate,
                       @Subject, @Recipients, @Cc, @Bcc,
-                      @Kind, @TeamId, @TeamConnId, @DistEmail,
+                      @Kind, @TeamId, @TeamConnId, @DistEmail, @TeamFanout,
                       @Format, @Preview, @Active, @CreatedAt)", conn);
         AddScheduleParams(cmd, schedule);
         cmd.Parameters.Add(new SqlParameter("@CreatedAt", schedule.CreatedAt));
@@ -339,6 +339,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
               subject = @Subject,
               recipients = @Recipients, cc_recipients = @Cc, bcc_recipients = @Bcc,
               kind = @Kind, team_id = @TeamId, team_connection_id = @TeamConnId, dist_email = @DistEmail,
+              team_fanout = @TeamFanout,
               attachment_format = @Format, include_preview = @Preview, is_active = @Active
               WHERE id = @Id AND owner_id = @OwnerId", conn);
         AddScheduleParams(cmd, schedule);
@@ -370,6 +371,15 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@TeamId", (object?)s.TeamId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@TeamConnId", (object?)s.TeamConnectionId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@DistEmail", (object?)s.DistEmail ?? DBNull.Value));
+        // Persisted as the lowercase string ('members' / 'manager' / 'both')
+        // to match the team_fanout CHECK constraint and stay readable in
+        // SSMS — same convention as @Kind above.
+        cmd.Parameters.Add(new SqlParameter("@TeamFanout", s.TeamFanout switch
+        {
+            TeamFanout.Manager => "manager",
+            TeamFanout.Both => "both",
+            _ => "members"
+        }));
         cmd.Parameters.Add(new SqlParameter("@Format", s.AttachmentFormat));
         cmd.Parameters.Add(new SqlParameter("@Preview", s.IncludePreview));
         cmd.Parameters.Add(new SqlParameter("@Active", s.IsActive));
@@ -511,6 +521,10 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
                 TeamId = TryGetOptionalInt(reader, "team_id"),
                 TeamConnectionId = TryGetOptionalGuid(reader, "team_connection_id"),
                 DistEmail = TryGetOptionalString(reader, "dist_email"),
+                // Defensive — envs without the 2026-05-09_17-00 migration
+                // return null here and fall through to the legacy Members
+                // fan-out, preserving every existing schedule's behavior.
+                TeamFanout = ParseTeamFanout(TryGetOptionalString(reader, "team_fanout")),
                 AttachmentFormat = reader.GetString(reader.GetOrdinal("attachment_format")),
                 IncludePreview = reader.GetBoolean(reader.GetOrdinal("include_preview")),
                 IsActive = reader.GetBoolean(reader.GetOrdinal("is_active")),
@@ -588,4 +602,11 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         string.Equals(raw, "individual", StringComparison.OrdinalIgnoreCase)
             ? ScheduleKind.Individual
             : ScheduleKind.Distribution;
+
+    private static TeamFanout ParseTeamFanout(string? raw) => raw?.ToLowerInvariant() switch
+    {
+        "manager" => TeamFanout.Manager,
+        "both"    => TeamFanout.Both,
+        _         => TeamFanout.Members
+    };
 }

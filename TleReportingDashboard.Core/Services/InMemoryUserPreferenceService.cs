@@ -22,4 +22,11 @@ public class InMemoryUserPreferenceService : IUserPreferenceService
         _store[preference.UserId] = preference;
         return Task.CompletedTask;
     }
+
+    public Task TouchLastMasterDashboardSeenAsync(string userId)
+    {
+        if (_store.TryGetValue(userId, out var pref))
+            pref.LastMasterDashboardSeen = DateTime.UtcNow;
+        return Task.CompletedTask;
+    }
 }

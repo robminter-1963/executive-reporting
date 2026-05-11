@@ -17,6 +17,13 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
+    // QuestPDF licensing — Community is free for any use as long as the
+    // company's annual revenue is under $1M (or for OSS / personal /
+    // non-profit use). Set once per process before any PDF is generated.
+    // Re-evaluate when the revenue threshold changes — the package will
+    // throw at PDF-render time if no license type is set.
+    QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+
     var builder = WebApplication.CreateBuilder(args);
 
     // Serilog. The relative path "Logs/log-.txt" resolves against the
@@ -84,6 +91,7 @@ try
     builder.Services.AddScoped<UserPreferenceState>();
     builder.Services.AddScoped<CurrentCompanyState>();
     builder.Services.AddScoped<LibraryNavState>();
+    builder.Services.AddScoped<LandingGreetingState>();
 
     // Admin allowlist (email-based; swap for claim-based later)
     builder.Services.Configure<AdminOptions>(builder.Configuration.GetSection("Admins"));
@@ -133,6 +141,7 @@ try
     builder.Services.AddSingleton<DataverseSchemaClient>();
     builder.Services.AddScoped<SchemaBuilderService>();
     builder.Services.AddScoped<ILibrarySectionService, LibrarySectionService>();
+    builder.Services.AddScoped<IAppSettingsService, AppSettingsService>();
 
     // Per-company data-source connection resolver — reads RPT_company_connections
     // to materialize the ADO.NET connection string for the requested company.
@@ -171,6 +180,7 @@ try
         builder.Services.AddSingleton<ISchemaConfigStore, SchemaConfigStore>();
         builder.Services.AddScoped<ICustomPrimaryTableService, CustomPrimaryTableService>();
         builder.Services.AddScoped<ISchemaConfigHistoryService, SchemaConfigHistoryService>();
+        builder.Services.AddScoped<IFavoriteService, FavoriteService>();
     }
     else
     {
@@ -193,6 +203,7 @@ try
         // returns an empty list and accepts deletes as no-ops. Keeps the
         // Admin → Schema History tab from crashing in dev-without-DB mode.
         builder.Services.AddSingleton<ISchemaConfigHistoryService, NoopSchemaConfigHistoryService>();
+        builder.Services.AddSingleton<IFavoriteService, InMemoryFavoriteService>();
     }
 
     // Auth auto-detect: Entra ID or stub

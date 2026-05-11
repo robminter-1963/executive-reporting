@@ -461,7 +461,7 @@
         };
         var dialog = await DialogService.ShowAsync<CopyConnectionsDialog>(
             "Copy connections from another company", dialogParams,
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false, MaxWidth = MaxWidth.Small, FullWidth = true });
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not CopyConnectionsDialog.Result picked)
             return;

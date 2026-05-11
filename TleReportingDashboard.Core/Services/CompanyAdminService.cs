@@ -39,7 +39,7 @@ public sealed class CompanyAdminService : ICompanyAdminService
                 // is_hidden read defensively via COL_LENGTH for envs that
                 // haven't applied the 2026-05-05_18-00 migration yet.
                 await using var cmd = new SqlCommand(@"
-                    SELECT id, code, name, data_source_type, connection_ref, is_active,
+                    SELECT id, code, name, is_active,
                            created_at, updated_at, logo, logo_content_type, display_order, website_url,
                            CASE WHEN COL_LENGTH('EMPOWER.RPT_companies','is_hidden') IS NULL
                                 THEN CAST(0 AS BIT) ELSE is_hidden END AS is_hidden
@@ -52,17 +52,15 @@ public sealed class CompanyAdminService : ICompanyAdminService
                         reader.GetGuid(0),
                         reader.GetString(1),
                         reader.GetString(2),
-                        reader.GetString(3),
-                        reader.GetString(4),
-                        reader.GetBoolean(5),
-                        reader.GetDateTime(6),
-                        reader.GetDateTime(7))
+                        reader.GetBoolean(3),
+                        reader.GetDateTime(4),
+                        reader.GetDateTime(5))
                     {
-                        Logo = reader.IsDBNull(8) ? null : (byte[])reader.GetValue(8),
-                        LogoContentType = reader.IsDBNull(9) ? null : reader.GetString(9),
-                        DisplayOrder = reader.GetInt32(10),
-                        WebsiteUrl = reader.IsDBNull(11) ? null : reader.GetString(11),
-                        IsHidden = reader.GetBoolean(12)
+                        Logo = reader.IsDBNull(6) ? null : (byte[])reader.GetValue(6),
+                        LogoContentType = reader.IsDBNull(7) ? null : reader.GetString(7),
+                        DisplayOrder = reader.GetInt32(8),
+                        WebsiteUrl = reader.IsDBNull(9) ? null : reader.GetString(9),
+                        IsHidden = reader.GetBoolean(10)
                     });
                 }
                 return rows;
@@ -99,39 +97,37 @@ public sealed class CompanyAdminService : ICompanyAdminService
         _logger.LogInformation("Company display order updated: {Count} companies re-ordered", orderedIds.Count);
     }
 
-    public async Task<CompanyRecord> CreateAsync(string code, string name, string dataSourceType, string connectionRef,
+    public async Task<CompanyRecord> CreateAsync(string code, string name,
                                                   string? websiteUrl, string? createdBy, CancellationToken ct = default)
     {
-        Validate(code, name, dataSourceType, connectionRef);
+        Validate(code, name);
         var id = Guid.NewGuid();
         var now = DateTime.UtcNow;
 
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var cmd = new SqlCommand(@"
-            INSERT INTO EMPOWER.RPT_companies (id, code, name, data_source_type, connection_ref, website_url, is_active)
-            VALUES (@id, @code, @name, @type, @ref, @url, 1);", conn);
+            INSERT INTO EMPOWER.RPT_companies (id, code, name, website_url, is_active)
+            VALUES (@id, @code, @name, @url, 1);", conn);
         cmd.Parameters.Add(new SqlParameter("@id", id));
         cmd.Parameters.Add(new SqlParameter("@code", code));
         cmd.Parameters.Add(new SqlParameter("@name", name));
-        cmd.Parameters.Add(new SqlParameter("@type", dataSourceType));
-        cmd.Parameters.Add(new SqlParameter("@ref", connectionRef));
         cmd.Parameters.Add(new SqlParameter("@url", (object?)NormalizeUrl(websiteUrl) ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
 
         _registry.Invalidate();
         _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company created: {Code} by {CreatedBy}", code, createdBy ?? "unknown");
-        return new CompanyRecord(id, code, name, dataSourceType, connectionRef, true, now, now)
+        return new CompanyRecord(id, code, name, true, now, now)
         {
             WebsiteUrl = NormalizeUrl(websiteUrl)
         };
     }
 
-    public async Task UpdateAsync(Guid id, string code, string name, string dataSourceType, string connectionRef,
+    public async Task UpdateAsync(Guid id, string code, string name,
                                    string? websiteUrl, bool isActive, bool isHidden, CancellationToken ct = default)
     {
-        Validate(code, name, dataSourceType, connectionRef);
+        Validate(code, name);
 
         // Conditional UPDATE form: assigns is_hidden only when the column
         // exists, so this method works on envs that haven't yet applied
@@ -140,12 +136,12 @@ public sealed class CompanyAdminService : ICompanyAdminService
         var hasHiddenColumn = await ColumnExistsAsync("EMPOWER.RPT_companies", "is_hidden", ct);
         var sql = hasHiddenColumn
             ? @"UPDATE EMPOWER.RPT_companies
-                   SET code = @code, name = @name, data_source_type = @type, connection_ref = @ref,
+                   SET code = @code, name = @name,
                        website_url = @url, is_active = @active, is_hidden = @hidden,
                        updated_at = SYSUTCDATETIME()
                  WHERE id = @id;"
             : @"UPDATE EMPOWER.RPT_companies
-                   SET code = @code, name = @name, data_source_type = @type, connection_ref = @ref,
+                   SET code = @code, name = @name,
                        website_url = @url, is_active = @active,
                        updated_at = SYSUTCDATETIME()
                  WHERE id = @id;";
@@ -156,8 +152,6 @@ public sealed class CompanyAdminService : ICompanyAdminService
         cmd.Parameters.Add(new SqlParameter("@id", id));
         cmd.Parameters.Add(new SqlParameter("@code", code));
         cmd.Parameters.Add(new SqlParameter("@name", name));
-        cmd.Parameters.Add(new SqlParameter("@type", dataSourceType));
-        cmd.Parameters.Add(new SqlParameter("@ref", connectionRef));
         cmd.Parameters.Add(new SqlParameter("@url", (object?)NormalizeUrl(websiteUrl) ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@active", isActive));
         if (hasHiddenColumn)
@@ -285,12 +279,9 @@ public sealed class CompanyAdminService : ICompanyAdminService
         _logger.LogInformation("Company logo cleared: {Id}", id);
     }
 
-    private static void Validate(string code, string name, string dataSourceType, string connectionRef)
+    private static void Validate(string code, string name)
     {
-        if (string.IsNullOrWhiteSpace(code))           throw new ArgumentException("Code is required.", nameof(code));
-        if (string.IsNullOrWhiteSpace(name))           throw new ArgumentException("Name is required.", nameof(name));
-        if (dataSourceType is not ("sqlserver" or "postgres"))
-            throw new ArgumentException("data_source_type must be 'sqlserver' or 'postgres'.", nameof(dataSourceType));
-        if (string.IsNullOrWhiteSpace(connectionRef))  throw new ArgumentException("ConnectionRef is required.", nameof(connectionRef));
+        if (string.IsNullOrWhiteSpace(code)) throw new ArgumentException("Code is required.", nameof(code));
+        if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Name is required.", nameof(name));
     }
 }

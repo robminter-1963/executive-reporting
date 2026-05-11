@@ -1,0 +1,311 @@
+@using MudBlazor
+@using TleReportingDashboard.Web.Models
+@using TleReportingDashboard.Web.Services
+@inject IReportService ReportService
+@inject ISharingService SharingService
+@inject IAdminService AdminService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* Cmd/Ctrl-K palette. Lazy-loads the user's report inventory the first
+   time it opens (then caches for the page lifetime), filters by Name +
+   InternalName as the user types, navigates on Enter / click. *@
+@if (_open)
+{
+    <div class="us-overlay" @onclick="CloseAsync">
+        <div class="us-palette" @onclick:stopPropagation="true">
+            <div class="us-input-row">
+                <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" Style="color: #5F6368;" />
+                <input id="universal-search-input"
+                       class="us-input"
+                       placeholder="Search reports… (Esc to close, ↑/↓ to navigate, Enter to open)"
+                       value="@_query"
+                       @oninput="OnQueryChanged"
+                       @onkeydown="OnKeyDown" />
+                <span class="us-kbd">Esc</span>
+            </div>
+            <div class="us-results">
+                @if (_loading)
+                {
+                    <div class="us-empty">Loading reports…</div>
+                }
+                else if (FilteredResults.Count == 0)
+                {
+                    <div class="us-empty">@(string.IsNullOrWhiteSpace(_query) ? "Start typing a report name." : "No matches.")</div>
+                }
+                else
+                {
+                    @for (var i = 0; i < FilteredResults.Count; i++)
+                    {
+                        var idx = i;
+                        var r = FilteredResults[idx];
+                        var label = string.IsNullOrWhiteSpace(r.InternalName) ? r.Name : r.InternalName!;
+                        var sub = string.IsNullOrWhiteSpace(r.InternalName) || string.Equals(r.InternalName, r.Name, StringComparison.Ordinal)
+                                    ? r.Category
+                                    : $"tile: {r.Name}";
+                        <div class="@($"us-row{( idx == _activeIndex ? " us-row-active" : "")}")"
+                             @onclick="() => OpenAsync(r.Id)"
+                             @onmouseenter="() => _activeIndex = idx">
+                            <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" Style="color: #5F6368;" />
+                            <div class="us-row-text">
+                                <div class="us-row-title">@label</div>
+                                @if (!string.IsNullOrWhiteSpace(sub))
+                                {
+                                    <div class="us-row-sub">@sub</div>
+                                }
+                            </div>
+                            <span class="us-kbd-hint">@(idx == _activeIndex ? "↵" : "")</span>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .us-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 1500;
+        background: rgba(32, 33, 36, 0.45);
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 96px;
+    }
+    .us-palette {
+        width: min(640px, 90vw);
+        background: var(--surface-card, #FFFFFF);
+        border-radius: 8px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.32);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    .us-input-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-default, #DADCE0);
+    }
+    .us-input {
+        flex: 1 1 auto;
+        border: none;
+        outline: none;
+        font-size: 0.95rem;
+        font-family: inherit;
+        background: transparent;
+        color: var(--text-primary, #202124);
+    }
+    .us-kbd, .us-kbd-hint {
+        font-size: 0.7rem;
+        font-family: monospace;
+        color: #5F6368;
+        background: #F1F3F4;
+        padding: 1px 6px;
+        border-radius: 3px;
+        border: 1px solid #DADCE0;
+    }
+    .us-kbd-hint { background: transparent; border-color: transparent; padding: 0; }
+    .us-results {
+        max-height: 360px;
+        overflow-y: auto;
+    }
+    .us-empty {
+        padding: 24px;
+        text-align: center;
+        color: #5F6368;
+        font-size: 0.85rem;
+    }
+    .us-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        cursor: pointer;
+        border-left: 3px solid transparent;
+    }
+    .us-row-active {
+        background: rgba(26, 115, 232, 0.08);
+        border-left-color: #1A73E8;
+    }
+    .us-row-text { flex: 1 1 auto; min-width: 0; }
+    .us-row-title {
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: var(--text-primary, #202124);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .us-row-sub {
+        font-size: 0.75rem;
+        color: #5F6368;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+</style>
+
+@code {
+    private bool _open;
+    private bool _loading;
+    private bool _loaded;
+    private string _query = string.Empty;
+    private int _activeIndex;
+    private List<SavedReport> _all = new();
+    private DotNetObjectReference<UniversalSearch>? _selfRef;
+
+    // Cap displayed matches — palette is keyboard-driven and a long list
+    // is unhelpful (the user should refine the query, not scroll).
+    private const int MaxResults = 12;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef = DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("startUniversalSearchHotkey", _selfRef); }
+            catch { /* JS file failed to load; hotkey is unavailable but the rest of the app keeps working */ }
+        }
+    }
+
+    [JSInvokable]
+    public async Task OpenUniversalSearch()
+    {
+        if (_open) return;
+        _open = true;
+        _activeIndex = 0;
+        StateHasChanged();
+        // Lazy-load the inventory the first time the palette opens. On
+        // subsequent opens the cached list is reused — the user can hit
+        // refresh to re-populate. Background reload could be wired later.
+        if (!_loaded) await LoadInventoryAsync();
+        // Focus the input on the next frame so the cursor lands without
+        // an extra click.
+        try { await JS.InvokeVoidAsync("focusUniversalSearchInput"); }
+        catch { }
+    }
+
+    private async Task LoadInventoryAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            var userId = auth.User.FindFirst("oid")?.Value
+                         ?? auth.User.Identity?.Name
+                         ?? "anonymous";
+            var email = auth.User.FindFirst("preferred_username")?.Value ?? string.Empty;
+            var isAdmin = AdminService.IsAdmin(email);
+
+            // Admins get every report system-wide (it's the same surface
+            // they reach via Other Users' Reports). Everyone else sees
+            // their own + reports shared with them — same scoping the
+            // Library uses.
+            var mineTask = isAdmin
+                ? ReportService.GetAllReportsAsync()
+                : ReportService.GetReportsAsync(userId);
+            var sharedTask = isAdmin
+                ? Task.FromResult(new List<SavedReport>())
+                : SharingService.GetSharedWithMeAsync(userId);
+            await Task.WhenAll(mineTask, sharedTask);
+
+            var all = (await mineTask)
+                .Concat(await sharedTask)
+                .GroupBy(r => r.Id)
+                .Select(g => g.First())
+                .OrderBy(r => string.IsNullOrWhiteSpace(r.InternalName) ? r.Name : r.InternalName,
+                         StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            _all = all;
+            _loaded = true;
+        }
+        catch
+        {
+            _all = new();
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private List<SavedReport> FilteredResults
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_query)) return _all.Take(MaxResults).ToList();
+            var q = _query.Trim();
+            return _all
+                .Where(r =>
+                    (!string.IsNullOrEmpty(r.Name) && r.Name.Contains(q, StringComparison.OrdinalIgnoreCase))
+                    || (!string.IsNullOrEmpty(r.InternalName) && r.InternalName!.Contains(q, StringComparison.OrdinalIgnoreCase))
+                    || (!string.IsNullOrEmpty(r.Category) && r.Category!.Contains(q, StringComparison.OrdinalIgnoreCase)))
+                .Take(MaxResults)
+                .ToList();
+        }
+    }
+
+    private void OnQueryChanged(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? string.Empty;
+        _activeIndex = 0;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        var results = FilteredResults;
+        switch (e.Key)
+        {
+            case "Escape":
+                await CloseAsync();
+                break;
+            case "ArrowDown":
+                if (results.Count > 0)
+                    _activeIndex = (_activeIndex + 1) % results.Count;
+                break;
+            case "ArrowUp":
+                if (results.Count > 0)
+                    _activeIndex = (_activeIndex - 1 + results.Count) % results.Count;
+                break;
+            case "Enter":
+                if (_activeIndex >= 0 && _activeIndex < results.Count)
+                    await OpenAsync(results[_activeIndex].Id);
+                break;
+        }
+    }
+
+    private async Task OpenAsync(Guid reportId)
+    {
+        await CloseAsync();
+        Navigation.NavigateTo($"/viewer/{reportId}/detail");
+    }
+
+    private Task CloseAsync()
+    {
+        _open = false;
+        _query = string.Empty;
+        _activeIndex = 0;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            // Fire-and-forget — the circuit is tearing down and there's no
+            // one to await us. JS-side stop is idempotent.
+            _ = JS.InvokeVoidAsync("stopUniversalSearchHotkey").AsTask();
+        }
+        catch { }
+        _selfRef?.Dispose();
+    }
+}

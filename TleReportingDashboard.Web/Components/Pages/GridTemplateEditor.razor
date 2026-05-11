@@ -11,6 +11,8 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
 
 <PageTitle>@(_isNew ? "New Grid Template" : _template.Name) - Executive Reporting Suite</PageTitle>
 
@@ -331,6 +333,68 @@
 
     private IDisposable? _editorScope;
 
+    // ── Unsaved-changes guard ──
+    private string _dirtySnapshot = string.Empty;
+    private bool _beforeUnloadArmed;
+    private IDisposable? _navHandlerRegistration;
+
+    private string ComputeDirtySnapshot()
+    {
+        try
+        {
+            var snap = new
+            {
+                _template.Name,
+                _template.Description,
+                _template.ConnectionId,
+                _template.IsShared,
+                FieldIds = _orderedFields.Select(f => f.Id).ToList(),
+                Hidden = _hiddenColumns.OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList(),
+                Labels = _customColumnLabels.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase)
+                                            .ToDictionary(k => k.Key, k => k.Value),
+                _defaultSortField,
+                _defaultSortDir
+            };
+            return System.Text.Json.JsonSerializer.Serialize(snap);
+        }
+        catch { return Guid.NewGuid().ToString(); }
+    }
+
+    private void MarkClean() => _dirtySnapshot = ComputeDirtySnapshot();
+
+    private bool IsDirty =>
+        !string.Equals(_dirtySnapshot, ComputeDirtySnapshot(), StringComparison.Ordinal);
+
+    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
+    {
+        if (!IsDirty) return;
+        var choice = await TleReportingDashboard.Web.Components.Shared.UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.Save:
+                await Save(navigateAfter: false);
+                if (IsDirty) context.PreventNavigation();
+                break;
+            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.DontSave:
+                MarkClean();
+                break;
+            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.Cancel:
+                context.PreventNavigation();
+                break;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var armNow = IsDirty;
+        if (armNow != _beforeUnloadArmed)
+        {
+            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
+            catch { }
+            _beforeUnloadArmed = armNow;
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         _editorScope = EditorMode.Enter();
@@ -410,6 +474,9 @@
             _template.ConnectionId = defaultConn?.Id;
             _domains = await SchemaService.GetDomainGroupsAsync(connectionId: _template.ConnectionId);
         }
+
+        _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
+        MarkClean();
     }
 
     private async Task OnConnectionChanged(Guid? newId)
@@ -561,7 +628,9 @@
         _orderedFields = ordered;
     }
 
-    private async Task Save()
+    private async Task Save() => await Save(navigateAfter: true);
+
+    private async Task Save(bool navigateAfter)
     {
         if (!_template.ConnectionId.HasValue)
         {
@@ -598,7 +667,10 @@
             else
                 await TemplateService.UpdateTemplateAsync(_template);
 
-            Navigation.NavigateTo("/grid-templates");
+            MarkClean();
+            // Skipped when invoked from the unsaved-changes prompt's
+            // Save branch — the originating navigation will resume.
+            if (navigateAfter) Navigation.NavigateTo("/grid-templates");
         }
         catch (Exception ex)
         {
@@ -610,5 +682,13 @@
     {
         _editorScope?.Dispose();
         _editorScope = null;
+        _navHandlerRegistration?.Dispose();
+        _navHandlerRegistration = null;
+        if (_beforeUnloadArmed)
+        {
+            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
+            catch { }
+            _beforeUnloadArmed = false;
+        }
     }
 }

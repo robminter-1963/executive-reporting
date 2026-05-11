@@ -1,3 +1,10 @@
+@inject IDialogService DialogService
+
+@* "Add tile" picker. No initial selection, so dirty = the user has
+   picked a report (or chosen a non-default section). Callers must open
+   with DialogOptions { BackdropClick = false, CloseOnEscapeKey = false }
+   so backdrop / Esc are routed through TryCancelAsync. *@
+
 <MudDialog>
     <TitleContent>
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
@@ -89,7 +96,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
                    Disabled="@(_selected is null)">
             Add
@@ -110,8 +117,38 @@
     private int? _selectedSectionId;
 
     private void Select(SavedReport report) => _selected = report;
-    private void Cancel() => MudDialog?.Cancel();
     private void Ok() => MudDialog?.Close(DialogResult.Ok(new AddTileResult(_selected!.Id, _selectedSectionId)));
+
+    // No initial value — dirty when a report has been picked or a
+    // non-default section was chosen. Either signal means the user has
+    // made progress that an accidental Esc would silently throw away.
+    private bool IsDirty => _selected is not null || _selectedSectionId is not null;
+
+    // Routes every dismiss path (Cancel button, Esc, backdrop click)
+    // through the unsaved-changes prompt. Save runs the OK handler
+    // (only when a report has been picked); DontSave dismisses; Cancel
+    // keeps the dialog open.
+    private async Task TryCancelAsync()
+    {
+        if (!IsDirty)
+        {
+            MudDialog?.Cancel();
+            return;
+        }
+
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                if (_selected is not null) Ok();
+                return;
+            case UnsavedChangesResult.Cancel:
+                return; // stay
+            case UnsavedChangesResult.DontSave:
+                MudDialog?.Cancel();
+                return;
+        }
+    }
 
     // Returned to the caller via DialogResult.Data so adding a tile can
     // carry both the picked report and the chosen section in one round-trip.

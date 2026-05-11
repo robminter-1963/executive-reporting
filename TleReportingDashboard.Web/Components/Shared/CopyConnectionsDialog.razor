@@ -1,6 +1,7 @@
 @using MudBlazor
 @using TleReportingDashboard.Web.Services
 @inject ICompanyConnectionAdminService ConnectionSvc
+@inject IDialogService DialogService
 
 @*
     Pick-and-choose copy of connections from another company into the
@@ -14,6 +15,12 @@
     the (company_id) WHERE is_default=1 filtered unique index doesn't
     collide with the target's existing default — admin promotes one
     explicitly afterwards.
+
+    Dirty-tracked: picking a source company, ticking any row, or typing
+    a prefix marks the dialog dirty and a non-explicit dismiss (Cancel /
+    Esc / backdrop) fires the unsaved-changes prompt. Callers must open
+    this dialog with DialogOptions { BackdropClick = false,
+    CloseOnEscapeKey = false }.
 *@
 
 <MudDialog>
@@ -99,7 +106,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Primary"
                    Disabled="!CanSubmit()" OnClick="Submit">
             Copy @(_selectedIds.Count > 0 ? $"({_selectedIds.Count})" : "")
@@ -174,5 +181,34 @@
         MudDialog.Close(DialogResult.Ok(new Result(_selectedIds.ToList(), _namePrefix.Trim())));
     }
 
-    private void Cancel() => MudDialog.Cancel();
+    // Initial state: no source company picked, no rows checked, no
+    // prefix typed. Any of these flipping is a pending change worth
+    // prompting about.
+    private bool IsDirty =>
+        _sourceCompanyId is not null
+        || _selectedIds.Count > 0
+        || !string.IsNullOrWhiteSpace(_namePrefix);
+
+    // Routes every dismiss path through the unsaved-changes prompt so
+    // an accidental Esc / backdrop click never silently throws away
+    // selections + a typed prefix. Save runs Submit when valid;
+    // DontSave dismisses.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (CanSubmit()) Submit();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return; // stay
+                case UnsavedChangesResult.DontSave:
+                    break; // fall through to close
+            }
+        }
+        MudDialog.Cancel();
+    }
 }

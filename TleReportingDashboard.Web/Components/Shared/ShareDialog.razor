@@ -2,6 +2,15 @@
 @inject INotificationService Notifications
 @inject ISnackbar Snackbar
 @inject ILogger<ShareDialog> Logger
+@inject IDialogService DialogService
+
+@* Share dialog. Add / Revoke persist to the service immediately, so
+   the only unsaved state is a half-typed entry in the "new share email"
+   field. IsDirty reflects exactly that, so an accidental Esc / backdrop
+   click prompts the user before discarding their typed input. Callers
+   must open with DialogOptions { BackdropClick = false,
+   CloseOnEscapeKey = false } so backdrop / Esc are routed through
+   TryCancelAsync. *@
 
 <MudDialog>
     <TitleContent>
@@ -85,6 +94,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton OnClick="Done" Variant="Variant.Filled" Color="Color.Primary">
             Done
         </MudButton>
@@ -211,5 +221,43 @@
     private void Done()
     {
         MudDialog?.Close(DialogResult.Ok(_shares));
+    }
+
+    // Adds and revokes persist immediately to the service, so the only
+    // genuinely unsaved state in this dialog is whatever the user has
+    // typed into the new-share email field but not yet clicked "Share"
+    // on. Treating that as the dirty signal lets the prompt fire when
+    // it actually matters.
+    private bool IsDirty => !string.IsNullOrWhiteSpace(_newShareEmail);
+
+    // Routes every dismiss path (Cancel button, Esc, backdrop click)
+    // through the unsaved-changes prompt. "Save" here means "add the
+    // pending entry"; "DontSave" closes without adding it; "Cancel"
+    // keeps the dialog open so the user can finish typing.
+    private async Task TryCancelAsync()
+    {
+        if (!IsDirty)
+        {
+            MudDialog?.Cancel();
+            return;
+        }
+
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                await AddShare();
+                // After Add succeeds the email field is cleared, so
+                // IsDirty flips false; close out cleanly. If AddShare
+                // failed, _newShareEmail is preserved — stay open so
+                // the user can fix the input or explicitly dismiss.
+                if (!IsDirty) MudDialog?.Close(DialogResult.Ok(_shares));
+                return;
+            case UnsavedChangesResult.Cancel:
+                return; // stay
+            case UnsavedChangesResult.DontSave:
+                MudDialog?.Cancel();
+                return;
+        }
     }
 }

@@ -7,6 +7,8 @@
 @inject IGridTemplateService GridTemplateService
 @inject IExportService ExportService
 @inject IUserPreferenceService PreferenceService
+@inject IFavoriteService FavoriteSvc
+@inject LandingGreetingState GreetingState
 @inject IUserManagementService UserManagement
 @inject IQueryScopeResolver ScopeResolver
 @inject SchemaBuilderService SchemaBrowser
@@ -165,10 +167,65 @@
             </MudStack>
         </MudStack>
 
+        @* Personalized landing strip — time-of-day greeting + a "what
+           changed since last visit" delta. Renders as a fixed-position
+           overlay (slides down on mount, slides up on dismiss) so the
+           page layout doesn't shift. Once-per-circuit: the greeting slot
+           is CLAIMED on first mount (see OnInitializedAsync), not on
+           dismiss — so navigating from the picker to here mid-display
+           doesn't re-show. _showGreeting is a local mount flag flipped
+           off by the dismiss callback. Suppressed during edit mode and
+           the initial layout load. *@
+        @if (_showGreeting && !_editMode && !_loading)
+        {
+            <LandingGreeting DisplayName="@_userName"
+                             LastSeenUtc="@_lastSeenUtc"
+                             UpdatedSinceCount="@_updatedSinceLastVisit"
+                             OnDismissed="HandleGreetingDismissed" />
+        }
+
         @* Page-level "loading dashboard config" indicator. Tile data
            has its own per-tile QueryProgress below; this one only
            covers the layout/section/tile-list bootstrap. *@
         <QueryProgress Active="@_loading" />
+
+        @* ── Pinned strip ──
+           Personal shortcut bar of favorited reports. Distinct from the
+           admin-curated tiles below (RPT_master_tiles): per-user, cross-
+           company, hidden when the user has no favorites yet. Click → open
+           the report in DetailViewer; the small × on each chip removes the
+           favorite without leaving the page. *@
+        @if (_favoriteReports.Count > 0 && !_editMode)
+        {
+            <MudPaper Elevation="0" Style="border: 1px solid var(--border-default, #DADCE0); border-radius: 8px; padding: 8px 12px; background: var(--surface-card, #FFFFFF);">
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Style="flex-wrap: wrap;">
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex: 0 0 auto;">
+                        <MudIcon Icon="@Icons.Material.Filled.Star" Size="Size.Small" Color="Color.Warning" />
+                        <MudText Typo="Typo.caption" Style="font-weight: 600; color: var(--text-secondary, #5F6368); text-transform: uppercase; letter-spacing: 0.5px;">Pinned</MudText>
+                    </MudStack>
+                    @foreach (var fav in _favoriteReports)
+                    {
+                        var f = fav;
+                        var label = string.IsNullOrWhiteSpace(f.InternalName) ? f.Name : f.InternalName!;
+                        @* Pinned reports open in a new tab — the strip is a
+                           shortcut bar, not a navigation primitive, so the
+                           user keeps their dashboard context while popping
+                           out the report. Href + Target turn the chip into
+                           a real anchor so right-click "Open in new tab" /
+                           middle-click also work as expected. *@
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                 Color="Color.Primary"
+                                 Href="@($"/viewer/{f.Id}/detail")"
+                                 Target="_blank"
+                                 OnClose="@(() => UnfavoriteFromStripAsync(f.Id))"
+                                 CloseIcon="@Icons.Material.Filled.Close"
+                                 title="@label">
+                            @label
+                        </MudChip>
+                    }
+                </MudStack>
+            </MudPaper>
+        }
 
         @* ── Tabs ── *@
         @if (_tabs.Any())
@@ -537,6 +594,7 @@
                                                         <ExportMenu IconOnly
                                                                     OnExportExcel="@(() => ExportTileDetailExcel(tileLocal))"
                                                                     OnExportCsv="@(() => ExportTileDetailCsv(tileLocal))"
+                                                                    OnExportPdf="@(() => ExportTileDetailPdf(tileLocal))"
                                                                     Disabled="@(!tileLoaded)" />
                                                         @if (_editMode)
                                                         {
@@ -587,18 +645,16 @@
                                                     }
                                                 </div>
                                                 @* Tile footer band — small metadata strip at the bottom
-                                                   of every loaded tile. Shows row count + a refreshed-at
-                                                   stamp so users have a "data freshness" cue without
-                                                   leaving the dashboard. Background + text drive off the
-                                                   --dashboard-footer-* tokens; admins can re-paint it via
-                                                   Admin → Theme. Only renders when the tile actually has
-                                                   data — loading / error states keep the tile body
-                                                   uncluttered. *@
+                                                   of every loaded tile. Shows the row count for a quick
+                                                   "how much data is in here" cue. Background + text
+                                                   drive off the --dashboard-footer-* tokens; admins
+                                                   can re-paint it via Admin → Theme. Only renders when
+                                                   the tile actually has data — loading / error states
+                                                   keep the tile body uncluttered. *@
                                                 @if (_tileData.TryGetValue(tl.ReportId, out var tdFooter))
                                                 {
-                                                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 12px; border-top: 1px solid var(--border-subtle, #E8EAED); background: var(--dashboard-footer-bg, #FAFAFA); color: var(--dashboard-footer-text, #5F6368); font-weight: var(--dashboard-footer-weight, 400); font-style: var(--dashboard-footer-style, normal); text-decoration: var(--dashboard-footer-deco, none); font-family: var(--dashboard-footer-font, inherit); font-size: var(--dashboard-footer-size, 0.7rem);">
+                                                    <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 4px 12px; border-top: 1px solid var(--border-subtle, #E8EAED); background: var(--dashboard-footer-bg, #FAFAFA); color: var(--dashboard-footer-text, #5F6368); font-weight: var(--dashboard-footer-weight, 400); font-style: var(--dashboard-footer-style, normal); text-decoration: var(--dashboard-footer-deco, none); font-family: var(--dashboard-footer-font, inherit); font-size: var(--dashboard-footer-size, 0.7rem);">
                                                         <span>@tdFooter.Data.Rows.Count.ToString("N0") rows</span>
-                                                        <span>updated @FormatTileFooterTime(_tileLoadedAtUtc.GetValueOrDefault(tl.ReportId))</span>
                                                     </div>
                                                 }
                                             </MudPaper>
@@ -628,17 +684,29 @@
         }
         else if (!_loading)
         {
-            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
-                      Style="border: 1px dashed #DADCE0; min-height: 300px;">
-                <MudIcon Icon="@Icons.Material.Filled.DashboardCustomize" Size="Size.Large" Color="Color.Default" />
-                <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
-                    No tabs on the master dashboard yet.
-                </MudText>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
-                           StartIcon="@Icons.Material.Filled.Tab" OnClick="AddTab">
-                    Create First Tab
-                </MudButton>
-            </MudPaper>
+            @* Empty-state copy + CTA depends on whether the user can
+               actually fix the empty state. Admins get an actionable
+               "Create First Tab" button; viewers / editors land on a
+               friendlier message that points back to the Library since
+               they can't author dashboards themselves. *@
+            @if (_userRoleForCompany == UserRoles.Admin)
+            {
+                <EmptyState Icon="@Icons.Material.Filled.DashboardCustomize"
+                            Heading="Build your first dashboard tab"
+                            Body="Tabs group related reports for a daily view. Add one to start pinning reports as tiles."
+                            CtaLabel="Create First Tab"
+                            CtaIcon="@Icons.Material.Filled.Tab"
+                            OnCtaClick="AddTab" />
+            }
+            else
+            {
+                <EmptyState Icon="@Icons.Material.Filled.DashboardCustomize"
+                            Heading="Nothing on this dashboard yet"
+                            Body="An admin sets up the layout for this company. In the meantime you can run reports directly from the Library."
+                            CtaLabel="Open Report Library"
+                            CtaIcon="@Icons.Material.Filled.LibraryBooks"
+                            OnCtaClick="@(() => Navigation.NavigateTo("/reports"))" />
+            }
         }
     </MudStack>
 </MudMainContent>
@@ -790,6 +858,22 @@
 
     private string _userId = "anonymous";
     private string _userEmail = string.Empty;
+    private string _userName = string.Empty;
+    // Last time the user landed on this Master Dashboard, read from
+    // RPT_user_preferences. Drives the LandingGreeting strip's "X reports
+    // updated since you last visited" copy. Null on first-ever visit.
+    private DateTime? _lastSeenUtc;
+    // Count of saved reports updated since _lastSeenUtc within the user's
+    // accessible companies. Computed during OnInitializedAsync; static
+    // for the page lifetime (we don't auto-refresh — the greeting is a
+    // landing impression, not a live feed).
+    private int _updatedSinceLastVisit;
+    // Local "the greeting is currently mounted on this page" flag.
+    // True only when this MasterDashboard claimed the once-per-circuit
+    // slot in OnInitializedAsync. Flipped off by the dismiss callback
+    // so the slide-up animation can complete before the component is
+    // removed from the DOM.
+    private bool _showGreeting;
     // Resolved from CompanyCode in OnInitializedAsync — used as the scope for
     // every MasterService call so dashboards are (user, company) keyed.
     private Guid _companyId;
@@ -864,10 +948,118 @@
 
     private MasterDashboardTab? ActiveTab => _activeTabIndex >= 0 && _activeTabIndex < _tabs.Count ? _tabs[_activeTabIndex] : null;
 
+    // User's favorited reports — drives the personal "Pinned" strip above
+    // the tabs. Distinct from RPT_master_tiles (admin-curated, shared); this
+    // is per-user and cross-company so the same shortcut bar follows the
+    // user wherever they land. Resolved via parallel GetReportByIdAsync
+    // calls, dropping ids that no longer match a live report (deleted /
+    // revoked).
+    private List<SavedReport> _favoriteReports = new();
+
     // 5-minute idle threshold. Caller code reads this constant via the JS
     // bridge so changing the timeout is a single edit.
     private const int IdleRefreshThresholdMs = 5 * 60 * 1000;
     private bool _idleWatcherStarted;
+
+    // Snapshot of the edit-mode-relevant state at the most recent "clean"
+    // point — when the user enters edit mode and after each successful
+    // SaveLayout. Compared against the live state on navigation; mismatch
+    // = dirty = prompt. Only consulted while _editMode is true (viewing
+    // the dashboard never trips the guard). Serialized JSON rather than
+    // a structural compare so we don't hand-enumerate every nested field.
+    private string _dirtySnapshot = string.Empty;
+    // Tracks the last-sent value of the JS-side beforeunload guard so we
+    // don't thrash JS interop on every render.
+    private bool _beforeUnloadArmed;
+    // Disposable returned by RegisterLocationChangingHandler. Released
+    // on Dispose so the handler doesn't leak across navigations.
+    private IDisposable? _navHandlerRegistration;
+
+    private string ComputeDirtySnapshot()
+    {
+        // Capture every edit-mode-mutable field. The active-tab edits
+        // live in _tiles / _sections / _pendingRemovals; the per-tab
+        // caches hold edits to tabs the user navigated away from while
+        // still in edit mode. Tabs themselves can be reordered /
+        // renamed / added / removed, so include the tab list too.
+        try
+        {
+            var snap = new
+            {
+                Tabs = _tabs.Select(t => new { t.Id, t.Label, t.SortOrder }).ToList(),
+                ActiveTiles = _tiles.Select(t => new { t.Id, t.ReportId, t.SortOrder, t.ColSpan, t.Height, t.SectionId }).ToList(),
+                ActiveSections = _sections.Select(s => new { s.Id, s.Label, s.SortOrder }).ToList(),
+                ActivePendingRemovals = _pendingRemovals.Select(t => t.Id).ToList(),
+                TilesByTab = _tilesByTab.OrderBy(kv => kv.Key)
+                    .Select(kv => new
+                    {
+                        TabId = kv.Key,
+                        Tiles = kv.Value.Select(t => new { t.Id, t.ReportId, t.SortOrder, t.ColSpan, t.Height, t.SectionId }).ToList()
+                    }).ToList(),
+                SectionsByTab = _sectionsByTab.OrderBy(kv => kv.Key)
+                    .Select(kv => new
+                    {
+                        TabId = kv.Key,
+                        Sections = kv.Value.Select(s => new { s.Id, s.Label, s.SortOrder }).ToList()
+                    }).ToList(),
+                PendingRemovalsByTab = _pendingRemovalsByTab.OrderBy(kv => kv.Key)
+                    .Select(kv => new
+                    {
+                        TabId = kv.Key,
+                        TileIds = kv.Value.Select(t => t.Id).ToList()
+                    }).ToList(),
+                LogoBytesLen = _logoBytes?.Length ?? 0,
+                LogoMime = _logoMimeType
+            };
+            return System.Text.Json.JsonSerializer.Serialize(snap);
+        }
+        catch
+        {
+            // Snapshot failure shouldn't crash the editor — fall back to
+            // a sentinel that compares as dirty so the user is at least
+            // asked rather than silently losing edits.
+            return Guid.NewGuid().ToString();
+        }
+    }
+
+    // Reset the baseline — call when entering edit mode and after a
+    // successful save so the current state becomes the new "clean" ref.
+    private void MarkClean() => _dirtySnapshot = ComputeDirtySnapshot();
+
+    // Only dirty when actively editing. The dashboard is a viewing
+    // surface most of the time, and a passive viewer should never see
+    // the unsaved-changes prompt.
+    private bool IsDirty => _editMode
+        && !string.Equals(_dirtySnapshot, ComputeDirtySnapshot(), StringComparison.Ordinal);
+
+    // Intercepts in-app navigation. The Blazor handler is awaited
+    // before navigation actually proceeds, so we can prompt and call
+    // PreventNavigation if the user picks Cancel. Save runs SaveLayout;
+    // DontSave just lets nav proceed.
+    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
+    {
+        if (!IsDirty) return;
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                await SaveLayout();
+                // SaveLayout sets the new baseline; if it failed (snackbar
+                // shown by SaveLayout), state is still dirty. Block the
+                // navigation so the user can fix and retry rather than
+                // silently leaving with unsaved layout edits.
+                if (IsDirty) context.PreventNavigation();
+                break;
+            case UnsavedChangesResult.DontSave:
+                // Disarm guards so the imminent unload doesn't double-prompt
+                // (LocationChanging then beforeunload).
+                MarkClean();
+                break;
+            case UnsavedChangesResult.Cancel:
+                context.PreventNavigation();
+                break;
+        }
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -918,6 +1110,18 @@
             }
             catch { /* JS not ready on very first render — next render will catch up */ }
         }
+
+        // Sync the JS-side beforeunload guard with the live dirty state
+        // every render, but only invoke when it actually changed — saves
+        // a JS-interop call per re-render of a clean page. IsDirty is
+        // already gated on _editMode, so non-edit-mode renders are no-ops.
+        var armNow = IsDirty;
+        if (armNow != _beforeUnloadArmed)
+        {
+            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
+            catch { /* circuit may be tearing down — drop silently */ }
+            _beforeUnloadArmed = armNow;
+        }
     }
 
     [JSInvokable]
@@ -963,6 +1167,17 @@
             // which case the JS call no-ops harmlessly.
             _ = JS.InvokeVoidAsync("stopIdleWatcher").AsTask().ContinueWith(_ => { });
         }
+        _navHandlerRegistration?.Dispose();
+        _navHandlerRegistration = null;
+        // Clear the JS-side guard so the next page mount doesn't
+        // inherit a stale "armed" state. Fire-and-forget — the
+        // circuit is tearing down and there's no one to await us.
+        if (_beforeUnloadArmed)
+        {
+            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
+            catch { }
+            _beforeUnloadArmed = false;
+        }
         _dotNetRef?.Dispose();
     }
 
@@ -973,6 +1188,12 @@
                   ?? authState.User.Identity?.Name
                   ?? "anonymous";
         _userEmail = authState.User.FindFirst("preferred_username")?.Value ?? string.Empty;
+        // Display name — try the standard "name" claim first, fall back
+        // to email if the IdP didn't include one. Used by LandingGreeting
+        // to extract a first name for "Good morning, X."
+        _userName = authState.User.FindFirst("name")?.Value
+                    ?? authState.User.Identity?.Name
+                    ?? _userEmail;
 
         // Resolve the company from the URL segment. An invalid/unknown code
         // bounces back to the picker instead of rendering an empty dashboard.
@@ -1083,6 +1304,27 @@
         // the company has nothing uploaded yet, so a no-logo company still
         // renders something recognizable.
         var prefs = await PreferenceService.GetPreferencesAsync(_userId);
+
+        // Greeting claim — only run the load + render path if this is
+        // the first hosting page in the circuit. CompanyPicker may have
+        // already claimed the slot if the user came from "All Companies."
+        if (!GreetingState.HasShown)
+        {
+            GreetingState.HasShown = true;
+            _showGreeting = true;
+            // Capture the previous landing timestamp BEFORE bumping it —
+            // the greeting reads the OLD value to compute "since your
+            // last visit." Touch the new value asynchronously after
+            // rendering so the user sees the delta on this page load and
+            // the next visit reads from the now-updated row.
+            _lastSeenUtc = prefs.LastMasterDashboardSeen;
+            _updatedSinceLastVisit = await CountReportsUpdatedSinceAsync(_lastSeenUtc);
+            // Fire-and-forget the touch — the bump only matters for the
+            // NEXT visit, so we don't block this render on the round-
+            // trip. Errors log silently; missing the bump means the next
+            // visit's count will look stale, not a correctness issue.
+            _ = PreferenceService.TouchLastMasterDashboardSeenAsync(_userId);
+        }
         _dashboardTitle = company.Name;
         if (company.Logo is not null && company.Logo.Length > 0)
         {
@@ -1110,7 +1352,85 @@
         }
 
         await LoadTabs();
+        await LoadFavoritesAsync();
+
+        // Register the in-app navigation guard once init is past the
+        // bulk of state setup, so an early bail-out above doesn't leak
+        // a registered handler. Snapshot baseline AFTER the load so the
+        // dashboard's own data isn't read as "dirty." IsDirty is also
+        // gated on _editMode, so the baseline only matters once the
+        // user enters edit mode (where MarkClean is called again).
+        _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
+        MarkClean();
         _initialized = true;
+    }
+
+    // Resolves the user's favorite-id list to live SavedReport rows so the
+    // strip can render names + nav. Parallel by-id fetches; a missing id
+    // (deleted / revoked) silently drops out so the strip never renders a
+    // dead link. Re-called by ToggleFavoriteFromStripAsync after a remove
+    // so the strip repaints without a full page reload.
+    private async Task LoadFavoritesAsync()
+    {
+        try
+        {
+            var ids = await FavoriteSvc.GetReportIdsAsync(_userId);
+            if (ids.Count == 0) { _favoriteReports = new(); return; }
+            var tasks = ids.Select(id => ReportService.GetReportByIdAsync(id)).ToList();
+            var rows = await Task.WhenAll(tasks);
+            _favoriteReports = rows.Where(r => r is not null).Select(r => r!).ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load favorites for user {UserId} — strip will be empty.", _userId);
+            _favoriteReports = new();
+        }
+    }
+
+    private async Task UnfavoriteFromStripAsync(Guid reportId)
+    {
+        try
+        {
+            await FavoriteSvc.RemoveAsync(_userId, reportId);
+            _favoriteReports = _favoriteReports.Where(r => r.Id != reportId).ToList();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Couldn't unfavorite: {ex.Message}", Severity.Warning);
+        }
+    }
+
+    // Removes the greeting from this page after it slides up. The
+    // once-per-circuit guarantee is enforced by GreetingState.HasShown,
+    // which was set when we claimed the slot on init — that flag stays
+    // true for the rest of the circuit so other hosting pages skip too.
+    private void HandleGreetingDismissed()
+    {
+        _showGreeting = false;
+        StateHasChanged();
+    }
+
+    // Counts reports in the active company whose UpdatedAt is more recent
+    // than the supplied timestamp. Drives the LandingGreeting's "X reports
+    // updated since your last visit" copy. Returns 0 on first visit
+    // (sinceUtc is null) — the greeting suppresses the chip in that case
+    // anyway. Scope-limited to the current company so non-admins don't
+    // see counts that include cross-company reports they can't view.
+    private async Task<int> CountReportsUpdatedSinceAsync(DateTime? sinceUtc)
+    {
+        if (sinceUtc is null) return 0;
+        try
+        {
+            var all = await ReportService.GetAllReportsAsync();
+            return all.Count(r => r.CompanyId == _companyId && r.UpdatedAt > sinceUtc.Value);
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal — the greeting just hides the delta chip if we
+            // can't compute it. Logged so a persistent failure shows up.
+            Logger.LogWarning(ex, "Failed to compute updated-since-last-visit count.");
+            return 0;
+        }
     }
 
     private async Task LoadTabs()
@@ -1742,7 +2062,13 @@
             { "Sections", _sections }
         };
         var dialog = await DialogService.ShowAsync<AddTileDialog>("Add Report to Dashboard", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            new DialogOptions
+            {
+                MaxWidth = MaxWidth.Small,
+                FullWidth = true,
+                BackdropClick = false,
+                CloseOnEscapeKey = false
+            });
 
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not AddTileDialog.AddTileResult tileResult) return;
@@ -1796,8 +2122,19 @@
             _tilesByTab.Clear();
             if (hadDirtyState)
                 await LoadTilesForActiveTab();
+            _editMode = false;
+            // Discarding edits returns the page to a clean (viewing) state
+            // — IsDirty would short-circuit on _editMode anyway, but keep
+            // the snapshot in sync for clarity / consistency.
+            MarkClean();
         }
-        _editMode = !_editMode;
+        else
+        {
+            _editMode = true;
+            // Baseline matches the current state at the moment editing
+            // begins — anything mutated from here is "dirty."
+            MarkClean();
+        }
     }
 
     private void RemoveTile(MasterDashboardTile tile)
@@ -1856,6 +2193,12 @@
             prefs.MasterDashboardLogoType = _logoMimeType;
             await PreferenceService.SavePreferencesAsync(prefs);
 
+            // Save was the explicit clean point — re-baseline so the
+            // next navigation away (without further edits) doesn't
+            // re-prompt over the just-saved state. The user remains
+            // in edit mode after Save Layout, so this only takes
+            // effect for subsequent edits.
+            MarkClean();
         }
         catch (Exception ex)
         {
@@ -2113,6 +2456,18 @@
             BuildTileExportFileName(tile, "csv"),
             Convert.ToBase64String(bytes),
             "text/csv");
+    }
+
+    private async Task ExportTileDetailPdf(MasterDashboardTile tile)
+    {
+        if (!_tileData.TryGetValue(tile.ReportId, out var td)) return;
+        var data = BuildTileExportData(td);
+        var name = tile.ReportName ?? "Report";
+        var bytes = ExportService.ExportToPdf(data, name);
+        await JS.InvokeVoidAsync("downloadFile",
+            BuildTileExportFileName(tile, "pdf"),
+            Convert.ToBase64String(bytes),
+            "application/pdf");
     }
 
     // Drops any columns the dashboard config marked hidden so the

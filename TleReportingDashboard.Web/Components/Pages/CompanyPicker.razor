@@ -6,6 +6,9 @@
 @inject IUserManagementService UserManagement
 @inject IAdminService AdminService
 @inject IAdminAccessService AdminAccess
+@inject IUserPreferenceService PreferenceService
+@inject IReportService ReportService
+@inject LandingGreetingState GreetingState
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject ILogger<CompanyPicker> Logger
@@ -64,6 +67,19 @@
     }
     else
     {
+        @* Personalized landing strip — same component as the per-company
+           Master Dashboard. The All Companies picker IS the user's "home"
+           when they have access to multiple companies, so the greeting
+           lands here too. Once-per-circuit slot is CLAIMED on mount via
+           GreetingState.HasShown (see OnInitializedAsync) so navigating
+           from here to a Master Dashboard mid-display doesn't re-show. *@
+        @if (_showGreeting)
+        {
+            <LandingGreeting DisplayName="@_userName"
+                             LastSeenUtc="@_lastSeenUtc"
+                             UpdatedSinceCount="@_updatedSinceLastVisit"
+                             OnDismissed="HandleGreetingDismissed" />
+        }
         <MudStack Spacing="4">
             <MudStack Spacing="1">
                 <MudText Typo="Typo.h4" Style="font-weight: 600; color: #202124;">Select a company</MudText>
@@ -170,6 +186,18 @@
     private bool _loading = true;
     private string _userEmail = string.Empty;
     private string? _userId;
+    private string _userName = string.Empty;
+    // Fed to LandingGreeting. _lastSeenUtc is read BEFORE the timestamp
+    // bump; _updatedSinceLastVisit is computed against the user's
+    // accessible companies (admins see across-the-org, non-admins only
+    // their granted companies — same authorization model as _visible).
+    private DateTime? _lastSeenUtc;
+    private int _updatedSinceLastVisit;
+    // Local "the greeting is currently mounted on this page" flag.
+    // True only when this page claimed the once-per-circuit slot.
+    // Flipped off by the dismiss callback so the slide-up animation
+    // can complete before the component is removed from the DOM.
+    private bool _showGreeting;
     private List<CompanySummary> _visible = new();
     // Does the signed-in user have a row in RPT_users? Admins are always
     // treated as registered (they can get in even without a RPT_users row
@@ -186,6 +214,11 @@
             _userEmail = user.FindFirst("preferred_username")?.Value ?? string.Empty;
             _userId = user.FindFirst("oid")?.Value
                       ?? user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            // Display name for LandingGreeting — same claim resolution as
+            // MasterDashboard so "Good morning, Rob" matches across pages.
+            _userName = user.FindFirst("name")?.Value
+                        ?? user.Identity?.Name
+                        ?? _userEmail;
 
             // Drop hidden companies BEFORE the role-based filtering below.
             // is_hidden is intentionally global (admins included) — the
@@ -299,11 +332,56 @@
         {
             Logger.LogWarning(ex, "CompanyPicker load failed");
         }
+
+        // Greeting plumbing. Only relevant when the picker actually
+        // renders (we didn't redirect above), and only when no other
+        // hosting page already claimed the once-per-circuit slot.
+        // Claim it now so subsequent navigation to a Master Dashboard
+        // (e.g., user clicks a tile a second after landing here) doesn't
+        // re-show the strip. Mirrors MasterDashboard: capture OLD
+        // timestamp, count reports updated since, fire-and-forget the
+        // touch.
+        if (!GreetingState.HasShown && !string.IsNullOrEmpty(_userId))
+        {
+            GreetingState.HasShown = true;
+            _showGreeting = true;
+            try
+            {
+                var prefs = await PreferenceService.GetPreferencesAsync(_userId);
+                _lastSeenUtc = prefs.LastMasterDashboardSeen;
+                if (_lastSeenUtc is not null)
+                {
+                    var allowedCompanyIds = _visible.Select(c => c.Id).ToHashSet();
+                    if (allowedCompanyIds.Count > 0)
+                    {
+                        var allReports = await ReportService.GetAllReportsAsync();
+                        _updatedSinceLastVisit = allReports.Count(r =>
+                            allowedCompanyIds.Contains(r.CompanyId)
+                            && r.UpdatedAt > _lastSeenUtc.Value);
+                    }
+                }
+                _ = PreferenceService.TouchLastMasterDashboardSeenAsync(_userId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Greeting load failed on CompanyPicker");
+            }
+        }
+
         // Only reached when we're NOT redirecting — flip the spinner off so
         // the picker / empty state can paint. The redirect path returns
         // early above, leaving _loading = true so the spinner persists
         // until the new page swaps in.
         _loading = false;
+    }
+
+    private void HandleGreetingDismissed()
+    {
+        // GreetingState.HasShown was already set on mount — no further
+        // action there. Just unmount locally so the slide-up animation
+        // can complete and the component can clean up its timer.
+        _showGreeting = false;
+        StateHasChanged();
     }
 
     private async Task PickCompany(CompanySummary c)

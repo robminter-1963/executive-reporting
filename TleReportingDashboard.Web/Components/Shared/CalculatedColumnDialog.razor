@@ -1,4 +1,5 @@
 @using TleReportingDashboard.Web.Services
+@inject IDialogService DialogService
 
 @* Add / edit a calculated column. Two editor modes:
      * Formula: tiny client-side expression language (+ - * /, parens,
@@ -143,7 +144,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
                    Disabled="@(!IsValid)">
             @(IsNew ? "Add" : "Save")
@@ -187,6 +188,10 @@
     private string _sqlExpression = string.Empty;
     private HashSet<string> _selectedJoinIds = new();
 
+    // JSON snapshot of the editable state at OnInitialized — compared in
+    // IsDirty to decide whether dismissals need the unsaved-changes prompt.
+    private string _initialSnapshot = string.Empty;
+
     private bool IsValid =>
         !string.IsNullOrWhiteSpace(_label) &&
         (_useSql
@@ -206,7 +211,24 @@
         // Pre-flip into SQL mode when editing an existing SQL-mode calc.
         _useSql = AllowSqlMode && !string.IsNullOrWhiteSpace(_sqlExpression);
         ValidateFormula();
+
+        _initialSnapshot = BuildSnapshot();
     }
+
+    private string BuildSnapshot() =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Label = _label,
+            Formula = _formula,
+            Format = _format,
+            DataType = _dataType,
+            UseSql = _useSql,
+            SqlExpression = _sqlExpression,
+            JoinIds = _selectedJoinIds.OrderBy(s => s, StringComparer.Ordinal).ToArray()
+        });
+
+    private bool IsDirty =>
+        !string.Equals(_initialSnapshot, BuildSnapshot(), StringComparison.Ordinal);
 
     private void ValidateFormula()
     {
@@ -224,7 +246,27 @@
         ValidateFormula();
     }
 
-    private void Cancel() => MudDialog?.Cancel();
+    // Routes Cancel through the unsaved-changes prompt when the editable
+    // state diverges from the initial snapshot. Save re-enters Ok() only
+    // if the dialog is currently in a valid state.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (IsValid) Ok();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return;
+                case UnsavedChangesResult.DontSave:
+                    break;
+            }
+        }
+        MudDialog?.Cancel();
+    }
 
     private void Ok()
     {

@@ -42,9 +42,23 @@
                                    email is going. *@
                                 @if (schedule.Kind == ScheduleKind.Individual && schedule.TeamId is int tid)
                                 {
+                                    @* Description varies by fan-out so the
+                                       summary line is accurate per strategy.
+                                       Manager / Both branches use the
+                                       SupervisorAccount icon so the row reads
+                                       at a glance as manager-centric. *@
+                                    var (icon, label) = schedule.TeamFanout switch
+                                    {
+                                        TeamFanout.Manager => (Icons.Material.Filled.SupervisorAccount,
+                                            $"Individual — team {tid} (manager only — full team roll-up; all-access managers get unfiltered)"),
+                                        TeamFanout.Both => (Icons.Material.Filled.SupervisorAccount,
+                                            $"Individual — team {tid} (manager + each member — manager gets the roll-up, members get their own slice)"),
+                                        _ => (Icons.Material.Filled.People,
+                                            $"Individual — team {tid} (one personalized copy per member)")
+                                    };
                                     <MudText Typo="Typo.caption" Color="Color.Primary">
-                                        <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Style="vertical-align: middle;" />
-                                        Individual — team @tid (one personalized copy per member)
+                                        <MudIcon Icon="@icon" Size="Size.Small" Style="vertical-align: middle;" />
+                                        @label
                                     </MudText>
                                 }
                                 else if (schedule.Kind == ScheduleKind.Distribution
@@ -211,7 +225,10 @@
             { x => x.UserEmail, UserEmail }
         };
 
-        var dialog = await DialogService.ShowAsync<ScheduleDialog>("New Schedule", parameters);
+        var dialog = await DialogService.ShowAsync<ScheduleDialog>(
+            "New Schedule",
+            parameters,
+            new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false });
         var result = await dialog.Result;
 
         if (result is not null && !result.Canceled && result.Data is ReportSchedule newSchedule)
@@ -240,7 +257,10 @@
             { x => x.ExistingSchedule, schedule }
         };
 
-        var dialog = await DialogService.ShowAsync<ScheduleDialog>("Edit Schedule", parameters);
+        var dialog = await DialogService.ShowAsync<ScheduleDialog>(
+            "Edit Schedule",
+            parameters,
+            new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false });
         var result = await dialog.Result;
 
         if (result is not null && !result.Canceled && result.Data is ReportSchedule updated)

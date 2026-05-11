@@ -1,6 +1,9 @@
 using System.Globalization;
 using System.Text;
 using ClosedXML.Excel;
+using QuestPDF.Fluent;
+using QuestPDF.Helpers;
+using QuestPDF.Infrastructure;
 using TleReportingDashboard.Web.Models;
 
 namespace TleReportingDashboard.Web.Services;
@@ -88,6 +91,108 @@ public class ExportService : IExportService
         workbook.SaveAs(stream);
         return stream.ToArray();
     }
+
+    public byte[] ExportToPdf(QueryResponse data, string reportName)
+    {
+        // Landscape A4 by default — most analyst reports have enough
+        // columns that portrait is too cramped. QuestPDF auto-paginates
+        // and the table header repeats on each page (Header() block on
+        // the table). Currency / date / numeric columns reuse the same
+        // FormatValue path the CSV export uses so number formatting is
+        // identical across surfaces.
+        var headerLabels = data.Columns.Select(c => c.Label ?? string.Empty).ToList();
+        var doc = Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4.Landscape());
+                page.Margin(20);
+                page.PageColor(Colors.White);
+                page.DefaultTextStyle(t => t.FontSize(8));
+
+                page.Header().PaddingBottom(8).Row(row =>
+                {
+                    row.RelativeItem().Text(reportName)
+                        .FontSize(14).Bold();
+                    row.ConstantItem(180).AlignRight().Text(t =>
+                    {
+                        t.Span($"Generated {DateTime.Now:MMM d, yyyy h:mm tt}")
+                            .FontSize(8).FontColor(Colors.Grey.Medium);
+                    });
+                });
+
+                page.Content().Table(table =>
+                {
+                    table.ColumnsDefinition(cd =>
+                    {
+                        // Equal-weight columns. Auto-fit isn't a thing in
+                        // QuestPDF — we'd need character-width heuristics
+                        // to size columns proportionally. For tabular
+                        // exports the equal-weight default is acceptable
+                        // and survives report shape changes without
+                        // re-tuning.
+                        for (var i = 0; i < headerLabels.Count; i++)
+                            cd.RelativeColumn();
+                    });
+
+                    table.Header(header =>
+                    {
+                        foreach (var label in headerLabels)
+                        {
+                            header.Cell()
+                                .Background(Colors.Grey.Lighten3)
+                                .BorderBottom(1)
+                                .BorderColor(Colors.Grey.Medium)
+                                .Padding(4)
+                                .Text(label).Bold();
+                        }
+                    });
+
+                    foreach (var row in data.Rows)
+                    {
+                        foreach (var col in data.Columns)
+                        {
+                            row.TryGetValue(col.FieldId, out var value);
+                            var formatted = !string.IsNullOrWhiteSpace(col.Format)
+                                ? FieldFormatter.Format(value, col.Format, col.DataType)
+                                : FormatValue(value, col.DataType);
+                            // Right-align numeric cells so currency / int
+                            // columns line up the way Excel does — the
+                            // CSV path doesn't carry alignment but the
+                            // PDF render is visual.
+                            var cell = table.Cell()
+                                .BorderBottom(1)
+                                .BorderColor(Colors.Grey.Lighten2)
+                                .Padding(3);
+                            if (IsNumericForPdf(col.DataType))
+                                cell.AlignRight().Text(formatted);
+                            else
+                                cell.Text(formatted);
+                        }
+                    }
+                });
+
+                page.Footer().AlignCenter().Text(t =>
+                {
+                    t.Span("Page ").FontSize(8).FontColor(Colors.Grey.Medium);
+                    t.CurrentPageNumber().FontSize(8).FontColor(Colors.Grey.Medium);
+                    t.Span(" / ").FontSize(8).FontColor(Colors.Grey.Medium);
+                    t.TotalPages().FontSize(8).FontColor(Colors.Grey.Medium);
+                });
+            });
+        });
+        return doc.GeneratePdf();
+    }
+
+    // Right-alignment in PDF mirrors what Excel does for currency / int
+    // / percent. Date columns stay left-aligned to match cell-by-cell
+    // legibility — most date strings (MM/dd/yyyy) read more naturally
+    // left-aligned.
+    private static bool IsNumericForPdf(string? dataType) => dataType?.ToLowerInvariant() switch
+    {
+        "currency" or "integer" or "percent" or "decimal" or "number" => true,
+        _ => false
+    };
 
     public byte[] ExportToCsv(QueryResponse data)
     {

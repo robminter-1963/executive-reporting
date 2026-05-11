@@ -143,6 +143,12 @@
                     <AdminThemeTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
+            @if (_allowedSections.Contains(AdminSections.AppSettings))
+            {
+                <MudTabPanel Text="App Settings" Icon="@Icons.Material.Filled.Tune">
+                    <AdminAppSettingsTab CurrentUserEmail="@_currentUserEmail" />
+                </MudTabPanel>
+            }
         </MudTabs>
     }
 </MudStack>

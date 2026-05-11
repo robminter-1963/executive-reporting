@@ -1,0 +1,40 @@
+@using MudBlazor
+
+@* Three-way "discard changes?" prompt. Returns one of:
+     UnsavedChangesResult.Save     — caller should run its save path
+     UnsavedChangesResult.DontSave — caller should drop the edits and exit
+     UnsavedChangesResult.Cancel   — caller stays where it was (default)
+
+   Closing via the X / outside-click / Esc returns Cancel so a stray
+   dismiss never silently throws away work. *@
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 360px;">
+            <MudText Typo="Typo.body1" Style="font-weight: 500;">
+                @(string.IsNullOrWhiteSpace(Message) ? "You have unsaved changes." : Message)
+            </MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                Save them before leaving?
+            </MudText>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="OnCancel">Cancel</MudButton>
+        <MudButton OnClick="OnDontSave" Color="Color.Error" Variant="Variant.Text">
+            Don't Save
+        </MudButton>
+        <MudButton OnClick="OnSave" Color="Color.Primary" Variant="Variant.Filled">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string? Message { get; set; }
+
+    private void OnSave()     => MudDialog.Close(DialogResult.Ok(UnsavedChangesResult.Save));
+    private void OnDontSave() => MudDialog.Close(DialogResult.Ok(UnsavedChangesResult.DontSave));
+    private void OnCancel()   => MudDialog.Close(DialogResult.Ok(UnsavedChangesResult.Cancel));
+}

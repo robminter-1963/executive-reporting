@@ -176,6 +176,7 @@
                             </MudTooltip>
                         }
                         <ExportMenu OnExportExcel="ExportExcel" OnExportCsv="ExportCsv"
+                                    OnExportPdf="ExportPdf"
                                     Disabled="@(_detailData is null || !_detailData.Rows.Any())" />
                     </MudStack>
                 </MudStack>
@@ -1122,6 +1123,15 @@
         var bytes = ExportService.ExportToCsv(BuildExportData(_detailData));
         await JS.InvokeVoidAsync("downloadFile", BuildDetailExportFileName("csv"),
             Convert.ToBase64String(bytes), "text/csv");
+    }
+
+    private async Task ExportPdf()
+    {
+        if (_detailData is null) return;
+        var name = _title ?? "Detail";
+        var bytes = ExportService.ExportToPdf(BuildExportData(_detailData), name);
+        await JS.InvokeVoidAsync("downloadFile", BuildDetailExportFileName("pdf"),
+            Convert.ToBase64String(bytes), "application/pdf");
     }
 
     // Filename = "{Company} - {Title}-Detail.{ext}". Company prefix is

@@ -1,5 +1,14 @@
+@inject IDialogService DialogService
+
 @* Small single-field prompt dialog. Reused by renamers across admin pages
-   (domains, etc.). Returns the trimmed new value or a Canceled result. *@
+   (domains, etc.). Returns the trimmed new value or a Canceled result.
+
+   Dirty-tracked: a non-empty change vs. InitialValue triggers the
+   unsaved-changes prompt on any non-explicit dismiss. Callers must
+   open this dialog with DialogOptions { BackdropClick = false,
+   CloseOnEscapeKey = false } so backdrop / Esc routes through
+   TryCancelAsync rather than firing MudDialog's default cancel
+   directly. *@
 
 <MudDialog>
     <DialogContent>
@@ -8,7 +17,7 @@
                       Autofocus OnKeyDown="OnKeyDown" />
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
                    Disabled="@string.IsNullOrWhiteSpace(_value)">
             OK
@@ -26,12 +35,39 @@
 
     protected override void OnInitialized() => _value = InitialValue;
 
-    private void Cancel() => MudDialog?.Cancel();
+    private bool IsDirty =>
+        !string.Equals(
+            (_value ?? string.Empty).Trim(),
+            (InitialValue ?? string.Empty).Trim(),
+            StringComparison.Ordinal);
+
     private void Ok() => MudDialog?.Close(DialogResult.Ok(_value.Trim()));
 
-    private void OnKeyDown(KeyboardEventArgs e)
+    // Routes every dismiss path (Cancel button, Esc key) through the
+    // unsaved-changes prompt so an accidental Esc never silently throws
+    // away a typed-in value. Save runs the OK path; DontSave dismisses.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (!string.IsNullOrWhiteSpace(_value)) Ok();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return; // stay
+                case UnsavedChangesResult.DontSave:
+                    break; // fall through to close
+            }
+        }
+        MudDialog?.Cancel();
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_value)) Ok();
-        else if (e.Key == "Escape") Cancel();
+        else if (e.Key == "Escape") await TryCancelAsync();
     }
 }

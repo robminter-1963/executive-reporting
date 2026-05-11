@@ -19,6 +19,7 @@ public sealed class ScheduledReportJob
     private readonly ICompanyRegistry _companies;
     private readonly ITeamSourceService _teams;
     private readonly ISchemaConfigStore _schemaConfigStore;
+    private readonly IAdminService _admins;
     private readonly ILogger<ScheduledReportJob> _logger;
 
     public ScheduledReportJob(
@@ -30,6 +31,7 @@ public sealed class ScheduledReportJob
         ICompanyRegistry companies,
         ITeamSourceService teams,
         ISchemaConfigStore schemaConfigStore,
+        IAdminService admins,
         ILogger<ScheduledReportJob> logger)
     {
         _connectionString = configuration.GetConnectionString("ConfigDb")
@@ -41,6 +43,7 @@ public sealed class ScheduledReportJob
         _companies = companies ?? throw new ArgumentNullException(nameof(companies));
         _teams = teams ?? throw new ArgumentNullException(nameof(teams));
         _schemaConfigStore = schemaConfigStore ?? throw new ArgumentNullException(nameof(schemaConfigStore));
+        _admins = admins ?? throw new ArgumentNullException(nameof(admins));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -426,6 +429,42 @@ public sealed class ScheduledReportJob
             "Single-pass query returned {Rows} row(s) for ScheduleId={ScheduleId}",
             response.TotalCount, scheduleId);
 
+        // Fan-out branches per schedule.TeamFanout. Members keeps the
+        // legacy per-owner slice. Manager sends the entire team's roll-up
+        // (or unfiltered, when the manager has all-access) to the team's
+        // manager email. Both runs Members + Manager and concatenates
+        // outcomes — the manager appears alongside the per-owner rows in
+        // the run summary.
+        var fanout = schedule.TeamFanout;
+
+        if (fanout == TeamFanout.Members || fanout == TeamFanout.Both)
+        {
+            await SendToMembersAsync(scheduleId, schedule, savedReport, subject,
+                                     response, ownerField, emailByExtId, outcomes);
+        }
+
+        if (fanout == TeamFanout.Manager || fanout == TeamFanout.Both)
+        {
+            await SendToManagerAsync(scheduleId, schedule, savedReport, subject,
+                                     team, baseRequest, response, emailByExtId, outcomes);
+        }
+
+        return outcomes;
+    }
+
+    // Members fan-out — group the team-IN result by owner, send each
+    // owner their own slice. Extracted so RunIndividualAsync can share
+    // it with the Both branch without duplicating the loop.
+    private async Task SendToMembersAsync(
+        Guid scheduleId,
+        ReportSchedule schedule,
+        SavedReport savedReport,
+        string subject,
+        QueryResponse response,
+        TleReportingDashboard.Web.Configuration.FieldDefinition ownerField,
+        Dictionary<string, string> emailByExtId,
+        List<RecipientOutcome> outcomes)
+    {
         // Group rows by the owner field's value. Rows with a null /
         // blank owner (shouldn't happen given the IN predicate, but
         // defensive) are dropped.
@@ -442,7 +481,7 @@ public sealed class ScheduledReportJob
             // success, not a failure. BuildHeadline picks up the
             // empty-outcomes case and writes the "no recipients had
             // data this run" status.
-            return outcomes;
+            return;
         }
 
         foreach (var (extId, ownerRows) in rowsByOwner)
@@ -488,8 +527,96 @@ public sealed class ScheduledReportJob
                 outcomes.Add(new(recipientEmail, "Failed", null, ex.Message));
             }
         }
+    }
 
-        return outcomes;
+    // Manager fan-out — send the full team-IN result (roll-up) to the
+    // team's manager email. If the manager is a global admin, re-run the
+    // query without the team-IN scope so they receive the unfiltered
+    // report instead. Outcomes are appended to the shared list so a Both
+    // run surfaces manager + members together in last_run_status.
+    private async Task SendToManagerAsync(
+        Guid scheduleId,
+        ReportSchedule schedule,
+        SavedReport savedReport,
+        string subject,
+        TeamRecord team,
+        QueryRequest scopedRequest,
+        QueryResponse scopedResponse,
+        Dictionary<string, string> emailByExtId,
+        List<RecipientOutcome> outcomes)
+    {
+        if (string.IsNullOrWhiteSpace(team.ManagerExtId))
+        {
+            outcomes.Add(new($"team {team.TeamId} manager", "Failed", null,
+                $"Team {team.TeamId} has no manager_ext_id set in Teams SQL."));
+            return;
+        }
+
+        if (!emailByExtId.TryGetValue(team.ManagerExtId, out var managerEmail)
+            || string.IsNullOrWhiteSpace(managerEmail))
+        {
+            outcomes.Add(new(team.ManagerExtId, "Failed", null,
+                $"Manager ext_id '{team.ManagerExtId}' has no email returned by User Emails SQL."));
+            return;
+        }
+
+        // All-access bypass: a global-admin manager gets the unfiltered
+        // report. Re-run with the same request shape but no team-IN
+        // scope so cross-team rows aren't lost. Non-admin managers
+        // receive the same scopedResponse the Members branch already
+        // computed — no second round trip.
+        QueryResponse outboundResponse;
+        try
+        {
+            if (_admins.IsAdmin(managerEmail))
+            {
+                _logger.LogInformation(
+                    "Manager fan-out: ScheduleId={ScheduleId} manager={Email} has all-access — sending unfiltered.",
+                    scheduleId, managerEmail);
+                var unscoped = new QueryRequest
+                {
+                    FieldIds = scopedRequest.FieldIds,
+                    Filters = scopedRequest.Filters,
+                    CustomFilterIds = scopedRequest.CustomFilterIds,
+                    AdvancedFilters = scopedRequest.AdvancedFilters,
+                    SortField = scopedRequest.SortField,
+                    SortDirection = scopedRequest.SortDirection,
+                    SecondarySortField = scopedRequest.SecondarySortField,
+                    SecondarySortDirection = scopedRequest.SecondarySortDirection,
+                    DisableDefaultSort = scopedRequest.DisableDefaultSort,
+                    FallbackSortColumns = scopedRequest.FallbackSortColumns,
+                    Distinct = scopedRequest.Distinct,
+                    Page = scopedRequest.Page,
+                    PageSize = scopedRequest.PageSize,
+                    ConnectionId = scopedRequest.ConnectionId,
+                    PrimaryTable = scopedRequest.PrimaryTable,
+                    GroupByFieldIds = scopedRequest.GroupByFieldIds,
+                    TableCalcSqlColumns = scopedRequest.TableCalcSqlColumns,
+                    Scoping = null
+                };
+                outboundResponse = await _queryPipeline.ExecuteAsync(unscoped, Array.Empty<string>());
+            }
+            else
+            {
+                outboundResponse = scopedResponse;
+            }
+
+            var (bytes, fileName) = FormatAttachment(
+                BuildExportData(outboundResponse, savedReport.ColumnState),
+                savedReport.Name, schedule.AttachmentFormat);
+            var html = BuildEmailBody(savedReport.Name, outboundResponse.TotalCount, schedule.IncludePreview);
+
+            await _emailService.SendReportEmailAsync(managerEmail, subject, html, bytes, fileName);
+
+            outcomes.Add(new(managerEmail, "Success", outboundResponse.TotalCount, "manager"));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Manager send failed for ScheduleId={ScheduleId} manager_ext_id={ExtId} email={Email}",
+                scheduleId, team.ManagerExtId, managerEmail);
+            outcomes.Add(new(managerEmail, "Failed", null, ex.Message));
+        }
     }
 
     // Strip schema prefix and brackets from a "schema.table" reference
@@ -578,7 +705,9 @@ public sealed class ScheduledReportJob
                    CASE WHEN COL_LENGTH('EMPOWER.RPT_report_schedules','team_connection_id') IS NULL
                         THEN CAST(NULL AS UNIQUEIDENTIFIER) ELSE team_connection_id END AS team_connection_id,
                    CASE WHEN COL_LENGTH('EMPOWER.RPT_report_schedules','dist_email') IS NULL
-                        THEN CAST(NULL AS NVARCHAR(255)) ELSE dist_email END AS dist_email
+                        THEN CAST(NULL AS NVARCHAR(255)) ELSE dist_email END AS dist_email,
+                   CASE WHEN COL_LENGTH('EMPOWER.RPT_report_schedules','team_fanout') IS NULL
+                        THEN CAST(NULL AS NVARCHAR(20)) ELSE team_fanout END AS team_fanout
               FROM EMPOWER.RPT_report_schedules
              WHERE id = @Id;", conn);
         cmd.Parameters.Add(new SqlParameter("@Id", scheduleId));
@@ -592,6 +721,19 @@ public sealed class ScheduledReportJob
         var kind = string.Equals(kindRaw, "individual", StringComparison.OrdinalIgnoreCase)
             ? ScheduleKind.Individual
             : ScheduleKind.Distribution;
+        // Resolve TeamFanout from the persisted lowercase string. Null /
+        // unknown falls back to Members so a pre-2026-05-09_17-00 env
+        // reads as the legacy per-member fan-out behavior. Without this
+        // mapping the Worker would always send to members regardless of
+        // what the dialog persisted — exactly the bug the Manager-only
+        // path was reporting.
+        var fanoutRaw = r.IsDBNull(15) ? null : r.GetString(15);
+        var fanout = fanoutRaw?.ToLowerInvariant() switch
+        {
+            "manager" => TeamFanout.Manager,
+            "both"    => TeamFanout.Both,
+            _         => TeamFanout.Members
+        };
         return new ReportSchedule
         {
             Id = r.GetGuid(0),
@@ -608,7 +750,8 @@ public sealed class ScheduledReportJob
             Kind = kind,
             TeamId = r.IsDBNull(12) ? null : r.GetInt32(12),
             TeamConnectionId = r.IsDBNull(13) ? null : r.GetGuid(13),
-            DistEmail = r.IsDBNull(14) ? null : r.GetString(14)
+            DistEmail = r.IsDBNull(14) ? null : r.GetString(14),
+            TeamFanout = fanout
         };
     }
 
@@ -780,6 +923,12 @@ public sealed class ScheduledReportJob
         {
             var bytes = _exportService.ExportToCsv(data);
             return (bytes, $"{safeReportName}_{timestamp}.csv");
+        }
+
+        if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            var bytes = _exportService.ExportToPdf(data, reportName);
+            return (bytes, $"{safeReportName}_{timestamp}.pdf");
         }
 
         var excelBytes = _exportService.ExportToExcel(data, reportName);

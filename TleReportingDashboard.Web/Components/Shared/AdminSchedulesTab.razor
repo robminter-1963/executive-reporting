@@ -145,9 +145,22 @@
                 <MudTd DataLabel="Target">
                     @if (context.Kind == ScheduleKind.Individual && context.TeamId is int tid)
                     {
-                        <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
-                            <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Color="Color.Primary" />
-                            <MudText Typo="Typo.caption">Individual · team @tid</MudText>
+                        @* Two-line target description: line 1 = team
+                           identifier (so admins can match against Team
+                           Builder), line 2 = fan-out semantics in plain
+                           language. Icon color follows the strategy —
+                           Primary for the legacy member-fan, Tertiary for
+                           manager-centric variants — so the table scans
+                           visually by recipient strategy. *@
+                        var (icon, color, headline, detail) = DescribeIndividualTarget(context.TeamFanout, tid);
+                        <MudStack Row Spacing="1" AlignItems="AlignItems.Start">
+                            <MudIcon Icon="@icon" Size="Size.Small" Color="@color" />
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.caption" Style="font-weight: 600;">@headline</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.7rem;">
+                                    @detail
+                                </MudText>
+                            </MudStack>
                         </MudStack>
                     }
                     else if (context.Kind == ScheduleKind.Distribution && !string.IsNullOrWhiteSpace(context.DistEmail))
@@ -422,6 +435,33 @@
         return string.IsNullOrWhiteSpace(schedule.CronExpression) ? "—" : schedule.CronExpression;
     }
 
+    // Two-line breakdown of an Individual schedule's recipient strategy.
+    // Returns (icon, color, headline, detail) so the cell renders the
+    // right visual + plain-language explanation per fan-out mode. Color
+    // varies by strategy so the table reads at a glance: People (blue) =
+    // every member fan; SupervisorAccount (purple) = manager-centric.
+    private static (string icon, Color color, string headline, string detail)
+        DescribeIndividualTarget(TeamFanout fanout, int teamId) => fanout switch
+    {
+        TeamFanout.Manager => (
+            Icons.Material.Filled.SupervisorAccount,
+            Color.Tertiary,
+            $"Team {teamId} · manager only",
+            "One email to the team's manager — full team roll-up. All-access managers get the unfiltered report."),
+
+        TeamFanout.Both => (
+            Icons.Material.Filled.SupervisorAccount,
+            Color.Tertiary,
+            $"Team {teamId} · manager + all members",
+            "Manager gets the team's roll-up; each member gets their own slice (one email per member)."),
+
+        _ /* Members */ => (
+            Icons.Material.Filled.People,
+            Color.Primary,
+            $"Team {teamId} · all members",
+            "One personalized email per member, scope-filtered to that member's own rows.")
+    };
+
     // Failed badge logic. Mirrors ScheduleManager.IsRunStatusFailed.
     // Triggers on:
     //   * Legacy outer-shell "Failed: <error>" strings.
@@ -461,7 +501,13 @@
             { x => x.UserEmail, CurrentUserEmail }
         };
         var dialog = await DialogService.ShowAsync<ScheduleDialog>("New Schedule", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+            new DialogOptions
+            {
+                MaxWidth = MaxWidth.Medium,
+                FullWidth = true,
+                BackdropClick = false,
+                CloseOnEscapeKey = false
+            });
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not ReportSchedule s) return;
         try
@@ -495,7 +541,13 @@
             { x => x.ExistingSchedule, schedule }
         };
         var dialog = await DialogService.ShowAsync<ScheduleDialog>("Edit Schedule", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+            new DialogOptions
+            {
+                MaxWidth = MaxWidth.Medium,
+                FullWidth = true,
+                BackdropClick = false,
+                CloseOnEscapeKey = false
+            });
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not ReportSchedule updated) return;
         try

@@ -1,10 +1,17 @@
 @using TleReportingDashboard.Web.Components.Pages
+@inject IDialogService DialogService
 
 @* Bulk rename utility for the Schema Builder. Takes an Old string and a
    New string, scans every SQL-bearing field in the loaded schema
    (Fields, Joins, Lookups, Custom Filters), and previews matches before
    committing. The dialog does NOT mutate — it returns the (Old, New)
-   pair on Apply and the parent performs the rename + save. *@
+   pair on Apply and the parent performs the rename + save.
+
+   Dirty-tracked: any non-empty Find/Replace text triggers the
+   unsaved-changes prompt on any non-explicit dismiss. Callers must open
+   this dialog with DialogOptions { BackdropClick = false,
+   CloseOnEscapeKey = false } so backdrop / Esc routes through
+   TryCancelAsync rather than firing MudDialog's default cancel directly. *@
 <MudDialog>
     <TitleContent>
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
@@ -100,7 +107,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled"
                    Disabled="@(!_previewed || _matches.Count == 0)"
                    OnClick="Apply">
@@ -224,4 +231,45 @@
     }
 
     private void Cancel() => MudDialog?.Cancel();
+
+    // Pure "fill in a new thing" dialog — no initial values, so dirty just
+    // means the admin typed something into Find or Replace. Toggling scope
+    // checkboxes alone isn't dirty (their default-all-on state is what the
+    // dialog opens with).
+    private bool IsDirty =>
+        !string.IsNullOrEmpty(_oldText) || !string.IsNullOrEmpty(_newText);
+
+    // Routes every dismiss path (Cancel button, Esc, backdrop) through the
+    // unsaved-changes prompt. "Save" here means run Apply if a preview
+    // produced matches; if there's no usable preview yet there's nothing to
+    // save and we just dismiss. DontSave dismisses without applying.
+    private async Task TryCancelAsync()
+    {
+        if (!IsDirty)
+        {
+            MudDialog?.Cancel();
+            return;
+        }
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                if (_previewed && _matches.Count > 0)
+                {
+                    Apply();
+                }
+                else
+                {
+                    // No preview yet (or nothing to apply) — Save can't do
+                    // anything meaningful, so dismiss.
+                    MudDialog?.Cancel();
+                }
+                return;
+            case UnsavedChangesResult.Cancel:
+                return;
+            case UnsavedChangesResult.DontSave:
+                MudDialog?.Cancel();
+                return;
+        }
+    }
 }

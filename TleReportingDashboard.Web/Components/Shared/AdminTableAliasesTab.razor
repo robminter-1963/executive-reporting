@@ -247,7 +247,7 @@
                 { x => x.AvailableFields, fields },
                 { x => x.TakenAliases, BuildTakenAliases(excludeEntryId: null) }
             },
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
         var result = await dlg.Result;
         if (result is null || result.Canceled || result.Data is not TableAliasEditDialog.EditResult edited) return;
 
@@ -299,7 +299,7 @@
                 { x => x.OnRoleOwnerCleared, EventCallback.Factory.Create<Guid>(this,
                     async roleId => await TableAliasSvc.ClearRoleOwnerAsync(entry.Id, roleId)) }
             },
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
         var result = await dlg.Result;
         if (result is null || result.Canceled || result.Data is not TableAliasEditDialog.EditResult edited) return;
 

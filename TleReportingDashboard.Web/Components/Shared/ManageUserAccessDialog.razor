@@ -4,6 +4,15 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
+@* Every edit in this dialog (role change, company-email override, per-
+   connection LOS/CRM login, grant, revoke) commits live via the
+   IUserManagementService — so there's no pending state to lose. The Close
+   button is the only way out; no separate Cancel button exists. We still
+   block backdrop / Esc dismissal at the caller (BackdropClick=false,
+   CloseOnEscapeKey=false) so the admin can't accidentally close the
+   dialog mid-debounce — but no unsaved-changes prompt is needed because
+   IsDirty is structurally always false here. *@
+
 <MudDialog>
     <TitleContent>
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">

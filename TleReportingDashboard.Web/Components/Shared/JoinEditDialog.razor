@@ -1,5 +1,6 @@
 @using TleReportingDashboard.Web.Components.Pages
 @using TleReportingDashboard.Web.Services
+@inject IDialogService DialogService
 
 <MudDialog>
     <TitleContent>
@@ -141,7 +142,7 @@
         </MudGrid>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
                    Disabled="@(!IsValid)">
             OK
@@ -172,6 +173,10 @@
 
     private SchemaBuilder.JoinEntry _edited = new();
     private string _originalRef = string.Empty;
+
+    // JSON snapshot at OnInitialized — IsDirty compares a fresh snapshot
+    // against this to drive the unsaved-changes prompt.
+    private string _initialSnapshot = string.Empty;
 
     // Effective list shown in the dropdown. Starts with AvailableAliases; if
     // the join being edited has a (table, alias) not in the catalog (legacy
@@ -373,9 +378,50 @@
             }
             _selectedSourceKey = $"{srcTableKey}|{srcAliasKey}";
         }
+
+        _initialSnapshot = BuildSnapshot();
     }
 
-    private void Cancel() => MudDialog?.Cancel();
+    private string BuildSnapshot() =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            _edited.Id,
+            _edited.JoinType,
+            _edited.TargetTable,
+            _edited.Alias,
+            _edited.OnClause,
+            _edited.ExtraCondition,
+            _edited.UseRawSql,
+            _edited.RawSql,
+            _edited.SourceTable,
+            _edited.SourceAlias,
+            _edited.PrimaryTable,
+            _edited.PrimaryAlias
+        });
+
+    private bool IsDirty =>
+        !string.Equals(_initialSnapshot, BuildSnapshot(), StringComparison.Ordinal);
+
+    // Routes Cancel through the unsaved-changes prompt. Save only re-enters
+    // Ok() when the dialog is currently in a valid state (IsValid).
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (IsValid) Ok();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return;
+                case UnsavedChangesResult.DontSave:
+                    break;
+            }
+        }
+        MudDialog?.Cancel();
+    }
 
     private void Ok()
     {

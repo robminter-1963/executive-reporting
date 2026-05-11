@@ -1054,6 +1054,94 @@
     // below so the cache resumes serving cached reads after navigation.
     private IDisposable? _editorScope;
 
+    // Snapshot of the schema state at the most recent "clean" point —
+    // initial load and successful save. Compared against the live state
+    // whenever the user tries to navigate away; mismatch = dirty = prompt.
+    // Snapshot is a serialized JSON string rather than a structural compare
+    // so we don't have to enumerate every nested config field by hand.
+    private string _dirtySnapshot = string.Empty;
+    // Tracks the last-sent value of the JS-side beforeunload guard so
+    // we don't thrash JS interop on every render.
+    private bool _beforeUnloadArmed;
+    // Disposable returned by RegisterLocationChangingHandler. Released
+    // on Dispose so the handler doesn't leak across navigations.
+    private IDisposable? _navHandlerRegistration;
+
+    private string ComputeDirtySnapshot()
+    {
+        // Capture every authoring-relevant collection plus the scoping
+        // identifiers and the Settings tab values. Mirrors the surfaces
+        // GenerateJson() / Save() persist; table aliases are auto-saved
+        // through their own dialogs so they're intentionally excluded.
+        try
+        {
+            var snap = new
+            {
+                ConnectionId = _selectedConnectionId,
+                CompanyId = _selectedCompanyId,
+                Fields = _fields,
+                Joins = _joins,
+                Lookups = _lookups,
+                CustomFilters = _customFilters,
+                Domains = _domainList,
+                Settings = new
+                {
+                    MaxRowLimit = _maxRowLimit,
+                    CommandTimeoutSeconds = _commandTimeout,
+                    DefaultPageSize = _defaultPageSize
+                }
+            };
+            return System.Text.Json.JsonSerializer.Serialize(snap);
+        }
+        catch
+        {
+            // Snapshot failure shouldn't crash the editor — fall back to
+            // a sentinel that will compare as dirty (so the user is at
+            // least asked rather than silently losing edits).
+            return Guid.NewGuid().ToString();
+        }
+    }
+
+    // Reset the baseline — call after a successful load or save so the
+    // current state is treated as the new "clean" reference point.
+    private void MarkClean() => _dirtySnapshot = ComputeDirtySnapshot();
+
+    private bool IsDirty =>
+        !string.Equals(_dirtySnapshot, ComputeDirtySnapshot(), StringComparison.Ordinal);
+
+    // Intercepts in-app navigation. The Blazor handler is awaited
+    // before the navigation actually proceeds, so we can prompt and
+    // call PreventNavigation if the user picks Cancel. Save runs the
+    // existing save path; DontSave just lets nav proceed.
+    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
+    {
+        if (!IsDirty) return;
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                // Save() reads from _jsonPreview, so refresh it first —
+                // the user may have edited fields without ever clicking
+                // away from a tab that triggers GenerateJson().
+                GenerateJson();
+                await Save();
+                // Save sets the new baseline; if it failed (snackbar
+                // shown by Save), state is still dirty. Block
+                // navigation so the user can fix and retry rather
+                // than silently leaving with unsaved work.
+                if (IsDirty) context.PreventNavigation();
+                break;
+            case UnsavedChangesResult.DontSave:
+                // Disarm guards so the imminent unload doesn't
+                // double-prompt (LocationChanging then beforeunload).
+                MarkClean();
+                break;
+            case UnsavedChangesResult.Cancel:
+                context.PreventNavigation();
+                break;
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         _editorScope = EditorMode.Enter();
@@ -1133,6 +1221,13 @@
 
         LoadCurrentConfig();
         await LoadTableAliasesAsync();
+
+        // Register the in-app navigation guard once init is past the
+        // bulk of state setup, so an early bail-out (access denied
+        // above) doesn't leak a registered handler. Snapshot baseline
+        // AFTER the load so the schema's own data isn't read as "dirty."
+        _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
+        MarkClean();
     }
 
     private async Task OnCompanyChanged(Guid? newCompanyId)
@@ -1155,6 +1250,10 @@
 
         LoadCurrentConfig();
         await LoadTableAliasesAsync();
+        // The freshly-loaded schema is the new clean baseline — without
+        // this re-baseline the dirty check would compare the new schema
+        // against a stale snapshot from the prior connection.
+        MarkClean();
 
         // Persist the newly-selected connection (if any). The company isn't
         // stored separately — we derive it from the connection at next load.
@@ -1171,6 +1270,10 @@
         _suggestedJoins.Clear();
         LoadCurrentConfig();
         await LoadTableAliasesAsync();
+        // The freshly-loaded schema is the new clean baseline — without
+        // this re-baseline the dirty check would compare the new schema
+        // against a stale snapshot from the prior connection.
+        MarkClean();
         await PersistSelectedConnectionAsync();
     }
 
@@ -1230,7 +1333,7 @@
         };
         var dlg = await DialogService.ShowAsync<RenameReferenceDialog>(
             "Rename Table Reference", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
 
         var result = await dlg.Result;
         if (result is null || result.Canceled) return;
@@ -1330,7 +1433,8 @@
             { x => x.SameTypeSources, sameTypeSources },
             { x => x.TargetHasSchema, await SchemaConfigStoreSvc.HasSchemaAsync(target) }
         };
-        var dlg = await DialogService.ShowAsync<CloneSchemaDialog>("Clone schema from another connection", parameters);
+        var dlg = await DialogService.ShowAsync<CloneSchemaDialog>("Clone schema from another connection", parameters,
+            new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false });
         var result = await dlg.Result;
         if (result is null || result.Canceled || result.Data is not Guid sourceId) return;
 
@@ -1891,7 +1995,7 @@
         };
         var dialog = await DialogService.ShowAsync<FieldEditDialog>(
             isNew ? "Add Field" : "Edit Field", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
 
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not FieldEntry edited) return;
@@ -2180,7 +2284,7 @@
         };
         var dialog = await DialogService.ShowAsync<JoinEditDialog>(
             isNew ? "Add Join" : "Edit Join", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
 
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not JoinEditDialog.JoinEditResult res) return;
@@ -2346,7 +2450,8 @@
             { x => x.Label, "Field Section name" }
         };
         var dlg = await DialogService.ShowAsync<RenameDialog>("Rename Field Section", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true,
+                                BackdropClick = false, CloseOnEscapeKey = false });
         var result = await dlg.Result;
         if (result is null || result.Canceled || result.Data is not string newName) return;
         newName = newName.Trim();
@@ -2402,7 +2507,7 @@
             { "Initial", field.ValueSortOrder }
         };
         var dialog = await DialogService.ShowAsync<SortOrderDialog>("Custom Sort Order", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
         var result = await dialog.Result;
         if (result is not null && !result.Canceled && result.Data is Dictionary<string, int> map)
         {
@@ -2536,6 +2641,11 @@
                 return;
             }
             await SchemaConfigStoreSvc.SaveAsync(parsed, targetConnectionId, updatedBy);
+
+            // Save was the explicit clean point — re-baseline so a
+            // navigation away that follows doesn't re-prompt over the
+            // just-saved state.
+            MarkClean();
 
             // Success path — inline indicator flashes near the Save button.
             // _savedMessage is reserved for error display below.
@@ -2700,7 +2810,7 @@
         };
         var dialog = await DialogService.ShowAsync<LookupEditDialog>(
             isNew ? "Add Lookup" : "Edit Lookup", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
 
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not LookupEntry edited) return;
@@ -2732,7 +2842,7 @@
         };
         var dialog = await DialogService.ShowAsync<CustomFilterEditDialog>(
             isNew ? "Add Custom Filter" : "Edit Custom Filter", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
 
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not CustomFilterEntry edited) return;
@@ -2787,9 +2897,34 @@
         public string GroupName { get; set; } = string.Empty;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Sync the JS-side beforeunload guard with the live dirty state
+        // every render, but only invoke when it actually changed — saves
+        // a JS-interop call per re-render of a clean page.
+        var armNow = IsDirty;
+        if (armNow != _beforeUnloadArmed)
+        {
+            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
+            catch { /* circuit may be tearing down — drop silently */ }
+            _beforeUnloadArmed = armNow;
+        }
+    }
+
     public void Dispose()
     {
         _editorScope?.Dispose();
         _editorScope = null;
+        _navHandlerRegistration?.Dispose();
+        _navHandlerRegistration = null;
+        // Clear the JS-side guard so the next page mount doesn't
+        // inherit a stale "armed" state. Fire-and-forget — the
+        // circuit is tearing down and there's no one to await us.
+        if (_beforeUnloadArmed)
+        {
+            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
+            catch { }
+            _beforeUnloadArmed = false;
+        }
     }
 }

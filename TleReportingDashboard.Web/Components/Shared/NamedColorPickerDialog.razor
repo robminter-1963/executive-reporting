@@ -1,5 +1,14 @@
 @using TleReportingDashboard.Web.Services
 @using MudBlazor
+@inject IDialogService DialogService
+
+@* Dirty-tracked: editing the custom-hex field away from the initial
+   CurrentHex triggers the unsaved-changes prompt on any non-explicit
+   dismiss. Tile picks commit immediately via Ok so they aren't dirty.
+   Callers must open this dialog with DialogOptions { BackdropClick =
+   false, CloseOnEscapeKey = false } so backdrop / Esc routes through
+   TryCancelAsync rather than firing MudDialog's default cancel
+   directly. *@
 
 <MudDialog>
     <TitleContent>
@@ -69,7 +78,7 @@
             Apply hex
         </MudButton>
         <MudSpacer />
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -141,6 +150,7 @@
 
     private string _searchText = string.Empty;
     private string _customHex = string.Empty;
+    private string _initialCustomHex = string.Empty;
     private string? _currentName;
 
     private IEnumerable<(string Name, string Hex)> Filtered =>
@@ -152,8 +162,18 @@
     protected override void OnInitialized()
     {
         _customHex = CurrentHex ?? string.Empty;
+        _initialCustomHex = _customHex;
         _currentName = CurrentHex is null ? null : CssNamedColors.NameForHex(CurrentHex);
     }
+
+    // Only the typed custom-hex field is dirty-trackable. Tile picks
+    // close the dialog immediately on click, so they can't leave a
+    // pending change behind.
+    private bool IsDirty =>
+        !string.Equals(
+            (_customHex ?? string.Empty).Trim(),
+            (_initialCustomHex ?? string.Empty).Trim(),
+            StringComparison.OrdinalIgnoreCase);
 
     private void Pick(string hex) => MudDialog.Close(DialogResult.Ok(hex));
 
@@ -168,7 +188,28 @@
         MudDialog.Close(DialogResult.Ok(v));
     }
 
-    private void Cancel() => MudDialog.Cancel();
+    // Routes every dismiss path (Cancel button, Esc key, backdrop)
+    // through the unsaved-changes prompt so an accidental dismiss
+    // never silently throws away a typed-in custom hex. Save runs
+    // ApplyCustom; DontSave dismisses.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (IsValidHex(_customHex)) ApplyCustom();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return; // stay
+                case UnsavedChangesResult.DontSave:
+                    break; // fall through to close
+            }
+        }
+        MudDialog.Cancel();
+    }
 
     // Loose hex validation: accepts "#RRGGBB" or "RRGGBB" (case-
     // insensitive). Skips the 3-digit short form because the AppTheme

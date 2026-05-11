@@ -1,10 +1,13 @@
 @page "/preferences"
 @rendermode InteractiveServer
+@implements IDisposable
 @inject IUserPreferenceService PreferenceService
 @inject UserPreferenceState PreferenceState
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
 
 <PageTitle>Preferences - Executive Reporting Suite</PageTitle>
 
@@ -105,6 +108,49 @@
     private bool _saving;
     private string _userId = "anonymous";
 
+    // ── Unsaved-changes guard ──
+    private string _dirtySnapshot = string.Empty;
+    private bool _beforeUnloadArmed;
+    private IDisposable? _navHandlerRegistration;
+
+    private string ComputeDirtySnapshot()
+    {
+        try
+        {
+            var snap = new
+            {
+                _pref.DefaultPageSize,
+                _pref.ReportLibraryPageSize
+            };
+            return System.Text.Json.JsonSerializer.Serialize(snap);
+        }
+        catch { return Guid.NewGuid().ToString(); }
+    }
+
+    private void MarkClean() => _dirtySnapshot = ComputeDirtySnapshot();
+
+    private bool IsDirty =>
+        !string.Equals(_dirtySnapshot, ComputeDirtySnapshot(), StringComparison.Ordinal);
+
+    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
+    {
+        if (!IsDirty) return;
+        var choice = await TleReportingDashboard.Web.Components.Shared.UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.Save:
+                await Save(navigateAfter: false);
+                if (IsDirty) context.PreventNavigation();
+                break;
+            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.DontSave:
+                MarkClean();
+                break;
+            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.Cancel:
+                context.PreventNavigation();
+                break;
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
@@ -115,6 +161,32 @@
         _pref = await PreferenceService.GetPreferencesAsync(_userId);
         _pref.UserId = _userId;
         _loading = false;
+
+        _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
+        MarkClean();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var armNow = IsDirty;
+        if (armNow != _beforeUnloadArmed)
+        {
+            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
+            catch { }
+            _beforeUnloadArmed = armNow;
+        }
+    }
+
+    public void Dispose()
+    {
+        _navHandlerRegistration?.Dispose();
+        _navHandlerRegistration = null;
+        if (_beforeUnloadArmed)
+        {
+            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
+            catch { }
+            _beforeUnloadArmed = false;
+        }
     }
 
     // Always go "home" — the company picker at "/", which auto-redirects
@@ -139,17 +211,23 @@
         _pref.ReportLibraryPageSize = size;
     }
 
-    private async Task Save()
+    private async Task Save() => await Save(navigateAfter: true);
+
+    private async Task Save(bool navigateAfter)
     {
         _saving = true;
         try
         {
             await PreferenceService.SavePreferencesAsync(_pref);
             PreferenceState.Set(_pref);
+            MarkClean();
             // Land back on the picker, which redirects to the user's
             // last-visited company dashboard. Same destination Cancel
             // / Back use, so the page has one consistent exit target.
-            Navigation.NavigateTo("/");
+            // Skipped when invoked from the unsaved-changes prompt's
+            // Save branch — the originating navigation will resume on
+            // its own.
+            if (navigateAfter) Navigation.NavigateTo("/");
         }
         catch (Exception ex)
         {

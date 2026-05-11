@@ -2,27 +2,24 @@ using System.Text.Json.Serialization;
 
 namespace TleReportingDashboard.Web.Services;
 
-// App-wide theme (single row in RPT_app_theme). Admins tune the 14 named
-// tokens via Admin → Theme; MainLayout reads the current value once per
-// render and injects a `:root { --token: value; }` block so every page's
-// chrome CSS resolves through `var(--…)`.
+// Per-company theme service. Every render path that draws chrome
+// (MainLayout, dashboard tiles, etc.) resolves the active theme via
+// GetAsync(companyId) and injects a `:root { --token: value; }` block
+// so chrome CSS picks up the right palette. Storage:
 //
-// Single global theme by design — per-company overrides and dark mode are
-// out of v1 scope. The service layer is ready for either: it'd add a
-// per-company column or a second row keyed by mode, neither of which
-// require breaking changes to AppTheme.
+//   • RPT_app_theme.company_id IS NULL → global default. Seeded by the
+//     2026-05-04 migration; serves as the fallback when a company hasn't
+//     defined its own theme.
+//   • RPT_app_theme.company_id = <guid> → per-company override.
+//
+// GetAsync(companyId): per-company row if present; else global; else the
+// hardcoded AppTheme.Default. SaveAsync(theme, companyId, ...): writes to
+// the global row when companyId is null; upserts the per-company row
+// otherwise. Callers MUST gate per-company writes behind admin auth.
 public interface IThemeService
 {
-    // Returns the active theme. Cached after the first DB read; cache
-    // invalidates on SaveAsync. Always returns a non-null value — falls
-    // back to the seed (`AppTheme.Default`) when the DB row is missing
-    // (pre-migration env, transient read failure).
-    Task<AppTheme> GetAsync(CancellationToken ct = default);
-
-    // Persists the supplied theme as the active one. Replaces the whole
-    // payload — no partial-update / merge semantics, since the admin UI
-    // always submits all 14 tokens together.
-    Task SaveAsync(AppTheme theme, string? updatedBy, CancellationToken ct = default);
+    Task<AppTheme> GetAsync(Guid? companyId = null, CancellationToken ct = default);
+    Task SaveAsync(AppTheme theme, Guid? companyId, string? updatedBy, CancellationToken ct = default);
 }
 
 // Wire-format for the theme JSON. Field names are camelCase so the JSON

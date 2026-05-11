@@ -1,6 +1,14 @@
+@inject IDialogService DialogService
+
 @* Add/edit dialog for the connection's table-alias catalog. The dialog's
    Result.Data is a (TableName, Alias) tuple returned as TableAliasEditDialog.EditResult;
-   the caller persists via ICustomPrimaryTableService. *@
+   the caller persists via ICustomPrimaryTableService.
+
+   Dirty-tracked: edits to any of the user-editable fields vs. the initial
+   snapshot trigger the unsaved-changes prompt on any non-explicit dismiss.
+   Callers must open this dialog with DialogOptions { BackdropClick = false,
+   CloseOnEscapeKey = false } so backdrop / Esc routes through TryCancelAsync
+   rather than firing MudDialog's default cancel directly. *@
 <MudDialog>
     <DialogContent>
         <MudStack Spacing="2" Style="min-width: 420px;">
@@ -188,7 +196,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled"
                    OnClick="Submit" Disabled="@(!CanSubmit())">
             @(IsNew ? "Add" : "Save")
@@ -278,6 +286,25 @@
     private string? _primaryColumn;
     private string? _additionalKeyColumns;
 
+    // Snapshot of the user-editable state captured at OnInitialized so the
+    // unsaved-changes prompt can compare current values against it. Role-owner
+    // rows are committed live via callbacks (persisted on add / change /
+    // remove) so they're intentionally excluded from this snapshot — the
+    // pending-state question only covers the in-dialog edits that haven't
+    // been saved yet.
+    private record FormSnapshot(
+        string? TableName,
+        string? Alias,
+        bool IsPrimary,
+        bool IsDefaultPrimary,
+        bool IsVirtual,
+        string? TableType,
+        string? PrimaryColumn,
+        string? AdditionalKeyColumns);
+    private FormSnapshot _initialSnapshot = default!;
+
+    private static string Norm(string? s) => (s ?? string.Empty).Trim();
+
     private string TableTypeHelperText => _tableType switch
     {
         TableTypes.LoanSingle       => "One row per loan (e.g. one main key column).",
@@ -349,6 +376,28 @@
         {
             _isVirtual = true;
         }
+
+        // Snapshot AFTER all initial-state coercions (default→eligible, virtual
+        // auto-detect) so the comparison reflects what the user actually sees.
+        _initialSnapshot = new FormSnapshot(
+            _tableName, _alias, _isPrimary, _isDefaultPrimary, _isVirtual,
+            _tableType, _primaryColumn, _additionalKeyColumns);
+    }
+
+    private bool IsDirty
+    {
+        get
+        {
+            var s = _initialSnapshot;
+            return !string.Equals(Norm(_tableName), Norm(s.TableName), StringComparison.Ordinal)
+                || !string.Equals(Norm(_alias), Norm(s.Alias), StringComparison.Ordinal)
+                || _isPrimary != s.IsPrimary
+                || _isDefaultPrimary != s.IsDefaultPrimary
+                || _isVirtual != s.IsVirtual
+                || !string.Equals(Norm(_tableType), Norm(s.TableType), StringComparison.Ordinal)
+                || !string.Equals(Norm(_primaryColumn), Norm(s.PrimaryColumn), StringComparison.Ordinal)
+                || !string.Equals(Norm(_additionalKeyColumns), Norm(s.AdditionalKeyColumns), StringComparison.Ordinal);
+        }
     }
 
     private Task<IEnumerable<string>> SearchTables(string? value, CancellationToken ct)
@@ -404,6 +453,31 @@
     }
 
     private void Cancel() => MudDialog.Cancel();
+
+    // Routes every dismiss path (Cancel button, Esc key, backdrop) through
+    // the unsaved-changes prompt so an accidental close never silently throws
+    // away pending edits. Save runs the standard Submit path (with its own
+    // validation gate); DontSave dismisses without saving.
+    private async Task TryCancelAsync()
+    {
+        if (!IsDirty)
+        {
+            MudDialog.Cancel();
+            return;
+        }
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                if (CanSubmit()) Submit();
+                return;
+            case UnsavedChangesResult.Cancel:
+                return; // stay
+            case UnsavedChangesResult.DontSave:
+                MudDialog.Cancel();
+                return;
+        }
+    }
 
     // ── Role-scoped owner field editors ───────────────────────────────────
     // Each add/remove fires a callback so persistence happens without the

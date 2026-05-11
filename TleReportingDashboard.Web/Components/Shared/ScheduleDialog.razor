@@ -2,6 +2,13 @@
 @using TleReportingDashboard.Web.Models
 @inject IReportService ReportService
 @inject ITeamSourceService TeamSource
+@inject IDialogService DialogService
+
+@* Multi-field schedule dialog. Initial state is captured once on init
+   into _initialSnapshot (JSON of all editable fields); IsDirty compares
+   the current snapshot byte-wise. Callers must open with DialogOptions
+   { BackdropClick = false, CloseOnEscapeKey = false } so backdrop / Esc
+   are routed through TryCancelAsync. *@
 
 <MudDialog>
     <TitleContent>
@@ -83,6 +90,29 @@
                             </MudSelectItem>
                         }
                     </MudSelect>
+
+                    @* Fan-out sub-mode. Members preserves the legacy "one
+                       email per team member" behavior; Manager sends a
+                       single email to the team's manager (scoped to the
+                       team's roll-up); Both delivers to manager AND every
+                       member. The "all-access" exception applies to the
+                       Manager / Both branches: a manager whose role grants
+                       full access receives the unfiltered report. *@
+                    @if (_teamId is not null)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Send to</MudText>
+                        <MudRadioGroup T="TeamFanout" @bind-Value="_teamFanout" Class="mb-1">
+                            <MudRadio T="TeamFanout" Value="TeamFanout.Members" Color="Color.Primary">
+                                <strong>Members</strong> — one personalized email per team member
+                            </MudRadio>
+                            <MudRadio T="TeamFanout" Value="TeamFanout.Manager" Color="Color.Primary">
+                                <strong>Manager only</strong> — single email to the team manager (full team data)
+                            </MudRadio>
+                            <MudRadio T="TeamFanout" Value="TeamFanout.Both" Color="Color.Primary">
+                                <strong>Both</strong> — manager <em>and</em> each member
+                            </MudRadio>
+                        </MudRadioGroup>
+                    }
 
                     @if (_teamId is not null)
                     {
@@ -264,6 +294,7 @@
                        Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
                 <MudSelectItem Value="@("xlsx")">Excel (.xlsx)</MudSelectItem>
                 <MudSelectItem Value="@("csv")">CSV</MudSelectItem>
+                <MudSelectItem Value="@("pdf")">PDF</MudSelectItem>
             </MudSelect>
 
             <MudSwitch T="bool" @bind-Value="_includePreview" Label="Include inline preview in email"
@@ -278,7 +309,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save"
                    Disabled="@(!IsValid)">
             Save
@@ -308,6 +339,10 @@
     private ScheduleKind _kind = ScheduleKind.Individual;
     private int? _teamId;
     private string _distEmail = string.Empty;
+    // Default to Members so the dialog matches the historical behavior
+    // every existing schedule has — saving a new dialog without touching
+    // the radio doesn't quietly switch fan-out.
+    private TeamFanout _teamFanout = TeamFanout.Members;
 
     // Loaded once on init from the saved report so the team picker can
     // query Team Builder for that connection without making the caller
@@ -337,6 +372,39 @@
     private string _attachmentFormat = "xlsx";
     private bool _includePreview = true;
 
+    // Serialized snapshot of all editable fields at the moment we
+    // finished hydrating from ExistingSchedule (or defaults for a new
+    // schedule). Compared byte-wise against the current state to drive
+    // the unsaved-changes prompt.
+    private string _initialSnapshot = string.Empty;
+
+    private bool IsDirty =>
+        !string.Equals(_initialSnapshot, BuildSnapshot(), StringComparison.Ordinal);
+
+    private string BuildSnapshot() => System.Text.Json.JsonSerializer.Serialize(new
+    {
+        Subject = _subject ?? string.Empty,
+        Recipients = _recipients ?? string.Empty,
+        CcRecipients = _ccRecipients ?? string.Empty,
+        BccRecipients = _bccRecipients ?? string.Empty,
+        Kind = _kind,
+        TeamId = _teamId,
+        TeamFanout = _teamFanout,
+        DistEmail = _distEmail ?? string.Empty,
+        Type = _type,
+        Interval = _interval,
+        Time = _time?.ToString(),
+        DaysOfWeek = _daysOfWeek.OrderBy(d => d).ToList(),
+        DaysOfMonth = _daysOfMonth.OrderBy(d => d).ToList(),
+        MonthlyMode = _monthlyMode,
+        MonthlyOrdinal = _monthlyOrdinal,
+        MonthlyDayOfWeek = _monthlyDayOfWeek,
+        StartDate = _startDate,
+        EndDate = _endDate,
+        AttachmentFormat = _attachmentFormat,
+        IncludePreview = _includePreview
+    });
+
     private bool IsValid =>
         !string.IsNullOrWhiteSpace(_subject)
         && _time.HasValue
@@ -359,6 +427,7 @@
             _endDate = ExistingSchedule.EndDate;
             _kind = ExistingSchedule.Kind;
             _teamId = ExistingSchedule.TeamId;
+            _teamFanout = ExistingSchedule.TeamFanout;
             _distEmail = ExistingSchedule.DistEmail ?? string.Empty;
 
             var pattern = SchedulePattern.FromJson(ExistingSchedule.SchedulePatternJson);
@@ -387,6 +456,12 @@
         {
             await LoadTeamsAsync(cid);
         }
+
+        // Capture the post-hydration state so IsDirty reflects only
+        // user-driven edits. Capturing before LoadTeamsAsync would be
+        // fine too — the team list itself isn't part of the snapshot —
+        // but doing it last is the obvious "everything is settled" point.
+        _initialSnapshot = BuildSnapshot();
     }
 
     private async Task LoadTeamsAsync(Guid connectionId)
@@ -464,7 +539,31 @@
         MonthlyDayOfWeek = _type == "Monthly" && _monthlyMode == "Ordinal" ? _monthlyDayOfWeek : null
     };
 
-    private void Cancel() => MudDialog?.Cancel();
+    // Routes every dismiss path (Cancel button, Esc, backdrop click)
+    // through the unsaved-changes prompt so an accidental dismiss never
+    // silently throws away the user's edits. Save runs the full
+    // Save() handler; DontSave dismisses; Cancel keeps the dialog open.
+    private async Task TryCancelAsync()
+    {
+        if (!IsDirty)
+        {
+            MudDialog?.Cancel();
+            return;
+        }
+
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                if (IsValid) Save();
+                return;
+            case UnsavedChangesResult.Cancel:
+                return; // stay
+            case UnsavedChangesResult.DontSave:
+                MudDialog?.Cancel();
+                return;
+        }
+    }
 
     private void Save()
     {
@@ -504,12 +603,16 @@
         {
             schedule.TeamId = _teamId;
             schedule.TeamConnectionId = _reportConnectionId;
+            schedule.TeamFanout = _teamFanout;
             schedule.DistEmail = null;
         }
         else
         {
             schedule.TeamId = null;
             schedule.TeamConnectionId = null;
+            // Reset to the default so a kind-switch back doesn't surface a
+            // stale Manager / Both selection from a previous Individual edit.
+            schedule.TeamFanout = TeamFanout.Members;
             schedule.DistEmail = string.IsNullOrWhiteSpace(_distEmail) ? null : _distEmail.Trim();
         }
 

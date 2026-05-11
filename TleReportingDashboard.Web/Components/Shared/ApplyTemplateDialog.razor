@@ -1,3 +1,10 @@
+@inject IDialogService DialogService
+
+@* Dirty-tracked: selecting a template makes the dialog dirty and a
+   non-explicit dismiss (Cancel / Esc / backdrop) fires the unsaved-
+   changes prompt. Callers must open this dialog with DialogOptions
+   { BackdropClick = false, CloseOnEscapeKey = false }. *@
+
 <MudDialog>
     <TitleContent>
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
@@ -37,7 +44,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Apply"
                    Disabled="@(_selected is null)">
             Apply
@@ -51,6 +58,30 @@
 
     private GridTemplate? _selected;
 
-    private void Cancel() => MudDialog?.Cancel();
+    // Initial state has no selection; any selection is a pending change.
+    private bool IsDirty => _selected is not null;
+
     private void Apply() => MudDialog?.Close(DialogResult.Ok(_selected!));
+
+    // Routes every dismiss path through the unsaved-changes prompt so
+    // an accidental Esc / backdrop click never silently throws away
+    // the admin's selection. Save runs Apply; DontSave dismisses.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (_selected is not null) Apply();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return; // stay
+                case UnsavedChangesResult.DontSave:
+                    break; // fall through to close
+            }
+        }
+        MudDialog?.Cancel();
+    }
 }

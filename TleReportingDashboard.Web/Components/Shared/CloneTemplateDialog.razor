@@ -1,4 +1,5 @@
 @using MudBlazor
+@inject IDialogService DialogService
 
 @*
     Asks the admin where to land a cloned grid template. The dialog opens
@@ -10,6 +11,12 @@
     bake into the cloned ColumnState as-is. Per product direction: an admin
     cloning across connections accepts that any field id missing on the
     target schema renders as a blank column until they edit the template.
+
+    Dirty-tracked: editing the new-name field or retargeting the connection
+    away from the initial snapshot makes the dialog dirty; any non-explicit
+    dismiss (Cancel / Esc / backdrop) fires the unsaved-changes prompt.
+    Callers must open this dialog with DialogOptions { BackdropClick =
+    false, CloseOnEscapeKey = false }.
 *@
 
 <MudDialog>
@@ -52,7 +59,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Primary"
                    Disabled="!CanSubmit()" OnClick="Submit">
             Clone
@@ -70,6 +77,9 @@
     private string _newName = string.Empty;
     private Guid? _targetConnectionId;
 
+    private string _initialNewName = string.Empty;
+    private Guid? _initialTargetConnectionId;
+
     public sealed record ConnectionOption(Guid Id, string DisplayName);
     public sealed record Result(string NewName, Guid? TargetConnectionId);
 
@@ -77,7 +87,20 @@
     {
         _newName = $"{SourceName} (Copy)";
         _targetConnectionId = SourceConnectionId;
+        _initialNewName = _newName;
+        _initialTargetConnectionId = _targetConnectionId;
     }
+
+    // Dialog seeds with a sensible default name and the source's own
+    // connection. "Dirty" means the admin tweaked either away from
+    // those defaults — accepting the seed as-is and clicking Cancel
+    // shouldn't pop the prompt.
+    private bool IsDirty =>
+        !string.Equals(
+            (_newName ?? string.Empty).Trim(),
+            (_initialNewName ?? string.Empty).Trim(),
+            StringComparison.Ordinal)
+        || _targetConnectionId != _initialTargetConnectionId;
 
     private bool CanSubmit() => !string.IsNullOrWhiteSpace(_newName);
 
@@ -87,5 +110,26 @@
         MudDialog.Close(DialogResult.Ok(new Result(_newName.Trim(), _targetConnectionId)));
     }
 
-    private void Cancel() => MudDialog.Cancel();
+    // Routes every dismiss path through the unsaved-changes prompt so
+    // an accidental Esc / backdrop click never silently throws away an
+    // edited name or retargeted connection. Save runs Submit when
+    // valid; DontSave dismisses.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (CanSubmit()) Submit();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return; // stay
+                case UnsavedChangesResult.DontSave:
+                    break; // fall through to close
+            }
+        }
+        MudDialog.Cancel();
+    }
 }

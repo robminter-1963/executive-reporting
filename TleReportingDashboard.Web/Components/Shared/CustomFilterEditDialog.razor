@@ -1,4 +1,5 @@
 @using TleReportingDashboard.Web.Components.Pages
+@inject IDialogService DialogService
 
 <MudDialog>
     <TitleContent>
@@ -90,7 +91,7 @@
         </MudGrid>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
                    Disabled="@(string.IsNullOrWhiteSpace(_edited.Id) || string.IsNullOrWhiteSpace(_edited.Label) || string.IsNullOrWhiteSpace(_edited.SqlCondition))">
             OK
@@ -124,6 +125,10 @@
     private SchemaBuilder.CustomFilterEntry _edited = new();
     private string _selectedJoinId = string.Empty;
 
+    // JSON snapshot at OnInitialized — IsDirty compares a fresh snapshot
+    // against this to decide whether dismissals need the prompt.
+    private string _initialSnapshot = string.Empty;
+
     protected override void OnInitialized()
     {
         if (Filter is not null)
@@ -141,7 +146,25 @@
             };
             _selectedJoinId = Filter.JoinId;
         }
+
+        _initialSnapshot = BuildSnapshot();
     }
+
+    private string BuildSnapshot() =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            _edited.Id,
+            _edited.Label,
+            _edited.Description,
+            _edited.SqlPreamble,
+            _edited.JoinId,
+            _edited.SqlJoin,
+            _edited.SqlCondition,
+            _edited.GroupName
+        });
+
+    private bool IsDirty =>
+        !string.Equals(_initialSnapshot, BuildSnapshot(), StringComparison.Ordinal);
 
     private static string FormatJoinLabel(SchemaBuilder.JoinEntry j) =>
         JoinLabelFormatter.Format(j);
@@ -162,7 +185,29 @@
         }
     }
 
-    private void Cancel() => MudDialog?.Cancel();
+    // Routes Cancel through the unsaved-changes prompt. Save only re-enters
+    // Ok() when the OK button's enable conditions are met (Id, Label,
+    // SqlCondition all non-empty); otherwise the dialog stays open.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (!string.IsNullOrWhiteSpace(_edited.Id)
+                        && !string.IsNullOrWhiteSpace(_edited.Label)
+                        && !string.IsNullOrWhiteSpace(_edited.SqlCondition)) Ok();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return;
+                case UnsavedChangesResult.DontSave:
+                    break;
+            }
+        }
+        MudDialog?.Cancel();
+    }
 
     private void Ok()
     {

@@ -1,16 +1,40 @@
 @using TleReportingDashboard.Web.Services
+@using TleReportingDashboard.Web.Models
 @using MudBlazor
 @inject IThemeService ThemeSvc
+@inject ICompanyRegistry CompanyRegistry
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject ILogger<AdminThemeTab> Logger
 
 <MudStack Spacing="3" Class="pa-2">
+    @* Scope picker — choose which company's theme to edit. The first
+       option is the global default (company_id NULL) used as the
+       fallback for any company without a per-company override.
+       Switching the picker reloads the editor with that scope's tokens
+       so the admin sees what they're about to save against. *@
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+        <MudSelect T="Guid?" Value="_selectedCompanyId" ValueChanged="OnScopeChanged"
+                   Label="Theme scope" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                   Style="min-width: 280px;"
+                   ToStringFunc="@CompanyToLabel">
+            <MudSelectItem T="Guid?" Value="@((Guid?)null)">— Global default —</MudSelectItem>
+            @foreach (var c in _companies.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name (@c.Code)</MudSelectItem>
+            }
+        </MudSelect>
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="max-width: 540px;">
+            @ScopeHelpText
+        </MudText>
+    </MudStack>
+
     <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
         <MudText Typo="Typo.body2" Color="Color.Secondary" Style="max-width: 720px;">
-            Tune the app-wide color palette. Changes save to a single
-            <code>RPT_app_theme</code> row and apply to every user on
-            their next page load. Click any swatch to open the picker;
+            Tune the color palette for the chosen scope. Changes save to
+            <code>RPT_app_theme</code> (one row per company; the global
+            row is the fallback when a company has no override) and apply
+            on the next page load. Click any swatch to open the picker;
             <strong>Reset to defaults</strong> reverts every token to the
             seeded values without saving.
         </MudText>
@@ -261,19 +285,63 @@
     private AppTheme _theme = AppTheme.Default();
     private bool _loading = true;
     private bool _saving;
+    // null = global default scope; otherwise the per-company override
+    // for this company id. Persists across saves so the admin can edit
+    // company A, save, then pick company B without re-navigating.
+    private Guid? _selectedCompanyId;
+    private List<CompanySummary> _companies = new();
+
+    private string ScopeHelpText => _selectedCompanyId is null
+        ? "The global default applies to every company that doesn't have its own theme."
+        : "Saved changes apply only to this company. Other companies keep using the global default (or their own override)."
+        ;
+
+    private string CompanyToLabel(Guid? id)
+    {
+        if (id is null) return "— Global default —";
+        var c = _companies.FirstOrDefault(x => x.Id == id);
+        return c is null ? id.ToString()! : $"{c.Name} ({c.Code})";
+    }
 
     protected override async Task OnInitializedAsync()
     {
         try
         {
-            _theme = await ThemeSvc.GetAsync();
+            _companies = await CompanyRegistry.GetActiveAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Company list load failed — admin can still edit the global theme.");
+            _companies = new();
+        }
+        await LoadThemeForScopeAsync();
+        _loading = false;
+    }
+
+    private async Task LoadThemeForScopeAsync()
+    {
+        try
+        {
+            // Pass the scope id straight through; the service handles
+            // the fall-through to the global row when the per-company
+            // row doesn't exist yet. Surface that case as a snackbar so
+            // the admin knows they're starting from the global palette.
+            _theme = await ThemeSvc.GetAsync(_selectedCompanyId);
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Theme load failed in admin tab — showing defaults.");
             _theme = AppTheme.Default();
         }
+    }
+
+    private async Task OnScopeChanged(Guid? newScope)
+    {
+        _selectedCompanyId = newScope;
+        _loading = true;
+        await LoadThemeForScopeAsync();
         _loading = false;
+        StateHasChanged();
     }
 
     // RenderFragment helper for the per-band text formatting block —
@@ -347,7 +415,8 @@
         };
         var options = new DialogOptions
         {
-            CloseOnEscapeKey = true,
+            BackdropClick = false,
+            CloseOnEscapeKey = false,
             MaxWidth = MaxWidth.Small,
             FullWidth = true
         };
@@ -366,8 +435,11 @@
         _saving = true;
         try
         {
-            await ThemeSvc.SaveAsync(_theme, CurrentUserEmail);
-            Snackbar.Add("Theme saved. Refresh your browser to see the new palette.", Severity.Success);
+            await ThemeSvc.SaveAsync(_theme, _selectedCompanyId, CurrentUserEmail);
+            var scopeLabel = _selectedCompanyId is null
+                ? "Global theme"
+                : $"Theme for {CompanyToLabel(_selectedCompanyId)}";
+            Snackbar.Add($"{scopeLabel} saved. Refresh affected browsers to see the new palette.", Severity.Success);
         }
         catch (Exception ex)
         {

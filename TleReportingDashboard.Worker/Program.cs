@@ -12,6 +12,13 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
+    // QuestPDF licensing — same Community license as the Web side. Set
+    // here so the Worker can render PDF attachments for scheduled
+    // reports whose attachment_format = 'pdf'. Throws at render time if
+    // unset; setting it once at startup keeps the cost out of the hot
+    // path. Re-evaluate when the company's revenue crosses $1M.
+    QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+
     var builder = WebApplication.CreateBuilder(args);
 
     builder.Host.UseSerilog((context, services, configuration) => configuration
@@ -79,6 +86,15 @@ try
     // the schedule path (those govern in-app dashboard scope, not
     // scheduled-email fan-out, which is a separate concern).
     builder.Services.AddScoped<ITeamSourceService, TeamSourceService>();
+
+    // AdminService — needed by the Manager / Both fan-out branches to
+    // detect "all-access" managers and skip the team-IN scope filter
+    // for them. AdminOptions only matters for the seed-on-startup path
+    // the Web side uses; the Worker lets the section bind to empty if
+    // appsettings doesn't define it (read-only behavior is fine here).
+    builder.Services.Configure<AdminOptions>(
+        builder.Configuration.GetSection("Admins"));
+    builder.Services.AddSingleton<IAdminService, AdminService>();
 
     // The job class itself — Hangfire activates it from the scoped DI
     // container on every fire, picking up a fresh DbConnection / scoped
@@ -205,10 +221,13 @@ try
         // Dashboard is gated by HangfireDashboardAuthFilter — open in
         // Development, restricted to Admins:Emails everywhere else.
         // Without the filter, /hangfire is reachable by anyone who can
-        // hit the worker URL.
+        // hit the worker URL. DashboardTitle replaces the default
+        // "Hangfire Dashboard" tab + header label so admins landing
+        // here see the same product name as the Web app.
         app.MapHangfireDashboard("/hangfire", new DashboardOptions
         {
-            Authorization = new[] { new HangfireDashboardAuthFilter() }
+            Authorization = new[] { new HangfireDashboardAuthFilter() },
+            DashboardTitle = "Executive Reporting Suite"
         });
     }
 

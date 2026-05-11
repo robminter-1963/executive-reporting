@@ -1,3 +1,10 @@
+@inject IDialogService DialogService
+
+@* "Save as Template" dialog. Pre-fills with DefaultName; dirty when the
+   user has changed it from the default. Callers must open with
+   DialogOptions { BackdropClick = false, CloseOnEscapeKey = false } so
+   backdrop / Esc are routed through TryCancelAsync. *@
+
 <MudDialog>
     <DialogContent>
         <MudStack Spacing="2">
@@ -9,7 +16,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save"
                    Disabled="@string.IsNullOrWhiteSpace(_name)">
             Save Template
@@ -28,6 +35,37 @@
         _name = DefaultName;
     }
 
-    private void Cancel() => MudDialog?.Cancel();
+    // Dirty when the current name differs from the pre-filled default.
+    private bool IsDirty =>
+        !string.Equals(
+            (_name ?? string.Empty).Trim(),
+            (DefaultName ?? string.Empty).Trim(),
+            StringComparison.Ordinal);
+
     private void Save() => MudDialog?.Close(DialogResult.Ok(_name));
+
+    // Routes every dismiss path (Cancel button, Esc, backdrop click)
+    // through the unsaved-changes prompt so an accidental dismiss never
+    // silently throws away a typed-in name.
+    private async Task TryCancelAsync()
+    {
+        if (!IsDirty)
+        {
+            MudDialog?.Cancel();
+            return;
+        }
+
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                if (!string.IsNullOrWhiteSpace(_name)) Save();
+                return;
+            case UnsavedChangesResult.Cancel:
+                return; // stay
+            case UnsavedChangesResult.DontSave:
+                MudDialog?.Cancel();
+                return;
+        }
+    }
 }

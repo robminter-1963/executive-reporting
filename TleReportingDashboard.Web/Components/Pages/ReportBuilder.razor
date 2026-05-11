@@ -1136,6 +1136,85 @@
     // reads resume in the next visited page.
     private IDisposable? _editorScope;
 
+    // ── Unsaved-changes guard ──
+    // Snapshot of the report state at the most recent "clean" point —
+    // initial load (new or existing) and successful save. Compared against
+    // the live state whenever the user tries to navigate away; mismatch =
+    // dirty = prompt. Snapshot is a serialized JSON string rather than a
+    // structural compare so we don't have to enumerate every nested config
+    // field by hand.
+    private string _dirtySnapshot = string.Empty;
+    // Tracks the last-sent value of the JS-side beforeunload guard so
+    // we don't thrash JS interop on every render.
+    private bool _beforeUnloadArmed;
+    // Disposable returned by RegisterLocationChangingHandler. Released
+    // on Dispose so the handler doesn't leak across navigations.
+    private IDisposable? _navHandlerRegistration;
+
+    private string ComputeDirtySnapshot()
+    {
+        // Capture every authoring-relevant field. _currentConfig holds the
+        // bulk of the editor state (filters, sort, dashboard config, etc.);
+        // the loose fields above it are the report's metadata.
+        try
+        {
+            var snap = new
+            {
+                _loadedReportName,
+                _loadedInternalName,
+                _loadedCategory,
+                _loadedLibrarySectionId,
+                FieldIds = _selectedFieldIds,
+                Config = _currentConfig,
+                TemplateId = _linkedTemplateId
+            };
+            return System.Text.Json.JsonSerializer.Serialize(snap);
+        }
+        catch
+        {
+            // Snapshot failure shouldn't crash the editor — fall back to
+            // a sentinel that will compare as dirty (so the user is at
+            // least asked rather than silently losing edits).
+            return Guid.NewGuid().ToString();
+        }
+    }
+
+    // Reset the baseline — call after a successful load or save so the
+    // current state is treated as the new "clean" reference point.
+    private void MarkClean() => _dirtySnapshot = ComputeDirtySnapshot();
+
+    private bool IsDirty =>
+        !string.Equals(_dirtySnapshot, ComputeDirtySnapshot(), StringComparison.Ordinal);
+
+    // Intercepts in-app navigation. The Blazor handler is awaited
+    // before the navigation actually proceeds, so we can prompt and
+    // call PreventNavigation if the user picks Cancel. Save runs the
+    // existing save path; DontSave just lets nav proceed.
+    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
+    {
+        if (!IsDirty) return;
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                await HandleSave();
+                // Save sets the new baseline; if it failed (snackbar
+                // shown by HandleSave), state is still dirty. Block
+                // navigation so the user can fix and retry rather
+                // than silently leaving with unsaved work.
+                if (IsDirty) context.PreventNavigation();
+                break;
+            case UnsavedChangesResult.DontSave:
+                // Disarm guards so the imminent unload doesn't
+                // double-prompt (LocationChanging then beforeunload).
+                MarkClean();
+                break;
+            case UnsavedChangesResult.Cancel:
+                context.PreventNavigation();
+                break;
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         _editorScope = EditorMode.Enter();
@@ -1244,6 +1323,13 @@
                 // so Save can be a single click later (no modal on first save).
                 _editingName = true;
             }
+
+            // Register the in-app navigation guard once init is past the
+            // bulk of state setup, so an early bail-out (snackbar above)
+            // doesn't leak a registered handler. Snapshot baseline AFTER
+            // the load so the report's own data isn't read as "dirty."
+            _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
+            MarkClean();
         }
         catch (Exception ex)
         {
@@ -1698,7 +1784,7 @@
         var dialog = await DialogService.ShowAsync<CalculatedColumnDialog>(
             existing is null ? "Add Calculated Column" : "Edit Calculated Column",
             parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
 
         var result = await dialog.Result;
         if (result is null || result.Canceled) return;
@@ -2822,7 +2908,7 @@
 
         var parameters = new DialogParameters { { "Templates", templates } };
         var dialog = await DialogService.ShowAsync<ApplyTemplateDialog>("Apply Grid Template", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false, MaxWidth = MaxWidth.Small, FullWidth = true });
 
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not GridTemplate selected) return;
@@ -3047,6 +3133,7 @@
                     existing.UpdatedAt = DateTime.UtcNow;
                     existing.LastRunAt = DateTime.UtcNow;
                     await ReportService.UpdateReportAsync(existing);
+                    MarkClean();
                     Snackbar.Add($"Report \"{existing.Name}\" saved.", Severity.Success);
                     return;
                 }
@@ -3092,6 +3179,10 @@
             var saved = await ReportService.SaveReportAsync(report);
             _loadedReportId = saved.Id;
             _loadedReportName = saved.Name;
+            // Save was the explicit clean point — re-baseline so a
+            // navigation away that follows doesn't re-prompt over the
+            // just-saved state.
+            MarkClean();
             Snackbar.Add($"Report \"{saved.Name}\" saved.", Severity.Success);
         }
         catch (Exception ex)
@@ -3127,7 +3218,10 @@
         {
             { x => x.DefaultName, defaultName }
         };
-        var dialog = await DialogService.ShowAsync<SaveAsTemplateDialog>("Save as Template", parameters);
+        var dialog = await DialogService.ShowAsync<SaveAsTemplateDialog>(
+            "Save as Template",
+            parameters,
+            new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false });
         var dialogResult = await dialog.Result;
         if (dialogResult is null || dialogResult.Canceled || dialogResult.Data is not string templateName) return;
 
@@ -3250,7 +3344,13 @@
             { x => x.ReportName, _loadedReportName ?? "Report" },
             { x => x.CurrentUserId, _userId }
         };
-        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            BackdropClick = false,
+            CloseOnEscapeKey = false
+        };
         await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, options);
     }
 
@@ -3660,12 +3760,22 @@
     private static ReportBuilder? _staticInstance;
     private static int _staticDrawerWidth = 240;
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
             _staticInstance = this;
             _drawerWidth = _staticDrawerWidth;
+        }
+        // Sync the JS-side beforeunload guard with the live dirty state
+        // every render, but only invoke when it actually changed — saves
+        // a JS-interop call per re-render of a clean page.
+        var armNow = IsDirty;
+        if (armNow != _beforeUnloadArmed)
+        {
+            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
+            catch { /* circuit may be tearing down — drop silently */ }
+            _beforeUnloadArmed = armNow;
         }
     }
 
@@ -3673,5 +3783,16 @@
     {
         _editorScope?.Dispose();
         _editorScope = null;
+        _navHandlerRegistration?.Dispose();
+        _navHandlerRegistration = null;
+        // Clear the JS-side guard so the next page mount doesn't
+        // inherit a stale "armed" state. Fire-and-forget — the
+        // circuit is tearing down and there's no one to await us.
+        if (_beforeUnloadArmed)
+        {
+            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
+            catch { }
+            _beforeUnloadArmed = false;
+        }
     }
 }

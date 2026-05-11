@@ -20,12 +20,16 @@ GO
 -- Registry of companies served by the application. Every user-scoped table
 -- carries a company_id foreign key back to this table. The seeded TLE row
 -- represents the initial single-company deployment.
+-- Per-company connection records live in RPT_company_connections (one
+-- company can have multiple connections of different types — e.g. a
+-- SQL Server LOS connection and a Dataverse HR connection). The
+-- earlier data_source_type / connection_ref columns on this table
+-- assumed one connection per company and were dropped in
+-- 2026-05-09_18-00_drop_company_legacy_datasource.sql.
 CREATE TABLE EMPOWER.RPT_companies (
     id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
     code              NVARCHAR(32)     NOT NULL UNIQUE,    -- URL segment: /c/{code}/...
     name              NVARCHAR(200)    NOT NULL,
-    data_source_type  NVARCHAR(20)     NOT NULL,           -- 'sqlserver' | 'postgres'
-    connection_ref    NVARCHAR(100)    NOT NULL,           -- legacy appsettings key; RPT_company_connections supersedes
     is_active         BIT              NOT NULL DEFAULT 1,
     created_at        DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at        DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME()
@@ -359,8 +363,8 @@ CREATE INDEX IX_grid_templates_company_owner   ON EMPOWER.RPT_grid_templates (co
 -- still resolve to a valid company on upgrade. New code shouldn't rely on
 -- this id being stable — the resolver picks the active is_default row at
 -- runtime.
-INSERT INTO EMPOWER.RPT_companies (id, code, name, data_source_type, connection_ref)
-VALUES ('00000000-0000-0000-0000-000000000001', 'tle', 'The Loan Exchange', 'sqlserver', 'Database-TLE');
+INSERT INTO EMPOWER.RPT_companies (id, code, name)
+VALUES ('00000000-0000-0000-0000-000000000001', 'tle', 'The Loan Exchange');
 
 -- ── TLE primary data-source connection ───────────────────────────────────
 -- Mirrors the legacy appsettings "Database-TLE" entry. Fill in ss_data_source

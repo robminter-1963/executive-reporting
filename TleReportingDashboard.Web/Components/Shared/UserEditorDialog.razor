@@ -3,6 +3,14 @@
 @inject IUserManagementService UserManagement
 @inject IRoleService RoleService
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+@* Dirty-tracked: edits to email/display name/role/active flag/team picks
+   vs. the initial snapshot trigger the unsaved-changes prompt on any
+   non-explicit dismiss. Callers must open this dialog with
+   DialogOptions { BackdropClick = false, CloseOnEscapeKey = false } so
+   backdrop / Esc routes through TryCancelAsync rather than firing
+   MudDialog's default cancel directly. *@
 
 <MudDialog>
     <TitleContent>
@@ -93,7 +101,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled"
                    StartIcon="@Icons.Material.Filled.Save"
                    Disabled="@(!CanSave())" OnClick="Save">
@@ -127,6 +135,21 @@
     private List<AssignableTeam> _assignableTeams = new();
     private HashSet<string> _selectedTeamKeys = new();
 
+    // Snapshot of the user-editable fields captured at the end of
+    // OnInitializedAsync so the unsaved-changes prompt has something to
+    // compare against. Team keys are snapshotted as a sorted list so
+    // membership-only changes (re-ordering shouldn't happen, but be defensive)
+    // don't show as dirty.
+    private record FormSnapshot(
+        string Email,
+        string DisplayName,
+        Guid? RoleId,
+        bool IsActive,
+        IReadOnlyList<string> TeamKeys);
+    private FormSnapshot _initialSnapshot = default!;
+
+    private static string Norm(string? s) => (s ?? string.Empty).Trim();
+
     protected override async Task OnInitializedAsync()
     {
         // Only offer active roles; inactive ones stay assigned to users
@@ -151,6 +174,28 @@
             _selectedTeamKeys = (await currentTask)
                 .Select(t => $"{t.ConnectionId:N}:{t.TeamId}")
                 .ToHashSet();
+        }
+
+        _initialSnapshot = new FormSnapshot(
+            _email, _displayName, _roleId, _isActive,
+            _selectedTeamKeys.OrderBy(k => k, StringComparer.Ordinal).ToList());
+    }
+
+    private bool IsDirty
+    {
+        get
+        {
+            var s = _initialSnapshot;
+            if (!string.Equals(Norm(_email), Norm(s.Email), StringComparison.Ordinal)) return true;
+            if (!string.Equals(Norm(_displayName), Norm(s.DisplayName), StringComparison.Ordinal)) return true;
+            if (_roleId != s.RoleId) return true;
+            if (_isActive != s.IsActive) return true;
+
+            var nowKeys = _selectedTeamKeys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            if (nowKeys.Count != s.TeamKeys.Count) return true;
+            for (var i = 0; i < nowKeys.Count; i++)
+                if (!string.Equals(nowKeys[i], s.TeamKeys[i], StringComparison.Ordinal)) return true;
+            return false;
         }
     }
 
@@ -249,4 +294,29 @@
     }
 
     private void Cancel() => MudDialog.Cancel();
+
+    // Routes every dismiss path (Cancel button, Esc, backdrop) through the
+    // unsaved-changes prompt so an accidental close never silently throws
+    // away pending edits. Save runs the standard Save path (with its
+    // CanSave gate); DontSave dismisses without saving.
+    private async Task TryCancelAsync()
+    {
+        if (!IsDirty)
+        {
+            MudDialog.Cancel();
+            return;
+        }
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                if (CanSave()) await Save();
+                return;
+            case UnsavedChangesResult.Cancel:
+                return;
+            case UnsavedChangesResult.DontSave:
+                MudDialog.Cancel();
+                return;
+        }
+    }
 }

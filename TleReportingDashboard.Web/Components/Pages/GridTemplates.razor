@@ -316,7 +316,7 @@
                 { nameof(CloneTemplateDialog.Connections), options }
             };
             var dialog = await DialogService.ShowAsync<CloneTemplateDialog>("Clone template", dialogParams,
-                new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+                new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false, MaxWidth = MaxWidth.Small, FullWidth = true });
             var result = await dialog.Result;
             if (result is null || result.Canceled || result.Data is not CloneTemplateDialog.Result picked)
                 return;

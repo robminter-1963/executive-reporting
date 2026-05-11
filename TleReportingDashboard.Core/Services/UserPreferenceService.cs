@@ -32,7 +32,18 @@ public class UserPreferenceService : IUserPreferenceService
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
         await using var cmd = new SqlCommand(
-            "SELECT user_id, onboarding_completed, default_page_size, is_dark_mode, master_dashboard_title, master_dashboard_title_align, master_dashboard_logo, master_dashboard_logo_type, created_at, updated_at, report_library_page_size, report_page_sizes, schema_builder_connection_id, schema_builder_company_id, report_library_company_id FROM EMPOWER.RPT_user_preferences WHERE user_id = @UserId", conn);
+            @"SELECT user_id, onboarding_completed, default_page_size, is_dark_mode,
+                     master_dashboard_title, master_dashboard_title_align,
+                     master_dashboard_logo, master_dashboard_logo_type,
+                     created_at, updated_at, report_library_page_size, report_page_sizes,
+                     schema_builder_connection_id, schema_builder_company_id, report_library_company_id,
+                     -- Defensive read of last_master_dashboard_seen — pre-migration
+                     -- DBs return NULL via the CASE so the column reference
+                     -- doesn't error. Reader still maps the alias the same.
+                     CASE WHEN COL_LENGTH('EMPOWER.RPT_user_preferences','last_master_dashboard_seen') IS NULL
+                          THEN CAST(NULL AS DATETIME) ELSE last_master_dashboard_seen END AS last_master_dashboard_seen
+                FROM EMPOWER.RPT_user_preferences
+               WHERE user_id = @UserId", conn);
         cmd.Parameters.Add(new SqlParameter("@UserId", userId));
 
         await using var reader = await cmd.ExecuteReaderAsync();
@@ -54,7 +65,8 @@ public class UserPreferenceService : IUserPreferenceService
                 ReportPageSizes = ParseReportPageSizes(TryGetString(reader, "report_page_sizes")),
                 SchemaBuilderConnectionId = TryGetGuid(reader, "schema_builder_connection_id"),
                 SchemaBuilderCompanyId = TryGetGuid(reader, "schema_builder_company_id"),
-                ReportLibraryCompanyId = TryGetGuid(reader, "report_library_company_id")
+                ReportLibraryCompanyId = TryGetGuid(reader, "report_library_company_id"),
+                LastMasterDashboardSeen = TryGetDateTime(reader, "last_master_dashboard_seen")
             };
         }
 
@@ -115,6 +127,37 @@ public class UserPreferenceService : IUserPreferenceService
             return reader.IsDBNull(ord) ? null : reader.GetGuid(ord);
         }
         catch (IndexOutOfRangeException) { return null; }
+    }
+
+    private static DateTime? TryGetDateTime(SqlDataReader reader, string column)
+    {
+        try
+        {
+            var ord = reader.GetOrdinal(column);
+            return reader.IsDBNull(ord) ? null : reader.GetDateTime(ord);
+        }
+        catch (IndexOutOfRangeException) { return null; }
+    }
+
+    public async Task TouchLastMasterDashboardSeenAsync(string userId)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return;
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        // Dedicated UPDATE so concurrent writes from other tabs (e.g. the
+        // theme picker) don't clobber unrelated columns. Pre-migration
+        // databases (no last_master_dashboard_seen column) get caught by
+        // the catch — silently no-op rather than blowing up the page load.
+        try
+        {
+            await using var cmd = new SqlCommand(
+                "UPDATE EMPOWER.RPT_user_preferences SET last_master_dashboard_seen = SYSUTCDATETIME() WHERE user_id = @UserId",
+                conn);
+            cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+            await cmd.ExecuteNonQueryAsync();
+        }
+        catch (SqlException) { /* migration not applied yet — greeting falls back to "Welcome". */ }
+        _cache.Invalidate(ConfigDbCache.Key("UserPreferenceService", "ByUser", userId));
     }
 
     public async Task SavePreferencesAsync(UserPreference preference)

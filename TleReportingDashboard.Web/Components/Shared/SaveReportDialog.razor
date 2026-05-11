@@ -1,12 +1,22 @@
+@inject IDialogService DialogService
+
+@* Single-field "save report" dialog. No initial value, so dirty = the
+   user has typed something. Routes Cancel/Esc/backdrop through
+   TryCancelAsync so an accidental dismiss prompts before discarding
+   typed input. Callers must open with DialogOptions
+   { BackdropClick = false, CloseOnEscapeKey = false } so backdrop / Esc
+   are routed through TryCancelAsync rather than MudDialog's default
+   cancel. *@
+
 <MudDialog>
     <DialogContent>
         <MudStack Spacing="2">
             <MudTextField @bind-Value="_reportName" Label="Report Name" Variant="Variant.Outlined"
-                          Required RequiredError="Report name is required." />
+                          Required RequiredError="Report name is required." Immediate />
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save"
                    Disabled="@string.IsNullOrWhiteSpace(_reportName)">
             Save
@@ -22,10 +32,36 @@
 
     public record SaveResult(string Name);
 
-    private void Cancel() => MudDialog?.Cancel();
+    // No initial value — dirty when the user has typed anything.
+    private bool IsDirty => !string.IsNullOrWhiteSpace(_reportName);
 
     private void Save()
     {
         MudDialog?.Close(DialogResult.Ok(new SaveResult(_reportName)));
+    }
+
+    // Routes every dismiss path (Cancel button, Esc, backdrop click)
+    // through the unsaved-changes prompt so an accidental dismiss never
+    // silently throws away a typed-in name.
+    private async Task TryCancelAsync()
+    {
+        if (!IsDirty)
+        {
+            MudDialog?.Cancel();
+            return;
+        }
+
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                if (!string.IsNullOrWhiteSpace(_reportName)) Save();
+                return;
+            case UnsavedChangesResult.Cancel:
+                return; // stay
+            case UnsavedChangesResult.DontSave:
+                MudDialog?.Cancel();
+                return;
+        }
     }
 }

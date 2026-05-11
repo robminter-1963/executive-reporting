@@ -1,5 +1,12 @@
 @using MudBlazor
 @using TleReportingDashboard.Web.Services
+@inject IDialogService DialogService
+
+@* Dirty-tracked: picking a source connection or ticking the overwrite
+   confirmation marks the dialog dirty; any non-explicit dismiss
+   (Cancel / Esc / backdrop) fires the unsaved-changes prompt. Callers
+   must open this dialog with DialogOptions { BackdropClick = false,
+   CloseOnEscapeKey = false }. *@
 
 <MudDialog>
     <DialogContent>
@@ -31,7 +38,7 @@
         </MudStack>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Primary"
                    Disabled="!CanSubmit()" OnClick="Submit">
             Clone
@@ -61,5 +68,29 @@
         MudDialog.Close(DialogResult.Ok(id));
     }
 
-    private void Cancel() => MudDialog.Cancel();
+    // Initial state: no source picked, overwrite unconfirmed. Either
+    // flipping is a pending change worth prompting about.
+    private bool IsDirty => _sourceId is not null || _confirmOverwrite;
+
+    // Routes every dismiss path through the unsaved-changes prompt so
+    // an accidental Esc / backdrop click never silently throws away
+    // the source pick. Save runs Submit when valid; DontSave dismisses.
+    private async Task TryCancelAsync()
+    {
+        if (IsDirty)
+        {
+            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+            switch (choice)
+            {
+                case UnsavedChangesResult.Save:
+                    if (CanSubmit()) Submit();
+                    return;
+                case UnsavedChangesResult.Cancel:
+                    return; // stay
+                case UnsavedChangesResult.DontSave:
+                    break; // fall through to close
+            }
+        }
+        MudDialog.Cancel();
+    }
 }

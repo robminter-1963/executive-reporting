@@ -24,6 +24,15 @@
                     <MudText Typo="Typo.body2">CSV</MudText>
                 </MudStack>
             </MudMenuItem>
+            @if (OnExportPdf.HasDelegate)
+            {
+                <MudMenuItem OnClick="() => OnExportPdf.InvokeAsync()">
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                        <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Size="Size.Small" />
+                        <MudText Typo="Typo.body2">PDF</MudText>
+                    </MudStack>
+                </MudMenuItem>
+            }
         </MudMenu>
     </MudTooltip>
 }
@@ -45,12 +54,27 @@ else
                 <MudText Typo="Typo.body2">CSV</MudText>
             </MudStack>
         </MudMenuItem>
+        @if (OnExportPdf.HasDelegate)
+        {
+            <MudMenuItem OnClick="() => OnExportPdf.InvokeAsync()">
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                    <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Size="Size.Small" />
+                    <MudText Typo="Typo.body2">PDF</MudText>
+                </MudStack>
+            </MudMenuItem>
+        }
     </MudMenu>
 }
 
 @code {
     [Parameter] public EventCallback OnExportExcel { get; set; }
     [Parameter] public EventCallback OnExportCsv { get; set; }
+    // Optional — when a parent doesn't wire OnExportPdf, the PDF menu
+    // item is hidden so the older callsites (which only handled CSV /
+    // Excel) keep working unchanged. New callers opt in by passing the
+    // callback. HasDelegate is the canonical "is this wired?" check
+    // for an EventCallback parameter.
+    [Parameter] public EventCallback OnExportPdf { get; set; }
     [Parameter] public bool Disabled { get; set; }
     // Compact icon-button variant for tile headers and other tight spaces.
     [Parameter] public bool IconOnly { get; set; }

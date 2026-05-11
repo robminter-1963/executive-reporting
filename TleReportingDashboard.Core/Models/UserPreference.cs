@@ -29,6 +29,12 @@ public class UserPreference
     // Last-selected company filter on the Report Library. Null = "All
     // companies" (unfiltered). Scoped per user; persists across sessions.
     public Guid? ReportLibraryCompanyId { get; set; }
+    // Last time the user landed on the Master Dashboard (UTC). Drives the
+    // "X reports updated since you last visited" greeting copy. Null on
+    // first-ever visit — the greeting just shows "Welcome" instead of a
+    // delta count. Updated once per page mount via a dedicated UPDATE so
+    // unrelated preference fields can't be clobbered by a write race.
+    public DateTime? LastMasterDashboardSeen { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

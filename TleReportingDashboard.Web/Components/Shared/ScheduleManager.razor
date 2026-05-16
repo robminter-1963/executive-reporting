@@ -1,6 +1,7 @@
 @inject IScheduleService ScheduleService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ILogger<ScheduleManager> Logger
 @using TleReportingDashboard.Web.Services
 
 <MudPaper Elevation="0" Style="border: 1px solid #DADCE0; border-radius: 4px;" Class="pa-3">
@@ -233,16 +234,13 @@
 
         if (result is not null && !result.Canceled && result.Data is ReportSchedule newSchedule)
         {
-            try
+            newSchedule.OwnerId = UserId;
+            newSchedule.OwnerEmail = UserEmail;
+            var (ok, _) = await Snackbar.RunAsync(Logger, "creating schedule",
+                () => ScheduleService.CreateScheduleAsync(newSchedule));
+            if (ok)
             {
-                newSchedule.OwnerId = UserId;
-                newSchedule.OwnerEmail = UserEmail;
-                await ScheduleService.CreateScheduleAsync(newSchedule);
                 await LoadSchedules();
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"Failed to create schedule: {ex.Message}", Severity.Error);
             }
         }
     }
@@ -265,31 +263,26 @@
 
         if (result is not null && !result.Canceled && result.Data is ReportSchedule updated)
         {
-            try
+            var (ok, _) = await Snackbar.RunAsync(Logger, "saving schedule",
+                () => ScheduleService.UpdateScheduleAsync(updated));
+            if (ok)
             {
-                await ScheduleService.UpdateScheduleAsync(updated);
                 await LoadSchedules();
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"Failed to update schedule: {ex.Message}", Severity.Error);
             }
         }
     }
 
     private async Task TogglePause(ReportSchedule schedule)
     {
-        try
+        schedule.IsActive = !schedule.IsActive;
+        var action = schedule.IsActive ? "resumed" : "paused";
+        var (ok, _) = await Snackbar.RunAsync(Logger, $"{action[..^1]}ing schedule",
+            () => ScheduleService.UpdateScheduleAsync(schedule));
+        if (ok)
         {
-            schedule.IsActive = !schedule.IsActive;
-            await ScheduleService.UpdateScheduleAsync(schedule);
-            var action = schedule.IsActive ? "resumed" : "paused";
+            // Severity.Info (not Success) — toggle confirmation is neutral, not a save event.
             Snackbar.Add($"Schedule {action}.", Severity.Info);
             await LoadSchedules();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to update schedule: {ex.Message}", Severity.Error);
         }
     }
 
@@ -302,14 +295,10 @@
 
         if (confirmed == true)
         {
-            try
+            if (await Snackbar.RunAsync(Logger, "deleting schedule",
+                    () => ScheduleService.DeleteScheduleAsync(schedule.Id, UserId)))
             {
-                await ScheduleService.DeleteScheduleAsync(schedule.Id, UserId);
                 await LoadSchedules();
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"Failed to delete schedule: {ex.Message}", Severity.Error);
             }
         }
     }

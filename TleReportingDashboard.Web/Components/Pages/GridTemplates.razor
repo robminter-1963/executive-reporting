@@ -11,12 +11,13 @@
 @inject NavigationManager Navigation
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ILogger<GridTemplates> Logger
 
 <PageTitle>Grid Templates - Executive Reporting Suite</PageTitle>
 
 @if (_accessDenied)
 {
-    <MudMainContent Style="padding: 16px;">
+    <MudMainContent Style="padding: 0; margin-left: 15px;">
         <MudAlert Severity="Severity.Warning">
             Grid Templates are an admin-only area. Redirecting to the Report Library…
         </MudAlert>
@@ -24,7 +25,7 @@
     return;
 }
 
-<MudMainContent Style="padding: 16px;">
+<MudMainContent Style="padding: 0; margin-left: 15px;">
     <MudStack Spacing="3">
         <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
@@ -144,13 +145,18 @@
             _companies = (await CompanyRegistry.GetActiveAsync())
                 .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            foreach (var comp in _companies)
+            // Per-company fetches are independent — parallelize the
+            // round-trips so cold load is roughly the slowest single call,
+            // not the sum.
+            var connsByCompany = await Task.WhenAll(
+                _companies.Select(c => ConnectionAdminSvc.GetByCompanyAsync(c.Id)));
+            for (var i = 0; i < _companies.Count; i++)
             {
-                var conns = await ConnectionAdminSvc.GetByCompanyAsync(comp.Id);
-                foreach (var c in conns)
+                var compId = _companies[i].Id;
+                foreach (var c in connsByCompany[i])
                 {
                     _connectionNames[c.Id] = c.Name;
-                    _connectionCompanyById[c.Id] = comp.Id;
+                    _connectionCompanyById[c.Id] = compId;
                 }
             }
         }
@@ -300,61 +306,54 @@
 
     private async Task CloneTemplate(GridTemplate source)
     {
-        try
+        // Build the connection list from the same map the table uses
+        // for the Connection column — covers every active company so
+        // admins can retarget across companies, not just within one.
+        var options = _connectionNames
+            .Select(kv => new CloneTemplateDialog.ConnectionOption(kv.Key, kv.Value))
+            .ToList();
+
+        var dialogParams = new DialogParameters
         {
-            // Build the connection list from the same map the table uses
-            // for the Connection column — covers every active company so
-            // admins can retarget across companies, not just within one.
-            var options = _connectionNames
-                .Select(kv => new CloneTemplateDialog.ConnectionOption(kv.Key, kv.Value))
-                .ToList();
+            { nameof(CloneTemplateDialog.SourceName), source.Name },
+            { nameof(CloneTemplateDialog.SourceConnectionId), source.ConnectionId },
+            { nameof(CloneTemplateDialog.Connections), options }
+        };
+        var dialog = await DialogService.ShowAsync<CloneTemplateDialog>("Clone template", dialogParams,
+            DialogPresets.Locked(MaxWidth.Small));
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not CloneTemplateDialog.Result picked)
+            return;
 
-            var dialogParams = new DialogParameters
-            {
-                { nameof(CloneTemplateDialog.SourceName), source.Name },
-                { nameof(CloneTemplateDialog.SourceConnectionId), source.ConnectionId },
-                { nameof(CloneTemplateDialog.Connections), options }
-            };
-            var dialog = await DialogService.ShowAsync<CloneTemplateDialog>("Clone template", dialogParams,
-                new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false, MaxWidth = MaxWidth.Small, FullWidth = true });
-            var result = await dialog.Result;
-            if (result is null || result.Canceled || result.Data is not CloneTemplateDialog.Result picked)
-                return;
-
-            var cloned = new GridTemplate
-            {
-                Name = picked.NewName,
-                Description = source.Description,
-                OwnerId = _userId,
-                OwnerEmail = _userEmail,
-                FieldIds = source.FieldIds,
-                ColumnState = source.ColumnState,
-                // Connection is now admin-pickable. ColumnState carries
-                // field ids that may not exist on the target connection's
-                // schema; per product direction, no validation here —
-                // missing fields render blank in the grid editor and the
-                // admin tunes them up after the clone.
-                ConnectionId = picked.TargetConnectionId
-            };
-            await TemplateService.SaveTemplateAsync(cloned);
+        var cloned = new GridTemplate
+        {
+            Name = picked.NewName,
+            Description = source.Description,
+            OwnerId = _userId,
+            OwnerEmail = _userEmail,
+            FieldIds = source.FieldIds,
+            ColumnState = source.ColumnState,
+            // Connection is now admin-pickable. ColumnState carries
+            // field ids that may not exist on the target connection's
+            // schema; per product direction, no validation here —
+            // missing fields render blank in the grid editor and the
+            // admin tunes them up after the clone.
+            ConnectionId = picked.TargetConnectionId
+        };
+        var (ok, _) = await Snackbar.RunAsync(Logger, "cloning grid template",
+            () => TemplateService.SaveTemplateAsync(cloned));
+        if (ok)
+        {
             await LoadTemplates();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Clone failed: {ex.Message}", Severity.Error);
         }
     }
 
     private async Task DeleteTemplate(GridTemplate t)
     {
-        try
+        if (await Snackbar.RunAsync(Logger, "deleting grid template",
+                () => TemplateService.DeleteTemplateAsync(t.Id, _userId)))
         {
-            await TemplateService.DeleteTemplateAsync(t.Id, _userId);
             _templates.Remove(t);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
         }
     }
 

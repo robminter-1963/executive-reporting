@@ -10,7 +10,6 @@
 
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.Testing" Version="13.2.1" />
     <PackageReference Include="bunit" Version="2.7.2" />
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
     <PackageReference Include="FluentAssertions" Version="8.9.0" />
@@ -26,15 +25,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\TleReportingDashboard.AppHost\TleReportingDashboard.AppHost.csproj" />
     <ProjectReference Include="..\TleReportingDashboard.Web\TleReportingDashboard.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="System.Net" />
     <Using Include="Microsoft.Extensions.DependencyInjection" />
-    <Using Include="Aspire.Hosting.ApplicationModel" />
-    <Using Include="Aspire.Hosting.Testing" />
     <Using Include="Xunit" />
   </ItemGroup>
 

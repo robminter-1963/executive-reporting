@@ -211,26 +211,13 @@
     // Routes every dismiss path (Cancel button, Esc, backdrop) through the
     // unsaved-changes prompt so an accidental close never silently throws
     // away a hand-tuned reorder.
-    private async Task TryCancelAsync()
-    {
-        if (!IsDirty)
-        {
-            MudDialog?.Cancel();
-            return;
-        }
-        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
-        {
-            case UnsavedChangesResult.Save:
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
+            {
                 if (_entries.Any()) Save();
-                return;
-            case UnsavedChangesResult.Cancel:
-                return;
-            case UnsavedChangesResult.DontSave:
-                MudDialog?.Cancel();
-                return;
-        }
-    }
+                return Task.CompletedTask;
+            });
 
     private void Save()
     {

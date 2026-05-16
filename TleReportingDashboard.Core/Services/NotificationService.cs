@@ -95,7 +95,7 @@ public sealed class NotificationService : INotificationService
                     reader.GetDateTime(9)));
             }
         }
-        catch (SqlException ex) when (ex.Number == 208) // table missing
+        catch (SqlException ex) when (ex.IsObjectMissing()) // table missing
         {
             // Migration hasn't run on this env. Logged at debug; UI degrades
             // to "no notifications" without breaking.
@@ -119,7 +119,7 @@ public sealed class NotificationService : INotificationService
             var result = await cmd.ExecuteScalarAsync(ct);
             return result is int i ? i : 0;
         }
-        catch (SqlException ex) when (ex.Number == 208) // table missing
+        catch (SqlException ex) when (ex.IsObjectMissing()) // table missing
         {
             _logger.LogDebug(ex, "RPT_user_notifications missing — returning 0 unread.");
             return 0;

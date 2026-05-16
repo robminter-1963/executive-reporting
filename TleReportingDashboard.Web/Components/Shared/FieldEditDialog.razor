@@ -70,7 +70,13 @@
 
             <MudItem xs="6" sm="3">
                 <MudNumericField @bind-Value="_edited.MaxLength" Label="MaxLength"
-                                 Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                 HelperText="Max characters in the source column." />
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudNumericField @bind-Value="_edited.MinWidth" Label="Min Width (px)"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" Max="2000"
+                                 HelperText="Minimum grid column width. Leave blank for auto. Use for prose fields (notes, descriptions) where MaxLength is misleading." />
             </MudItem>
             <MudItem xs="6" sm="3">
                 <MudNumericField @bind-Value="_edited.CodeSetId" Label="CodeSetId"
@@ -382,6 +388,7 @@
                 DataType = Field.DataType,
                 FieldType = Field.FieldType,
                 MaxLength = Field.MaxLength,
+                MinWidth = Field.MinWidth,
                 CodeSetId = Field.CodeSetId,
                 AllowedAggregationsStr = Field.AllowedAggregationsStr,
                 SourceTable = Field.SourceTable,
@@ -603,25 +610,14 @@
     // re-enters Ok() (which validates Id/Label internally — if either is
     // blank the dialog stays open and the prompt is effectively a no-op).
     // DontSave dismisses; Cancel keeps the user where they were.
-    private async Task TryCancelAsync()
-    {
-        if (IsDirty)
-        {
-            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-            switch (choice)
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
             {
-                case UnsavedChangesResult.Save:
-                    if (!string.IsNullOrWhiteSpace(_edited.Id)
-                        && !string.IsNullOrWhiteSpace(_edited.Label)) Ok();
-                    return;
-                case UnsavedChangesResult.Cancel:
-                    return;
-                case UnsavedChangesResult.DontSave:
-                    break;
-            }
-        }
-        MudDialog?.Cancel();
-    }
+                if (!string.IsNullOrWhiteSpace(_edited.Id)
+                    && !string.IsNullOrWhiteSpace(_edited.Label)) Ok();
+                return Task.CompletedTask;
+            });
 
     private void Ok()
     {

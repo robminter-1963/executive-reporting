@@ -178,6 +178,9 @@ public sealed partial class SqlEmitter : IQueryPipeline
             FieldId = f.Id,
             Label = f.Label,
             DataType = f.DataType,
+            MaxLength = f.MaxLength,
+            MinWidth = f.MinWidth,
+            ValueSortOrder = f.ValueSortOrder,
             Format = f.Format
         }).ToList();
 

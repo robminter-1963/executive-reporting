@@ -101,6 +101,22 @@ public sealed class ConfigDbCache
         }
     }
 
+    // Nuke every cached entry across all services. Use sparingly — usually
+    // a service-prefix invalidation is enough. Defensive option for save
+    // paths that touch shape used downstream by many caching services
+    // (e.g. SchemaConfig changes that ripple through SchemaService,
+    // SqlEmitter resolved-fields, ReportDbService cached column metadata,
+    // etc.) where it's easier to wipe than to enumerate every dependent
+    // prefix.
+    public void InvalidateAll()
+    {
+        foreach (var k in _keys.Keys)
+        {
+            _cache.Remove(k);
+            _keys.TryRemove(k, out _);
+        }
+    }
+
     // Helper for building a stable key from a method name + argument list.
     // Nulls render as "_" so "GetById:_" is a legal cache key for
     // null-arg callers (e.g. GetForConnection(null) which means "default").

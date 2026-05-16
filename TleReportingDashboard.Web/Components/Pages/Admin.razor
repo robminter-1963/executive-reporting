@@ -10,7 +10,16 @@
 
 <PageTitle>Admin - Executive Reporting Suite</PageTitle>
 
-<MudStack Spacing="3" Class="pa-4">
+@* Plain <div> as the scroll container, not the MudStack. MudStack
+   uses display:flex internally, and flex children default to
+   min-height: auto — combining that with overflow-y:auto on the same
+   element lets children overflow without triggering the scroll. A
+   plain block-level div sidesteps the flex sizing trap.
+   The bounded height accounts for the global app bar (64px). Each
+   child Admin*Tab.razor should NOT add its own scroll wrapper —
+   that would create a second scrollbar inside this one. *@
+<div style="height: calc(100vh - 64px); overflow-y: auto; padding: 0; margin-left: 15px;">
+<MudStack Spacing="3">
     <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
         @* Back arrow uses the browser history when there's something to
            go back to (the natural picker → dashboard → admin flow lands
@@ -149,9 +158,16 @@
                     <AdminAppSettingsTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
+            @if (_allowedSections.Contains(AdminSections.ColumnWidths))
+            {
+                <MudTabPanel Text="Column Widths" Icon="@Icons.Material.Filled.ViewColumn">
+                    <AdminColumnWidthsTab CurrentUserEmail="@_currentUserEmail" />
+                </MudTabPanel>
+            }
         </MudTabs>
     }
 </MudStack>
+</div>
 
 @code {
     private bool _accessGranted;

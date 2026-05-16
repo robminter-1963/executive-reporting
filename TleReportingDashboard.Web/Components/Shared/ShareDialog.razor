@@ -206,15 +206,12 @@
 
     private async Task RevokeShare(ReportShare share)
     {
-        try
+        if (await Snackbar.RunAsync(Logger, "revoking share",
+                () => SharingService.RevokeShareAsync(share.Id, CurrentUserId)))
         {
-            await SharingService.RevokeShareAsync(share.Id, CurrentUserId);
             _shares.Remove(share);
+            // Severity.Info (not Success) — revoke confirmation is neutral, not celebratory.
             Snackbar.Add("Share revoked.", Severity.Info);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Revoke failed: {ex.Message}", Severity.Error);
         }
     }
 
@@ -234,30 +231,15 @@
     // through the unsaved-changes prompt. "Save" here means "add the
     // pending entry"; "DontSave" closes without adding it; "Cancel"
     // keeps the dialog open so the user can finish typing.
-    private async Task TryCancelAsync()
-    {
-        if (!IsDirty)
-        {
-            MudDialog?.Cancel();
-            return;
-        }
-
-        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
-        {
-            case UnsavedChangesResult.Save:
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: async () =>
+            {
                 await AddShare();
                 // After Add succeeds the email field is cleared, so
                 // IsDirty flips false; close out cleanly. If AddShare
                 // failed, _newShareEmail is preserved — stay open so
                 // the user can fix the input or explicitly dismiss.
                 if (!IsDirty) MudDialog?.Close(DialogResult.Ok(_shares));
-                return;
-            case UnsavedChangesResult.Cancel:
-                return; // stay
-            case UnsavedChangesResult.DontSave:
-                MudDialog?.Cancel();
-                return;
-        }
-    }
+            });
 }

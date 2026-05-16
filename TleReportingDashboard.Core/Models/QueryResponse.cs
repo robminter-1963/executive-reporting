@@ -6,6 +6,11 @@ public class ColumnMeta
     public string Label { get; set; } = string.Empty;
     public string DataType { get; set; } = string.Empty;
     public int? MaxLength { get; set; }
+    // Optional schema-asserted column min-width (px). Flows from
+    // FieldDefinition.MinWidth into ColumnMeta so the renderer can apply it
+    // without re-reading the schema per column. Null = no override; the
+    // grid's data-type / MaxLength heuristics pick a default width.
+    public int? MinWidth { get; set; }
     public Dictionary<string, int>? ValueSortOrder { get; set; }
     // Display format (mask or .NET format string) applied at render / export time.
     public string? Format { get; set; }
@@ -34,6 +39,7 @@ public static class ColumnMetaExtensions
                     Label = v,
                     DataType = c.DataType,
                     MaxLength = c.MaxLength,
+                    MinWidth = c.MinWidth,
                     ValueSortOrder = c.ValueSortOrder,
                     Format = c.Format
                 };

@@ -3,6 +3,7 @@
 @inject ICompanyRegistry CompanyRegistry
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject ILogger<ManageUserAccessDialog> Logger
 
 @* Every edit in this dialog (role change, company-email override, per-
    connection LOS/CRM login, grant, revoke) commits live via the
@@ -224,37 +225,29 @@
     private async Task GrantAccess()
     {
         if (_grantCompanyId is null) return;
-        try
+        // Pass the email even when blank — empty string explicitly
+        // clears any preexisting override, which is the right starting
+        // state when the admin is granting fresh access.
+        if (await Snackbar.RunAsync(Logger, "granting company access",
+                () => UserManagement.UpsertCompanyAccessAsync(
+                    Email, _grantCompanyId.Value, _grantRole,
+                    companyEmail: _grantCompanyEmail)))
         {
-            // Pass the email even when blank — empty string explicitly
-            // clears any preexisting override, which is the right starting
-            // state when the admin is granting fresh access.
-            await UserManagement.UpsertCompanyAccessAsync(
-                Email, _grantCompanyId.Value, _grantRole,
-                companyEmail: _grantCompanyEmail);
             _grantCompanyId = null;
             _grantRole = UserRoles.Viewer;
             _grantCompanyEmail = string.Empty;
             await ReloadAccessAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to grant: {ex.Message}", Severity.Error);
         }
     }
 
     private async Task ChangeRole(UserCompanyAccess row, string newRole)
     {
         if (string.Equals(row.Role, newRole, StringComparison.Ordinal)) return;
-        try
+        // Don't pass companyEmail — leave the existing override alone.
+        if (await Snackbar.RunAsync(Logger, "changing role",
+                () => UserManagement.UpsertCompanyAccessAsync(row.Email, row.CompanyId, newRole)))
         {
-            // Don't pass companyEmail — leave the existing override alone.
-            await UserManagement.UpsertCompanyAccessAsync(row.Email, row.CompanyId, newRole);
             await ReloadAccessAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to change role: {ex.Message}", Severity.Error);
         }
     }
 
@@ -268,16 +261,12 @@
         var oldTrimmed = string.IsNullOrWhiteSpace(row.CompanyEmail) ? string.Empty : row.CompanyEmail.Trim();
         if (string.Equals(newTrimmed, oldTrimmed, StringComparison.OrdinalIgnoreCase)) return;
 
-        try
+        if (await Snackbar.RunAsync(Logger, "saving company email",
+                () => UserManagement.UpsertCompanyAccessAsync(
+                    row.Email, row.CompanyId, row.Role,
+                    companyEmail: newTrimmed)))
         {
-            await UserManagement.UpsertCompanyAccessAsync(
-                row.Email, row.CompanyId, row.Role,
-                companyEmail: newTrimmed);
             await ReloadAccessAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to save company email: {ex.Message}", Severity.Error);
         }
     }
 
@@ -289,14 +278,10 @@
         var oldTrimmed = string.IsNullOrWhiteSpace(conn.ExternalUserId) ? null : conn.ExternalUserId.Trim();
         if (string.Equals(newTrimmed, oldTrimmed, StringComparison.Ordinal)) return;
 
-        try
+        if (await Snackbar.RunAsync(Logger, "saving LOS/CRM login",
+                () => UserManagement.UpsertConnectionLoginAsync(Email, conn.ConnectionId, newTrimmed)))
         {
-            await UserManagement.UpsertConnectionLoginAsync(Email, conn.ConnectionId, newTrimmed);
             await ReloadAccessAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to save LOS/CRM login: {ex.Message}", Severity.Error);
         }
     }
 
@@ -311,14 +296,10 @@
         });
         if (confirmed != true) return;
 
-        try
+        if (await Snackbar.RunAsync(Logger, "revoking company access",
+                () => UserManagement.RevokeCompanyAccessAsync(row.Email, row.CompanyId)))
         {
-            await UserManagement.RevokeCompanyAccessAsync(row.Email, row.CompanyId);
             await ReloadAccessAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to revoke: {ex.Message}", Severity.Error);
         }
     }
 

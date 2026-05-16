@@ -743,4 +743,72 @@ public class MasterDashboardService : IMasterDashboardService
         }
         InvalidateLayoutCache();
     }
+
+    // ── Per-user tab visibility ──
+    // Hidden state lives in RPT_user_hidden_dashboard_tabs (PK on (user_id,
+    // tab_id), FK CASCADE on tab_id). Existence = hidden; absence = visible.
+    // No admin gate — users manage their own view of the shared layout.
+    // Not cached: the read happens once per dashboard mount and the row
+    // count per user is bounded by the number of tabs they have access to.
+
+    public async Task<HashSet<int>> GetHiddenTabIdsAsync(string userId, Guid companyId)
+    {
+        var result = new HashSet<int>();
+        if (string.IsNullOrEmpty(userId)) return result;
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        // Join through master_dashboard_tabs so the result is implicitly
+        // scoped to the requested company. Stale rows for tabs that moved
+        // companies (shouldn't happen) would silently drop out instead of
+        // bleeding across tenants.
+        await using var cmd = new SqlCommand(@"
+            SELECT h.tab_id
+              FROM EMPOWER.RPT_user_hidden_dashboard_tabs h
+              JOIN EMPOWER.RPT_master_dashboard_tabs    t ON t.id = h.tab_id
+             WHERE h.user_id = @UserId
+               AND t.company_id = @CompanyId", conn);
+        cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+        cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            result.Add(reader.GetInt32(0));
+        }
+        return result;
+    }
+
+    public async Task SetTabHiddenAsync(string userId, int tabId, bool hidden)
+    {
+        if (string.IsNullOrEmpty(userId)) return;
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        if (hidden)
+        {
+            // Idempotent insert — re-hiding an already-hidden tab is a
+            // silent no-op rather than a PK violation. INSERT...WHERE NOT
+            // EXISTS keeps this single-round-trip without MERGE overhead.
+            await using var cmd = new SqlCommand(@"
+                INSERT INTO EMPOWER.RPT_user_hidden_dashboard_tabs (user_id, tab_id)
+                SELECT @UserId, @TabId
+                 WHERE NOT EXISTS (
+                    SELECT 1 FROM EMPOWER.RPT_user_hidden_dashboard_tabs
+                     WHERE user_id = @UserId AND tab_id = @TabId
+                 )", conn);
+            cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+            cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
+            await cmd.ExecuteNonQueryAsync();
+        }
+        else
+        {
+            await using var cmd = new SqlCommand(
+                "DELETE FROM EMPOWER.RPT_user_hidden_dashboard_tabs WHERE user_id = @UserId AND tab_id = @TabId", conn);
+            cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+            cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
+            await cmd.ExecuteNonQueryAsync();
+        }
+    }
 }

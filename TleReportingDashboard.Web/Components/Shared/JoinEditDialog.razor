@@ -404,24 +404,13 @@
 
     // Routes Cancel through the unsaved-changes prompt. Save only re-enters
     // Ok() when the dialog is currently in a valid state (IsValid).
-    private async Task TryCancelAsync()
-    {
-        if (IsDirty)
-        {
-            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-            switch (choice)
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
             {
-                case UnsavedChangesResult.Save:
-                    if (IsValid) Ok();
-                    return;
-                case UnsavedChangesResult.Cancel:
-                    return;
-                case UnsavedChangesResult.DontSave:
-                    break;
-            }
-        }
-        MudDialog?.Cancel();
-    }
+                if (IsValid) Ok();
+                return Task.CompletedTask;
+            });
 
     private void Ok()
     {

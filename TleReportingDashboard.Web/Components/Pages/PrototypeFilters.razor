@@ -30,7 +30,7 @@
     return;
 }
 
-<MudMainContent Style="padding: 16px; height: calc(100vh - 64px); overflow-y: auto;">
+<MudMainContent Style="padding: 0; margin-left: 15px; height: calc(100vh - 64px); overflow-y: auto;">
     <div style="max-width: 1200px; margin: 0 auto;">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
             <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
@@ -854,8 +854,7 @@ private string BuildTextClause(string col, FilterRow row)
             })
             .ToList();
         var obj = new { filters = arr };
-        return System.Text.Json.JsonSerializer.Serialize(obj,
-            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        return System.Text.Json.JsonSerializer.Serialize(obj, AppJson.Indented);
     }
 
     private static object[] CollectValues(FilterRow r)

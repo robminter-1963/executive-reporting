@@ -10,6 +10,7 @@
 @inject IWebHostEnvironment HostEnv
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
+@inject ILogger<AdminPromotionTab> Logger
 
 <MudStack Spacing="3" Class="pa-2">
     <MudText Typo="Typo.body2" Color="Color.Secondary">
@@ -219,11 +220,17 @@
         var rows = new List<ExportRow>();
         var allTargets = new List<CompanyConnectionRecord>();
         var labels = new Dictionary<Guid, string>();
-        var companies = await Companies.GetActiveAsync();
-        foreach (var co in companies)
+        var companies = (await Companies.GetActiveAsync()).ToList();
+        // Per-company connection fetches are independent — parallelize.
+        // The Select's index is preserved into the resulting array, so
+        // companies[i] still pairs with connsByCompany[i] after the
+        // WhenAll resolves.
+        var connsByCompany = await Task.WhenAll(
+            companies.Select(co => Connections.GetByCompanyAsync(co.Id)));
+        for (var i = 0; i < companies.Count; i++)
         {
-            var conns = await Connections.GetByCompanyAsync(co.Id);
-            foreach (var c in conns.Where(x => x.IsActive))
+            var co = companies[i];
+            foreach (var c in connsByCompany[i].Where(x => x.IsActive))
             {
                 allTargets.Add(c);
                 labels[c.Id] = $"{c.Name}  ·  {co.Name}";
@@ -257,21 +264,19 @@
         try
         {
             var ids = _exportRows.Where(r => r.Selected).Select(r => r.ConnectionId).ToList();
-            var bytes = await Promotion.ExportAsync(ids, CurrentUserEmail,
-                string.IsNullOrWhiteSpace(_exportNotes) ? null : _exportNotes.Trim());
-            var fileName = $"promotion-{_envLabel.ToLowerInvariant()}-{DateTime.Now:yyyy-MM-dd_HHmm}.json";
+            await Snackbar.RunAsync(Logger, "exporting promotion package", async () =>
+            {
+                var bytes = await Promotion.ExportAsync(ids, CurrentUserEmail,
+                    string.IsNullOrWhiteSpace(_exportNotes) ? null : _exportNotes.Trim());
+                var fileName = $"promotion-{_envLabel.ToLowerInvariant()}-{DateTime.Now:yyyy-MM-dd_HHmm}.json";
 
-            // Hand the bytes to the browser as a download. JS interop
-            // builds a Blob URL and triggers a synthetic click — the
-            // standard pattern for streaming server-built files in a
-            // Blazor Server app without a controller endpoint.
-            await JS.InvokeVoidAsync("downloadFile", fileName,
-                Convert.ToBase64String(bytes), "application/json");
-            Snackbar.Add($"Exported {ids.Count} entries.", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
+                // Hand the bytes to the browser as a download. JS interop
+                // builds a Blob URL and triggers a synthetic click — the
+                // standard pattern for streaming server-built files in a
+                // Blazor Server app without a controller endpoint.
+                await JS.DownloadAsync(fileName, bytes);
+            },
+            successMessage: $"Exported {_exportRows.Count(r => r.Selected)} entries.");
         }
         finally
         {

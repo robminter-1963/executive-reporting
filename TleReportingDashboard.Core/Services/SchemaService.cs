@@ -70,6 +70,7 @@ public partial class SchemaService : ISchemaService
                 LookupIds = field.LookupIds,
                 SortOrder = index,
                 MaxLength = field.MaxLength,
+                MinWidth = field.MinWidth,
                 CodeSetId = field.CodeSetId,
                 ValueSortOrder = field.ValueSortOrder is not null ? new Dictionary<string, int>(field.ValueSortOrder) : null,
                 RolesRequired = field.RolesRequired,

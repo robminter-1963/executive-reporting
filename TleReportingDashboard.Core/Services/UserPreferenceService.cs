@@ -61,12 +61,12 @@ public class UserPreferenceService : IUserPreferenceService
                 MasterDashboardLogoType = reader.IsDBNull(7) ? null : reader.GetString(7),
                 CreatedAt = reader.GetDateTime(8),
                 UpdatedAt = reader.GetDateTime(9),
-                ReportLibraryPageSize = TryGetInt(reader, "report_library_page_size") ?? 15,
-                ReportPageSizes = ParseReportPageSizes(TryGetString(reader, "report_page_sizes")),
-                SchemaBuilderConnectionId = TryGetGuid(reader, "schema_builder_connection_id"),
-                SchemaBuilderCompanyId = TryGetGuid(reader, "schema_builder_company_id"),
-                ReportLibraryCompanyId = TryGetGuid(reader, "report_library_company_id"),
-                LastMasterDashboardSeen = TryGetDateTime(reader, "last_master_dashboard_seen")
+                ReportLibraryPageSize = reader.OptInt("report_library_page_size") ?? 15,
+                ReportPageSizes = ParseReportPageSizes(reader.OptString("report_page_sizes")),
+                SchemaBuilderConnectionId = reader.OptGuid("schema_builder_connection_id"),
+                SchemaBuilderCompanyId = reader.OptGuid("schema_builder_company_id"),
+                ReportLibraryCompanyId = reader.OptGuid("report_library_company_id"),
+                LastMasterDashboardSeen = reader.OptDate("last_master_dashboard_seen")
             };
         }
 
@@ -77,16 +77,6 @@ public class UserPreferenceService : IUserPreferenceService
             ReportLibraryPageSize = 15,
             IsDarkMode = false
         };
-    }
-
-    private static string? TryGetString(SqlDataReader reader, string column)
-    {
-        try
-        {
-            var ord = reader.GetOrdinal(column);
-            return reader.IsDBNull(ord) ? null : reader.GetString(ord);
-        }
-        catch (IndexOutOfRangeException) { return null; }
     }
 
     private static Dictionary<Guid, int> ParseReportPageSizes(string? json)
@@ -105,38 +95,6 @@ public class UserPreferenceService : IUserPreferenceService
             return result;
         }
         catch { return new(); }
-    }
-
-    // Tolerate a missing column (migration not yet applied) by returning null
-    // instead of throwing. Callers fall back to the model's default.
-    private static int? TryGetInt(SqlDataReader reader, string column)
-    {
-        try
-        {
-            var ord = reader.GetOrdinal(column);
-            return reader.IsDBNull(ord) ? null : reader.GetInt32(ord);
-        }
-        catch (IndexOutOfRangeException) { return null; }
-    }
-
-    private static Guid? TryGetGuid(SqlDataReader reader, string column)
-    {
-        try
-        {
-            var ord = reader.GetOrdinal(column);
-            return reader.IsDBNull(ord) ? null : reader.GetGuid(ord);
-        }
-        catch (IndexOutOfRangeException) { return null; }
-    }
-
-    private static DateTime? TryGetDateTime(SqlDataReader reader, string column)
-    {
-        try
-        {
-            var ord = reader.GetOrdinal(column);
-            return reader.IsDBNull(ord) ? null : reader.GetDateTime(ord);
-        }
-        catch (IndexOutOfRangeException) { return null; }
     }
 
     public async Task TouchLastMasterDashboardSeenAsync(string userId)

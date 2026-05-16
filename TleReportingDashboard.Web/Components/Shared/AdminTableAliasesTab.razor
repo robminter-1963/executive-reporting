@@ -5,6 +5,7 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject AuthenticationStateProvider AuthStateProvider
+@inject ILogger<AdminTableAliasesTab> Logger
 
 @* Table Aliases editor. Embedded in the Schema Builder under the
    "Table Aliases" tab — the parent drives the ConnectionId, so this
@@ -247,25 +248,22 @@
                 { x => x.AvailableFields, fields },
                 { x => x.TakenAliases, BuildTakenAliases(excludeEntryId: null) }
             },
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
+            DialogPresets.Locked(MaxWidth.Small));
         var result = await dlg.Result;
         if (result is null || result.Canceled || result.Data is not TableAliasEditDialog.EditResult edited) return;
 
-        try
-        {
-            await TableAliasSvc.AddAsync(connId, edited.TableName, edited.Alias,
+        var (ok, _) = await Snackbar.RunAsync(Logger, "creating table alias",
+            () => TableAliasSvc.AddAsync(connId, edited.TableName, edited.Alias,
                 edited.IsPrimary, edited.IsDefaultPrimary,
                 _userId, _userEmail,
                 tableType: edited.TableType,
                 primaryColumn: edited.PrimaryColumn,
-                additionalKeyColumns: edited.AdditionalKeyColumns);
+                additionalKeyColumns: edited.AdditionalKeyColumns),
+            successMessage: $"Added \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\".");
+        if (ok)
+        {
             await LoadEntriesAsync();
             await NotifyChangedAsync();
-            Snackbar.Add($"Added \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\".", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to add: {ex.Message}", Severity.Error);
         }
     }
 
@@ -299,42 +297,39 @@
                 { x => x.OnRoleOwnerCleared, EventCallback.Factory.Create<Guid>(this,
                     async roleId => await TableAliasSvc.ClearRoleOwnerAsync(entry.Id, roleId)) }
             },
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
+            DialogPresets.Locked(MaxWidth.Small));
         var result = await dlg.Result;
         if (result is null || result.Canceled || result.Data is not TableAliasEditDialog.EditResult edited) return;
 
-        try
-        {
-            await TableAliasSvc.UpdateAsync(entry.Id, edited.TableName, edited.Alias,
-                edited.IsPrimary, edited.IsDefaultPrimary,
-                tableType: edited.TableType,
-                primaryColumn: edited.PrimaryColumn,
-                additionalKeyColumns: edited.AdditionalKeyColumns);
-
-            // Detect a true alias rename — both ends non-empty and different
-            // (case-insensitive). Notify the parent BEFORE LoadEntriesAsync
-            // so it can rewrite in-memory field references while the old
-            // alias is still meaningful. Adds (old blank) and clears (new
-            // blank) are intentionally excluded: there's nothing to rewrite
-            // when the old alias was empty, and clearing is treated as a
-            // destructive authoring change the admin handles manually.
-            var oldAlias = entry.Alias ?? string.Empty;
-            var newAlias = edited.Alias ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(oldAlias)
-                && !string.IsNullOrWhiteSpace(newAlias)
-                && !string.Equals(oldAlias, newAlias, StringComparison.OrdinalIgnoreCase)
-                && OnAliasRenamed.HasDelegate)
+        if (await Snackbar.RunAsync(Logger, "saving table alias", async () =>
             {
-                await OnAliasRenamed.InvokeAsync((oldAlias, newAlias));
-            }
+                await TableAliasSvc.UpdateAsync(entry.Id, edited.TableName, edited.Alias,
+                    edited.IsPrimary, edited.IsDefaultPrimary,
+                    tableType: edited.TableType,
+                    primaryColumn: edited.PrimaryColumn,
+                    additionalKeyColumns: edited.AdditionalKeyColumns);
 
+                // Detect a true alias rename — both ends non-empty and different
+                // (case-insensitive). Notify the parent BEFORE LoadEntriesAsync
+                // so it can rewrite in-memory field references while the old
+                // alias is still meaningful. Adds (old blank) and clears (new
+                // blank) are intentionally excluded: there's nothing to rewrite
+                // when the old alias was empty, and clearing is treated as a
+                // destructive authoring change the admin handles manually.
+                var oldAlias = entry.Alias ?? string.Empty;
+                var newAlias = edited.Alias ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(oldAlias)
+                    && !string.IsNullOrWhiteSpace(newAlias)
+                    && !string.Equals(oldAlias, newAlias, StringComparison.OrdinalIgnoreCase)
+                    && OnAliasRenamed.HasDelegate)
+                {
+                    await OnAliasRenamed.InvokeAsync((oldAlias, newAlias));
+                }
+            },
+            successMessage: $"Updated to \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\"."))
+        {
             await LoadEntriesAsync();
             await NotifyChangedAsync();
-            Snackbar.Add($"Updated to \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\".", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to update: {ex.Message}", Severity.Error);
         }
     }
 
@@ -388,16 +383,13 @@
             cancelText: "Cancel");
         if (confirm != true) return;
 
-        try
+        if (await Snackbar.RunAsync(Logger, "deleting table alias",
+                () => TableAliasSvc.DeleteAsync(entry.Id)))
         {
-            await TableAliasSvc.DeleteAsync(entry.Id);
             await LoadEntriesAsync();
             await NotifyChangedAsync();
+            // Severity.Info (not Success) — delete confirmation is neutral, not a celebratory save.
             Snackbar.Add($"Deleted \"{combined}\".", Severity.Info);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to delete: {ex.Message}", Severity.Error);
         }
     }
 

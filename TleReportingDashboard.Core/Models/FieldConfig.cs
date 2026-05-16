@@ -24,6 +24,11 @@ public class FieldConfig
     public List<string>? LookupIds { get; set; }
     public int SortOrder { get; set; }
     public int? MaxLength { get; set; }
+    // Optional column min-width hint (px) for the report grid. Mirrors
+    // Configuration.FieldDefinition.MinWidth — copied through SchemaService
+    // so the query pipeline can paint it onto ColumnMeta without re-reading
+    // the schema config. Null = no override.
+    public int? MinWidth { get; set; }
     public int? CodeSetId { get; set; }
     public Dictionary<string, int>? ValueSortOrder { get; set; }
     public string? RolesRequired { get; set; }

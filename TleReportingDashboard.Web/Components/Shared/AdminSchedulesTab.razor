@@ -4,6 +4,7 @@
 @inject ICompanyConnectionAdminService ConnectionSvc
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ILogger<AdminSchedulesTab> Logger
 @using MudBlazor
 @using TleReportingDashboard.Web.Models
 @using TleReportingDashboard.Web.Services
@@ -14,8 +15,7 @@
    schedules are created here too: pick a report from the dropdown,
    then the standard ScheduleDialog opens with the report's
    connection pre-resolved. *@
-<MudStack Spacing="3" Class="pa-2"
-          Style="max-height: calc(100vh - 196px); overflow-y: auto;">
+<MudStack Spacing="3" Class="pa-2">
     <MudText Typo="Typo.body2" Color="Color.Secondary">
         Manage every scheduled report across the system. Create new schedules by picking a report from the dropdown below; edit or delete existing ones from the table.
     </MudText>
@@ -283,9 +283,12 @@
             // narrowing logic.
             _connections = new List<CompanyConnectionRecord>();
             _connectionCompanyById = new Dictionary<Guid, Guid>();
-            foreach (var c in _companies)
+            // Parallel fetches — per-company calls are independent. Drops
+            // cold tab load from N × roundtrip to roughly the slowest one.
+            var connsByCompany = await Task.WhenAll(
+                _companies.Select(c => ConnectionSvc.GetByCompanyAsync(c.Id)));
+            foreach (var conns in connsByCompany)
             {
-                var conns = await ConnectionSvc.GetByCompanyAsync(c.Id);
                 foreach (var conn in conns.Where(x => x.IsActive))
                 {
                     _connections.Add(conn);
@@ -501,28 +504,19 @@
             { x => x.UserEmail, CurrentUserEmail }
         };
         var dialog = await DialogService.ShowAsync<ScheduleDialog>("New Schedule", parameters,
-            new DialogOptions
-            {
-                MaxWidth = MaxWidth.Medium,
-                FullWidth = true,
-                BackdropClick = false,
-                CloseOnEscapeKey = false
-            });
+            DialogPresets.Locked(MaxWidth.Medium));
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not ReportSchedule s) return;
-        try
+        var (ok, _) = await Snackbar.RunAsync(Logger, "creating schedule",
+            () => ScheduleService.CreateScheduleAsync(s));
+        if (ok)
         {
-            await ScheduleService.CreateScheduleAsync(s);
             // Reset the cascade so the next New Schedule starts clean.
             // Leaves the company filter alone — admin doing a batch of
             // schedules for one company shouldn't have to re-pick.
             _newReportId = null;
             _newConnectionId = null;
             await ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to create schedule: {ex.Message}", Severity.Error);
         }
     }
 
@@ -541,23 +535,14 @@
             { x => x.ExistingSchedule, schedule }
         };
         var dialog = await DialogService.ShowAsync<ScheduleDialog>("Edit Schedule", parameters,
-            new DialogOptions
-            {
-                MaxWidth = MaxWidth.Medium,
-                FullWidth = true,
-                BackdropClick = false,
-                CloseOnEscapeKey = false
-            });
+            DialogPresets.Locked(MaxWidth.Medium));
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not ReportSchedule updated) return;
-        try
+        var (ok, _) = await Snackbar.RunAsync(Logger, "saving schedule",
+            () => ScheduleService.UpdateScheduleAsync(updated));
+        if (ok)
         {
-            await ScheduleService.UpdateScheduleAsync(updated);
             await ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to update schedule: {ex.Message}", Severity.Error);
         }
     }
 
@@ -587,14 +572,10 @@
             $"Delete schedule \"{schedule.Subject}\"? This action cannot be undone.",
             yesText: "Delete", cancelText: "Cancel");
         if (result != true) return;
-        try
+        if (await Snackbar.RunAsync(Logger, "deleting schedule",
+                () => ScheduleService.DeleteScheduleAsync(schedule.Id, schedule.OwnerId)))
         {
-            await ScheduleService.DeleteScheduleAsync(schedule.Id, schedule.OwnerId);
             await ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
         }
     }
 }

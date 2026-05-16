@@ -2,6 +2,7 @@
 @inject ICompanyRegistry CompanyRegistry
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject ILogger<AdminCompaniesTab> Logger
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.Data.SqlClient
 @using MudBlazor
@@ -216,22 +217,16 @@
 
     private async Task AddCompany()
     {
-        try
-        {
-            await CompanyAdminSvc.CreateAsync(_newCode.Trim().ToLowerInvariant(), _newName.Trim(),
+        var (ok, _) = await Snackbar.RunAsync(Logger, "creating company",
+            () => CompanyAdminSvc.CreateAsync(_newCode.Trim().ToLowerInvariant(), _newName.Trim(),
                 string.IsNullOrWhiteSpace(_newWebsiteUrl) ? null : _newWebsiteUrl.Trim(),
-                createdBy: null);
+                createdBy: null),
+            duplicateMessage: "A company with that code already exists.");
+        if (ok)
+        {
             _newCode = _newName = _newWebsiteUrl = string.Empty;
             await ReloadAsync();
             if (_addIndicator is not null) _ = _addIndicator.Flash("Added");
-        }
-        catch (SqlException ex) when (ex.Number is 2601 or 2627)
-        {
-            Snackbar.Add("A company with that code already exists.", Severity.Warning);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to add company: {ex.Message}", Severity.Error);
         }
     }
 
@@ -289,21 +284,14 @@
     private async Task SaveEdit()
     {
         if (_editingId is not Guid id) return;
-        try
+        if (await Snackbar.RunAsync(Logger, "saving company",
+                () => CompanyAdminSvc.UpdateAsync(id, _editCode.Trim().ToLowerInvariant(), _editName.Trim(),
+                    string.IsNullOrWhiteSpace(_editWebsiteUrl) ? null : _editWebsiteUrl.Trim(),
+                    _editIsActive, _editIsHidden),
+                duplicateMessage: "That code is already taken by another company."))
         {
-            await CompanyAdminSvc.UpdateAsync(id, _editCode.Trim().ToLowerInvariant(), _editName.Trim(),
-                string.IsNullOrWhiteSpace(_editWebsiteUrl) ? null : _editWebsiteUrl.Trim(),
-                _editIsActive, _editIsHidden);
             _editingId = null;
             await ReloadAsync();
-        }
-        catch (SqlException ex) when (ex.Number is 2601 or 2627)
-        {
-            Snackbar.Add("That code is already taken by another company.", Severity.Warning);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
         }
     }
 
@@ -384,22 +372,22 @@
         _uploadingLogoFor = companyId;
         try
         {
-            // Read the browser file into memory. OpenReadStream enforces
-            // the same size cap we just checked, so a stream overflow can
-            // only happen if the client lied — defensive second cap below.
-            await using var stream = file.OpenReadStream(maxAllowedSize: MaxLogoBytes);
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms);
-            var bytes = ms.ToArray();
-            var contentType = string.IsNullOrWhiteSpace(file.ContentType) ? "image/png" : file.ContentType;
-
-            await CompanyAdminSvc.UploadLogoAsync(companyId, bytes, contentType);
-            await ReloadAsync();
-            Snackbar.Add("Logo uploaded.", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Upload failed: {ex.Message}", Severity.Error);
+            if (await Snackbar.RunAsync(Logger, "uploading logo", async () =>
+                {
+                    // Read the browser file into memory. OpenReadStream enforces
+                    // the same size cap we just checked, so a stream overflow can
+                    // only happen if the client lied — defensive second cap below.
+                    await using var stream = file.OpenReadStream(maxAllowedSize: MaxLogoBytes);
+                    using var ms = new MemoryStream();
+                    await stream.CopyToAsync(ms);
+                    var bytes = ms.ToArray();
+                    var contentType = string.IsNullOrWhiteSpace(file.ContentType) ? "image/png" : file.ContentType;
+                    await CompanyAdminSvc.UploadLogoAsync(companyId, bytes, contentType);
+                },
+                successMessage: "Logo uploaded."))
+            {
+                await ReloadAsync();
+            }
         }
         finally
         {
@@ -418,14 +406,10 @@
         });
         if (confirmed != true) return;
 
-        try
+        if (await Snackbar.RunAsync(Logger, "clearing logo",
+                () => CompanyAdminSvc.ClearLogoAsync(companyId)))
         {
-            await CompanyAdminSvc.ClearLogoAsync(companyId);
             await ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to clear logo: {ex.Message}", Severity.Error);
         }
     }
 
@@ -442,14 +426,10 @@
         });
         if (confirmed != true) return;
 
-        try
+        if (await Snackbar.RunAsync(Logger, $"{verb} company",
+                () => CompanyAdminSvc.SetActiveAsync(c.Id, target)))
         {
-            await CompanyAdminSvc.SetActiveAsync(c.Id, target);
             await ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
         }
     }
 
@@ -460,17 +440,16 @@
     private async Task ToggleHidden(CompanyRecord c)
     {
         var target = !c.IsHidden;
-        try
+        if (await Snackbar.RunAsync(Logger, "toggling company visibility",
+                () => CompanyAdminSvc.SetHiddenAsync(c.Id, target)))
         {
-            await CompanyAdminSvc.SetHiddenAsync(c.Id, target);
             await ReloadAsync();
+            // Severity.Info (not Success) — purely informational toggle confirmation,
+            // not a save event, so keep it as a separate Add rather than RunAsync's
+            // built-in Success message.
             Snackbar.Add(
                 target ? $"'{c.Name}' hidden from picker." : $"'{c.Name}' shown on picker.",
                 Severity.Info);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to toggle: {ex.Message}", Severity.Error);
         }
     }
 }

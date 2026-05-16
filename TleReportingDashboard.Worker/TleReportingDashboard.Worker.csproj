@@ -4,6 +4,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
+    <!-- OutOfProcess mirrors the Web project so a remote SQL Server's
+         Integrated-Security auth works the same way for both. In-process
+         hosting was producing "Login failed for NT AUTHORITY\ANONYMOUS
+         LOGON" against the cross-machine SQL host even with the pool's
+         SpecificUser identity correctly configured. -->
+    <AspNetCoreHostingModel>OutOfProcess</AspNetCoreHostingModel>
   </PropertyGroup>
 
   <!-- Worker references Core (the shared services + models) but NOT
@@ -17,6 +23,11 @@
   <ItemGroup>
     <PackageReference Include="Hangfire.AspNetCore" Version="1.8.20" />
     <PackageReference Include="Hangfire.SqlServer" Version="1.8.20" />
+    <!-- Cronos is a Hangfire transitive dep but we reference it
+         explicitly here so the catch-up logic in SchedulerSyncService
+         (compute most-recent past cron occurrence) doesn't break if
+         a future Hangfire version drops the public dependency. -->
+    <PackageReference Include="Cronos" Version="0.8.3" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />

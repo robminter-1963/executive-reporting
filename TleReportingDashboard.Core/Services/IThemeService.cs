@@ -29,32 +29,32 @@ public interface IThemeService
 // admin UI uses MudColorPicker which always produces well-formed values.
 public sealed class AppTheme
 {
-    [JsonPropertyName("surfacePage")]    public string SurfacePage    { get; set; } = "#FAFAFA";
-    [JsonPropertyName("surfaceToolbar")] public string SurfaceToolbar { get; set; } = "#3C4043";
+    [JsonPropertyName("surfacePage")]    public string SurfacePage    { get; set; } = "#F9FAFB";
+    [JsonPropertyName("surfaceToolbar")] public string SurfaceToolbar { get; set; } = "#FFFFFF";
     [JsonPropertyName("surfaceCard")]    public string SurfaceCard    { get; set; } = "#FFFFFF";
-    [JsonPropertyName("surfaceStrip")]   public string SurfaceStrip   { get; set; } = "#E8EAED";
+    [JsonPropertyName("surfaceStrip")]   public string SurfaceStrip   { get; set; } = "#F1F5F9";
 
-    [JsonPropertyName("textPrimary")]    public string TextPrimary    { get; set; } = "#202124";
-    [JsonPropertyName("textSecondary")]  public string TextSecondary  { get; set; } = "#5F6368";
-    [JsonPropertyName("textMuted")]      public string TextMuted      { get; set; } = "#9AA0A6";
-    [JsonPropertyName("textOnToolbar")]  public string TextOnToolbar  { get; set; } = "#E8EAED";
+    [JsonPropertyName("textPrimary")]    public string TextPrimary    { get; set; } = "#0F172A";
+    [JsonPropertyName("textSecondary")]  public string TextSecondary  { get; set; } = "#475569";
+    [JsonPropertyName("textMuted")]      public string TextMuted      { get; set; } = "#94A3B8";
+    [JsonPropertyName("textOnToolbar")]  public string TextOnToolbar  { get; set; } = "#0F172A";
 
-    [JsonPropertyName("borderDefault")]  public string BorderDefault  { get; set; } = "#DADCE0";
-    [JsonPropertyName("borderSubtle")]   public string BorderSubtle   { get; set; } = "#E8EAED";
+    [JsonPropertyName("borderDefault")]  public string BorderDefault  { get; set; } = "#E2E8F0";
+    [JsonPropertyName("borderSubtle")]   public string BorderSubtle   { get; set; } = "#F1F5F9";
 
-    [JsonPropertyName("accentPrimary")]  public string AccentPrimary  { get; set; } = "#1A73E8";
-    [JsonPropertyName("accentSuccess")]  public string AccentSuccess  { get; set; } = "#1E8E3E";
-    [JsonPropertyName("accentWarning")]  public string AccentWarning  { get; set; } = "#F9AB00";
-    [JsonPropertyName("accentError")]    public string AccentError    { get; set; } = "#D32F2F";
+    [JsonPropertyName("accentPrimary")]  public string AccentPrimary  { get; set; } = "#4F46E5";
+    [JsonPropertyName("accentSuccess")]  public string AccentSuccess  { get; set; } = "#10B981";
+    [JsonPropertyName("accentWarning")]  public string AccentWarning  { get; set; } = "#F59E0B";
+    [JsonPropertyName("accentError")]    public string AccentError    { get; set; } = "#EF4444";
 
     // ── Data-table tokens (grids in the Report Viewer + Master Dashboard) ──
     // Header band background and the alternating / hover row tints. The
     // values match the legacy hardcoded ones so an existing seeded row
     // upgrades cleanly (additive deserialization fills missing fields
     // from these defaults).
-    [JsonPropertyName("tableHeaderBg")]   public string TableHeaderBg   { get; set; } = "#F7F7F7";
-    [JsonPropertyName("tableRowHover")]   public string TableRowHover   { get; set; } = "#F1F3F4";
-    [JsonPropertyName("tableRowStriped")] public string TableRowStriped { get; set; } = "#FAFAFA";
+    [JsonPropertyName("tableHeaderBg")]   public string TableHeaderBg   { get; set; } = "#F8FAFC";
+    [JsonPropertyName("tableRowHover")]   public string TableRowHover   { get; set; } = "#F8FAFC";
+    [JsonPropertyName("tableRowStriped")] public string TableRowStriped { get; set; } = "#FCFCFD";
 
     // ── Detail-view group / total row tokens ──
     // The grouped Detail View renders as: header band (sticky thead) →

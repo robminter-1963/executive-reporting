@@ -231,6 +231,20 @@ public sealed class RoleService : IRoleService
 
         await tx.CommitAsync(ct);
         _cache.Invalidate("RoleService:");
+        // UserManagementService.UserSelectSql LEFT-JOINs RPT_roles and
+        // projects r.name AS role_name + r.admin_sections AS
+        // role_admin_sections into every UserRecord. A role edit can
+        // therefore stale every cached user projection that joined it.
+        // We can't cheaply know whether name / admin_sections actually
+        // changed without re-fetching the prior row, so just invalidate
+        // the projections that carry those fields (All, ByEmail*,
+        // ByExternalUserId*). UserTeams / CompanyAccess / ConnectionLogins
+        // / ExternalUserId / ResolveCanonicalEmail don't carry role
+        // fields, so they survive intact. Companion fix in
+        // UserManagementService 2026-05 audit.
+        _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "All"));
+        _cache.Invalidate("UserManagementService:ByEmail");
+        _cache.Invalidate("UserManagementService:ByExternalUserId");
 
         _logger.LogInformation("Role updated: {Id} ({Name}) scope={Scope} active={IsActive}", id, name, scopeRule, isActive);
     }

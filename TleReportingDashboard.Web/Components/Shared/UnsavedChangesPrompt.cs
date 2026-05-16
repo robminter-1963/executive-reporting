@@ -53,4 +53,44 @@ public static class UnsavedChangesPrompt
             return UnsavedChangesResult.Cancel;
         return choice;
     }
+
+    // The dialog-side cancel-flow helper. Every dirty-tracked dialog
+    // had a near-identical 14-line `TryCancelAsync` switch — same Save
+    // → run-save / DontSave → cancel / Cancel → stay shape. This
+    // collapses each to one call:
+    //
+    //     private Task TryCancelAsync() =>
+    //         UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+    //             saveAsync: () => { if (IsValid) Save(); return Task.CompletedTask; });
+    //
+    // saveAsync owns the validate-before-save decision so dialogs with
+    // a Disabled OK button can no-op when invalid instead of saving an
+    // incomplete record. When saveAsync is null, picking "Save" still
+    // closes the dialog (treated as commit-with-no-side-effect) —
+    // useful for confirmation dialogs whose Save is just "yes."
+    public static async Task TryCancelAsync(
+        IDialogService dialog,
+        IMudDialogInstance? mudDialog,
+        bool isDirty,
+        Func<Task>? saveAsync = null)
+    {
+        if (!isDirty)
+        {
+            mudDialog?.Cancel();
+            return;
+        }
+        var choice = await AskAsync(dialog);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                if (saveAsync is not null) await saveAsync();
+                return;
+            case UnsavedChangesResult.DontSave:
+                mudDialog?.Cancel();
+                return;
+            case UnsavedChangesResult.Cancel:
+            default:
+                return; // stay where we are
+        }
+    }
 }

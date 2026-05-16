@@ -99,7 +99,13 @@ public sealed class UserManagementService : IUserManagementService
         cmd.Parameters.Add(new SqlParameter("@roleId", (object?)roleId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@createdBy", (object?)createdBy ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
-        _cache.Invalidate("UserManagementService:");
+        // Narrow invalidation: a new user touches only the listing and
+        // the user's own ByEmail key. ResolveCanonicalEmail / CompanyAccess
+        // / ConnectionLogins / ExternalUserId / ByExternalUserId / UserTeams
+        // all key off other tables that a fresh Create doesn't populate,
+        // so dropping their entries would just churn the cache for nothing.
+        _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "All"));
+        _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "ByEmail", email));
 
         // Mirror to RPT_admins for the legacy IsAdmin() check.
         if (isAdmin)
@@ -137,7 +143,17 @@ public sealed class UserManagementService : IUserManagementService
         cmd.Parameters.Add(new SqlParameter("@roleId", (object?)roleId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@isActive", isActive));
         await cmd.ExecuteNonQueryAsync(ct);
-        _cache.Invalidate("UserManagementService:");
+        // Narrow invalidation: this edit updates RPT_users only — affected
+        // caches are the user's ByEmail row, the All listing, and any
+        // ByExternalUserId projection that joins through this user (we
+        // don't know which connection×external pairs map to this email
+        // without an extra query, so prefix-purge that family). The other
+        // caches (ResolveCanonicalEmail / CompanyAccess / ConnectionLogins
+        // / ExternalUserId / UserTeams) read from other tables and stay
+        // valid across a user-row edit.
+        _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "All"));
+        _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "ByEmail", email));
+        _cache.Invalidate("UserManagementService:ByExternalUserId");
 
         // Keep RPT_admins in sync with the derived boolean. If the role
         // changed from Administrator → something else, the global row gets

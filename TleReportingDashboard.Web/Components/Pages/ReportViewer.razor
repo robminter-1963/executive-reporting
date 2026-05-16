@@ -20,7 +20,7 @@
 
 <PageTitle>@(_reportName ?? "Report") - Executive Reporting Suite</PageTitle>
 
-<MudMainContent Style="padding: 16px;">
+<MudMainContent Style="padding: 0; margin-left: 15px;">
     @* Initial-load progress only when there's no prior data to show.
        After the first successful run, the inline re-query progress
        below sits inside MudStack so it doesn't push the whole page
@@ -32,8 +32,8 @@
         <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
                 <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
-                               OnClick="NavigateBackToLibrary"
-                               title="Back to Report Library" />
+                               OnClick="NavigateBackAsync"
+                               title="Back" />
                 <MudText Typo="Typo.h6" Style="font-weight: 600;">@(_reportName ?? "Report")</MudText>
                 @if (_appliedFilters.Any())
                 {
@@ -184,10 +184,34 @@
         return access.Any(a => a.CompanyId == report.CompanyId);
     }
 
-    private void NavigateBackToLibrary()
+    // Back arrow on the viewer's top bar. Routing depends on where the user
+    // actually came from:
+    //
+    //   1. ReturnTab set (came from Report Library with a specific tab in
+    //      mind) — preserve that and land them back on the same tab.
+    //   2. Browser has nav history — defer to history.back so the user
+    //      returns to whatever previous page they came from. This is the
+    //      fix for notification clicks: a viewer-only user without library
+    //      access (Viewer role + no shares) lands on /reports otherwise
+    //      and gets stuck because they can't see / nav out of the library.
+    //   3. No history (fresh tab opened straight to /viewer/{id}) — fall
+    //      back to the company picker, which everyone can reach.
+    private async Task NavigateBackAsync()
     {
-        var url = ReturnTab.HasValue ? $"/reports?tab={ReturnTab.Value}" : "/reports";
-        Navigation.NavigateTo(url);
+        if (ReturnTab.HasValue)
+        {
+            Navigation.NavigateTo($"/reports?tab={ReturnTab.Value}");
+            return;
+        }
+        var hasHistory = await JS.InvokeAsync<bool>("eval", "window.history.length > 1");
+        if (hasHistory)
+        {
+            await JS.InvokeVoidAsync("history.back");
+        }
+        else
+        {
+            Navigation.NavigateTo("/?all=1");
+        }
     }
 
     private string? _reportName;
@@ -317,7 +341,7 @@
                 try
                 {
                     _dashboardConfig = System.Text.Json.JsonSerializer.Deserialize<DashboardView.DashboardConfig>(report.ColumnState,
-                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        AppJson.Compact);
 
                     using var doc = System.Text.Json.JsonDocument.Parse(report.ColumnState);
                     if (doc.RootElement.TryGetProperty("TableSortField", out var tsfEl))
@@ -355,7 +379,7 @@
                             _advancedFilters = System.Text.Json.JsonSerializer
                                 .Deserialize<TleReportingDashboard.Web.Models.FilterGroup>(
                                     afEl.GetRawText(),
-                                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                                    AppJson.Compact);
                         }
                         catch { _advancedFilters = null; }
                     }
@@ -653,25 +677,21 @@
     {
         if (_queryData is null) return;
         var bytes = ExportService.ExportToExcel(BuildExportData(_queryData), _reportName ?? "Report");
-        await JS.InvokeVoidAsync("downloadFile", $"{_reportName ?? "report"}.xlsx",
-            Convert.ToBase64String(bytes),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        await JS.DownloadAsync($"{_reportName ?? "report"}.xlsx", bytes);
     }
 
     private async Task ExportCsv()
     {
         if (_queryData is null) return;
         var bytes = ExportService.ExportToCsv(BuildExportData(_queryData));
-        await JS.InvokeVoidAsync("downloadFile", $"{_reportName ?? "report"}.csv",
-            Convert.ToBase64String(bytes), "text/csv");
+        await JS.DownloadAsync($"{_reportName ?? "report"}.csv", bytes);
     }
 
     private async Task ExportPdf()
     {
         if (_queryData is null) return;
         var bytes = ExportService.ExportToPdf(BuildExportData(_queryData), _reportName ?? "Report");
-        await JS.InvokeVoidAsync("downloadFile", $"{_reportName ?? "report"}.pdf",
-            Convert.ToBase64String(bytes), "application/pdf");
+        await JS.DownloadAsync($"{_reportName ?? "report"}.pdf", bytes);
     }
 
     // Mirrors what the grid shows: drops columns hidden in the saved report so

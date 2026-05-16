@@ -24,6 +24,7 @@ public static class AdminSections
     public const string Promotion     = "promotion";
     public const string Theme         = "theme";
     public const string AppSettings   = "app_settings";
+    public const string ColumnWidths  = "column_widths";
 
     // Ordered as they appear in the Admin tab strip; the Roles tab editor
     // uses the same order so the checkbox grid mirrors the live UI.
@@ -40,6 +41,7 @@ public static class AdminSections
         (Promotion,     "Promotion"),
         (Theme,         "Theme"),
         (AppSettings,   "App Settings"),
+        (ColumnWidths,  "Column Widths"),
     };
 
     public static bool IsValid(string? key) =>

@@ -66,22 +66,11 @@
     // Routes every dismiss path through the unsaved-changes prompt so
     // an accidental Esc / backdrop click never silently throws away
     // the admin's selection. Save runs Apply; DontSave dismisses.
-    private async Task TryCancelAsync()
-    {
-        if (IsDirty)
-        {
-            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-            switch (choice)
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
             {
-                case UnsavedChangesResult.Save:
-                    if (_selected is not null) Apply();
-                    return;
-                case UnsavedChangesResult.Cancel:
-                    return; // stay
-                case UnsavedChangesResult.DontSave:
-                    break; // fall through to close
-            }
-        }
-        MudDialog?.Cancel();
-    }
+                if (_selected is not null) Apply();
+                return Task.CompletedTask;
+            });
 }

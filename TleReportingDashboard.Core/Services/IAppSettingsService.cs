@@ -14,4 +14,7 @@ public interface IAppSettingsService
 public static class AppSettingKeys
 {
     public const string WorkerDashboardUrl = "worker_dashboard_url";
+    // Single JSON blob storing ColumnWidthDefaults (per-data-type
+    // compact/wide min+max widths used by ReportGrid + DetailViewer).
+    public const string ColumnWidthDefaults = "column_width_defaults";
 }

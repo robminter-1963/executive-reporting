@@ -42,6 +42,16 @@ public sealed class FieldDefinition
     /// </summary>
     public List<string>? LookupIds { get; init; }
     public int? MaxLength { get; init; }
+    /// <summary>
+    /// Optional column min-width hint (px) applied in the report grid. When
+    /// set, the grid renders this column at least this wide regardless of
+    /// the MaxLength-derived auto-sizing. Useful for free-form text fields
+    /// like Notes that hold prose much longer than their declared MaxLength
+    /// would suggest — those reads end up cramped under the auto-size rule.
+    /// Null = no override; the grid's data-type + MaxLength heuristics
+    /// pick a default. Honored in ReportGrid.GetColumnWidths.
+    /// </summary>
+    public int? MinWidth { get; init; }
     public int? CodeSetId { get; init; }
     public Dictionary<string, int>? ValueSortOrder { get; init; }
     public string? RolesRequired { get; init; }

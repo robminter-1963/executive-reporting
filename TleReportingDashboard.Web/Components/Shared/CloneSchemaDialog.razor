@@ -75,22 +75,11 @@
     // Routes every dismiss path through the unsaved-changes prompt so
     // an accidental Esc / backdrop click never silently throws away
     // the source pick. Save runs Submit when valid; DontSave dismisses.
-    private async Task TryCancelAsync()
-    {
-        if (IsDirty)
-        {
-            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-            switch (choice)
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
             {
-                case UnsavedChangesResult.Save:
-                    if (CanSubmit()) Submit();
-                    return;
-                case UnsavedChangesResult.Cancel:
-                    return; // stay
-                case UnsavedChangesResult.DontSave:
-                    break; // fall through to close
-            }
-        }
-        MudDialog.Cancel();
-    }
+                if (CanSubmit()) Submit();
+                return Task.CompletedTask;
+            });
 }

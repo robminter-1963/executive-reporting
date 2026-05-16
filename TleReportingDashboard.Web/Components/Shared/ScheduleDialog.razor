@@ -543,27 +543,13 @@
     // through the unsaved-changes prompt so an accidental dismiss never
     // silently throws away the user's edits. Save runs the full
     // Save() handler; DontSave dismisses; Cancel keeps the dialog open.
-    private async Task TryCancelAsync()
-    {
-        if (!IsDirty)
-        {
-            MudDialog?.Cancel();
-            return;
-        }
-
-        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
-        {
-            case UnsavedChangesResult.Save:
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
+            {
                 if (IsValid) Save();
-                return;
-            case UnsavedChangesResult.Cancel:
-                return; // stay
-            case UnsavedChangesResult.DontSave:
-                MudDialog?.Cancel();
-                return;
-        }
-    }
+                return Task.CompletedTask;
+            });
 
     private void Save()
     {

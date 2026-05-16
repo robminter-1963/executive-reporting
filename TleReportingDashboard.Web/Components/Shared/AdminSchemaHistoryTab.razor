@@ -3,6 +3,7 @@
 @inject ICompanyConnectionAdminService ConnectionAdminSvc
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ILogger<AdminSchemaHistoryTab> Logger
 
 @* Admin-only view of EMPOWER.RPT_schema_config_history. One row per
    Schema Builder save, kept forever by default. This tab lets admins
@@ -174,11 +175,11 @@
         try
         {
             var companies = await CompanyRegistry.GetActiveAsync();
-            foreach (var c in companies)
-            {
-                var conns = await ConnectionAdminSvc.GetByCompanyAsync(c.Id);
+            // Parallel fetches — per-company round trips are independent.
+            var connsByCompany = await Task.WhenAll(
+                companies.Select(c => ConnectionAdminSvc.GetByCompanyAsync(c.Id)));
+            foreach (var conns in connsByCompany)
                 _allConnections.AddRange(conns.Where(cn => cn.IsActive));
-            }
         }
         catch (Exception ex)
         {
@@ -262,17 +263,14 @@
             cancelText: "Cancel");
         if (confirm != true) return;
 
-        try
+        var ids = _selected.ToList();
+        var (ok, deleted) = await Snackbar.RunAsync(Logger, "deleting schema history rows",
+            () => HistorySvc.DeleteAsync(ids));
+        if (ok)
         {
-            var ids = _selected.ToList();
-            var deleted = await HistorySvc.DeleteAsync(ids);
             _selected.Clear();
             await ReloadAsync();
             Snackbar.Add($"Deleted {deleted} history row{(deleted == 1 ? "" : "s")}.", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
         }
     }
 
@@ -295,16 +293,13 @@
             cancelText: "Cancel");
         if (confirm != true) return;
 
-        try
+        var (ok, deleted) = await Snackbar.RunAsync(Logger, "deleting schema history by date range",
+            () => HistorySvc.DeleteByDateRangeAsync(_filterConnectionId, from, to));
+        if (ok)
         {
-            var deleted = await HistorySvc.DeleteByDateRangeAsync(_filterConnectionId, from, to);
             _selected.Clear();
             await ReloadAsync();
             Snackbar.Add($"Deleted {deleted} history row{(deleted == 1 ? "" : "s")}.", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
         }
     }
 

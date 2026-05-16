@@ -6,12 +6,6 @@ namespace TleReportingDashboard.Web.Services;
 
 public sealed class ThemeService : IThemeService
 {
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        WriteIndented = false
-    };
-
     private readonly string _connStr;
     private readonly ILogger<ThemeService> _logger;
     // Per-scope cache. Key = company id (Guid.Empty == global). First read
@@ -46,7 +40,7 @@ public sealed class ThemeService : IThemeService
             }
             loaded ??= await LoadGlobalAsync(ct);
         }
-        catch (SqlException ex) when (ex.Number == 208)
+        catch (SqlException ex) when (ex.IsObjectMissing())
         {
             _logger.LogDebug(ex, "RPT_app_theme missing — using default theme.");
         }
@@ -75,7 +69,7 @@ public sealed class ThemeService : IThemeService
         cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
         var raw = await cmd.ExecuteScalarAsync(ct) as string;
         if (string.IsNullOrWhiteSpace(raw)) return null;
-        return JsonSerializer.Deserialize<AppTheme>(raw, JsonOpts);
+        return JsonSerializer.Deserialize<AppTheme>(raw, AppJson.Compact);
     }
 
     private async Task<AppTheme?> LoadGlobalAsync(CancellationToken ct)
@@ -86,18 +80,25 @@ public sealed class ThemeService : IThemeService
             "SELECT json FROM EMPOWER.RPT_app_theme WHERE id = 1;", conn);
         var raw = await cmd.ExecuteScalarAsync(ct) as string;
         if (string.IsNullOrWhiteSpace(raw)) return null;
-        return JsonSerializer.Deserialize<AppTheme>(raw, JsonOpts);
+        return JsonSerializer.Deserialize<AppTheme>(raw, AppJson.Compact);
     }
 
     public async Task SaveAsync(AppTheme theme, Guid? companyId, string? updatedBy, CancellationToken ct = default)
     {
         if (theme is null) throw new ArgumentNullException(nameof(theme));
 
-        var json = JsonSerializer.Serialize(theme, JsonOpts);
+        var json = JsonSerializer.Serialize(theme, AppJson.Compact);
 
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
-        if (companyId is Guid cid)
+        // Probe the company_id column — added by
+        // 2026-05-09_15-00_app_theme_per_company.sql. Pre-migration env
+        // gets the legacy "single global theme" behavior (per-company
+        // saves silently fold to the global row) so the editor doesn't
+        // throw "Invalid column name 'company_id'" mid-save. Process-
+        // cached after the first probe.
+        var hasCompanyId = await HasCompanyIdColumnAsync(conn, ct);
+        if (companyId is Guid cid && hasCompanyId)
         {
             // MERGE on company_id. The unique filtered index in the
             // migration enforces "at most one per-company row," so an
@@ -121,26 +122,62 @@ public sealed class ThemeService : IThemeService
             await cmd.ExecuteNonQueryAsync(ct);
             _cache[cid] = theme;
         }
+        else if (companyId is Guid cidFallback && !hasCompanyId)
+        {
+            // Pre-migration env: log so the admin sees why a per-company
+            // theme save quietly became a global update, and short-circuit
+            // to the global save path.
+            _logger.LogWarning(
+                "Per-company theme save (companyId={CompanyId}) folded into the global row — " +
+                "RPT_app_theme.company_id column missing. Apply " +
+                "2026-05-09_15-00_app_theme_per_company.sql to enable per-company themes.",
+                cidFallback);
+            await SaveGlobalAsync(conn, json, updatedBy, ct);
+            _cache[cidFallback] = theme;
+        }
         else
         {
             // Global update — preserves the legacy id=1 row that pre-migration
             // environments seeded.
-            await using var cmd = new SqlCommand(@"
-                MERGE INTO EMPOWER.RPT_app_theme AS t
-                USING (SELECT 1 AS id, @json AS json, @user AS updated_by) AS s
-                ON (t.id = s.id)
-                WHEN MATCHED THEN
-                    UPDATE SET json = s.json, updated_by = s.updated_by, updated_at = SYSUTCDATETIME()
-                WHEN NOT MATCHED THEN
-                    INSERT (id, json, updated_by) VALUES (s.id, s.json, s.updated_by);", conn);
-            cmd.Parameters.Add(new SqlParameter("@json", json));
-            cmd.Parameters.Add(new SqlParameter("@user", (object?)updatedBy ?? DBNull.Value));
-            await cmd.ExecuteNonQueryAsync(ct);
+            await SaveGlobalAsync(conn, json, updatedBy, ct);
             _cache[GlobalKey] = theme;
         }
 
         _logger.LogInformation("Theme saved by {User} (scope: {Scope}).",
             updatedBy ?? "unknown", companyId?.ToString() ?? "global");
+    }
+
+    // Extracted so both the explicit global-save branch and the
+    // per-company fallback (pre-migration env) can share the legacy
+    // single-row MERGE without duplicating the SQL.
+    private static async Task SaveGlobalAsync(SqlConnection conn, string json, string? updatedBy, CancellationToken ct)
+    {
+        await using var cmd = new SqlCommand(@"
+            MERGE INTO EMPOWER.RPT_app_theme AS t
+            USING (SELECT 1 AS id, @json AS json, @user AS updated_by) AS s
+            ON (t.id = s.id)
+            WHEN MATCHED THEN
+                UPDATE SET json = s.json, updated_by = s.updated_by, updated_at = SYSUTCDATETIME()
+            WHEN NOT MATCHED THEN
+                INSERT (id, json, updated_by) VALUES (s.id, s.json, s.updated_by);", conn);
+        cmd.Parameters.Add(new SqlParameter("@json", json));
+        cmd.Parameters.Add(new SqlParameter("@user", (object?)updatedBy ?? DBNull.Value));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    // Process-cached probe. Re-checked on next process start so an admin
+    // applying the migration restarts the app and gets per-company writes.
+    private static bool? _hasCompanyIdColumnCache;
+    private static async Task<bool> HasCompanyIdColumnAsync(SqlConnection conn, CancellationToken ct)
+    {
+        if (_hasCompanyIdColumnCache is bool cached) return cached;
+        await using var probe = new SqlCommand(
+            "SELECT CASE WHEN COL_LENGTH('EMPOWER.RPT_app_theme','company_id') IS NULL THEN 0 ELSE 1 END;",
+            conn);
+        var result = await probe.ExecuteScalarAsync(ct);
+        var has = result is int i && i == 1;
+        _hasCompanyIdColumnCache = has;
+        return has;
     }
 }
 

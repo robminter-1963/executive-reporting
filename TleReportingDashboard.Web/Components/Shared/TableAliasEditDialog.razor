@@ -458,26 +458,13 @@
     // the unsaved-changes prompt so an accidental close never silently throws
     // away pending edits. Save runs the standard Submit path (with its own
     // validation gate); DontSave dismisses without saving.
-    private async Task TryCancelAsync()
-    {
-        if (!IsDirty)
-        {
-            MudDialog.Cancel();
-            return;
-        }
-        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
-        {
-            case UnsavedChangesResult.Save:
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
+            {
                 if (CanSubmit()) Submit();
-                return;
-            case UnsavedChangesResult.Cancel:
-                return; // stay
-            case UnsavedChangesResult.DontSave:
-                MudDialog.Cancel();
-                return;
-        }
-    }
+                return Task.CompletedTask;
+            });
 
     // ── Role-scoped owner field editors ───────────────────────────────────
     // Each add/remove fires a callback so persistence happens without the

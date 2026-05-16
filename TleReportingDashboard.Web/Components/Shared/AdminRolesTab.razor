@@ -1,6 +1,7 @@
 @inject IRoleService RoleService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject ILogger<AdminRolesTab> Logger
 @using TleReportingDashboard.Web.Services
 @using Microsoft.Data.SqlClient
 @using MudBlazor
@@ -296,25 +297,19 @@
 
     private async Task AddRole()
     {
-        try
-        {
-            await RoleService.CreateAsync(
+        var (ok, _) = await Snackbar.RunAsync(Logger, "creating role",
+            () => RoleService.CreateAsync(
                 _newName.Trim(),
                 string.IsNullOrWhiteSpace(_newDescription) ? null : _newDescription.Trim(),
                 _newScope,
-                CurrentUserEmail);
+                CurrentUserEmail),
+            duplicateMessage: "A role with that name already exists.");
+        if (ok)
+        {
             _newName = _newDescription = string.Empty;
             _newScope = ScopeRules.All;
             await ReloadAsync();
             if (_addIndicator is not null) _ = _addIndicator.Flash("Added");
-        }
-        catch (SqlException ex) when (ex.Number is 2601 or 2627)
-        {
-            Snackbar.Add("A role with that name already exists.", Severity.Warning);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to add role: {ex.Message}", Severity.Error);
         }
     }
 
@@ -351,24 +346,17 @@
     private async Task SaveEdit()
     {
         if (_editingId is not Guid id) return;
-        try
+        if (await Snackbar.RunAsync(Logger, "saving role",
+                () => RoleService.UpdateAsync(id, _editName.Trim(),
+                    string.IsNullOrWhiteSpace(_editDescription) ? null : _editDescription.Trim(),
+                    _editScope,
+                    _editIsActive,
+                    _editAdminSections.ToList()),
+                successMessage: "Role updated.",
+                duplicateMessage: "That name is already taken by another role."))
         {
-            await RoleService.UpdateAsync(id, _editName.Trim(),
-                string.IsNullOrWhiteSpace(_editDescription) ? null : _editDescription.Trim(),
-                _editScope,
-                _editIsActive,
-                _editAdminSections.ToList());
             _editingId = null;
             await ReloadAsync();
-            Snackbar.Add("Role updated.", Severity.Success);
-        }
-        catch (SqlException ex) when (ex.Number is 2601 or 2627)
-        {
-            Snackbar.Add("That name is already taken by another role.", Severity.Warning);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
         }
     }
 
@@ -383,14 +371,10 @@
         });
         if (confirmed != true) return;
 
-        try
+        if (await Snackbar.RunAsync(Logger, "deleting role",
+                () => RoleService.DeleteAsync(r.Id)))
         {
-            await RoleService.DeleteAsync(r.Id);
             await ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to delete: {ex.Message}", Severity.Error);
         }
     }
 

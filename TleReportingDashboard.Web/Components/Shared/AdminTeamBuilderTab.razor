@@ -7,9 +7,8 @@
 @using TleReportingDashboard.Web.Models
 @using TleReportingDashboard.Web.Services
 
-@* Scoped scroll matching the other admin tabs. *@
-<MudStack Spacing="3" Class="pa-2"
-          Style="max-height: calc(100vh - 196px); overflow-y: auto;">
+@* Scroll is owned by Admin.razor's bounded outer MudStack. *@
+<MudStack Spacing="3" Class="pa-2">
     <MudText Typo="Typo.body2" Color="Color.Secondary">
         Configure how teams are read from each connection. Teams are fetched live from the source database — no copy is stored in the reporting dashboard — so changes in the LOS show up immediately. Three pieces per connection: a <strong>Teams SQL</strong> that returns the team list, a <strong>Members SQL</strong> that returns team-member rows used by the team-scope filter at query time, and a <strong>team type → owner column</strong> map that tells the query pipeline which column on the primary table each team type filters against.
     </MudText>

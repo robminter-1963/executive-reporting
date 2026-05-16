@@ -46,24 +46,13 @@
     // Routes every dismiss path (Cancel button, Esc key) through the
     // unsaved-changes prompt so an accidental Esc never silently throws
     // away a typed-in value. Save runs the OK path; DontSave dismisses.
-    private async Task TryCancelAsync()
-    {
-        if (IsDirty)
-        {
-            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-            switch (choice)
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
             {
-                case UnsavedChangesResult.Save:
-                    if (!string.IsNullOrWhiteSpace(_value)) Ok();
-                    return;
-                case UnsavedChangesResult.Cancel:
-                    return; // stay
-                case UnsavedChangesResult.DontSave:
-                    break; // fall through to close
-            }
-        }
-        MudDialog?.Cancel();
-    }
+                if (!string.IsNullOrWhiteSpace(_value)) Ok();
+                return Task.CompletedTask;
+            });
 
     private async Task OnKeyDown(KeyboardEventArgs e)
     {

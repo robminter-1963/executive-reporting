@@ -34,7 +34,7 @@ public class AppSettingsService : IAppSettingsService
                     var result = await cmd.ExecuteScalarAsync();
                     return result is DBNull or null ? null : (string)result;
                 }
-                catch (SqlException ex) when (ex.Number == 208) // Invalid object name
+                catch (SqlException ex) when (ex.IsObjectMissing()) // Invalid object name
                 {
                     // Migration not applied on this DB yet — return null so
                     // callers fall through to "unset" behavior.

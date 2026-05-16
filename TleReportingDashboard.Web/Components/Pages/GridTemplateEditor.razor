@@ -11,8 +11,7 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
-@inject IDialogService DialogService
-@inject IJSRuntime JS
+@inject ILogger<GridTemplateEditor> Logger
 
 <PageTitle>@(_isNew ? "New Grid Template" : _template.Name) - Executive Reporting Suite</PageTitle>
 
@@ -64,8 +63,10 @@
     return;
 }
 
-<MudMainContent Style="padding: 16px; height: calc(100vh - 64px); overflow-y: auto;">
-    <div style="max-width: 900px; margin: 0 auto;">
+<UnsavedChangesGuard @ref="_guard" ComputeSnapshot="ComputeDirtySnapshot" SaveAsync="HandleSaveForGuard" />
+
+<MudMainContent Style="padding: 0; margin-left: 15px; margin-right: 15px; height: calc(100vh - 64px); overflow-y: auto;">
+    <div>
     <MudStack Spacing="3">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
             <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
@@ -333,10 +334,11 @@
 
     private IDisposable? _editorScope;
 
-    // ── Unsaved-changes guard ──
-    private string _dirtySnapshot = string.Empty;
-    private bool _beforeUnloadArmed;
-    private IDisposable? _navHandlerRegistration;
+    // Non-rendering guard handles in-app nav prompts, beforeunload, and
+    // disposable cleanup. We supply the snapshot builder and a save
+    // wrapper; everything else lives in the component.
+    private UnsavedChangesGuard? _guard;
+    private bool _initialBaselineSet;
 
     private string ComputeDirtySnapshot()
     {
@@ -360,38 +362,16 @@
         catch { return Guid.NewGuid().ToString(); }
     }
 
-    private void MarkClean() => _dirtySnapshot = ComputeDirtySnapshot();
+    private Task HandleSaveForGuard() => Save(navigateAfter: false);
 
-    private bool IsDirty =>
-        !string.Equals(_dirtySnapshot, ComputeDirtySnapshot(), StringComparison.Ordinal);
-
-    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
+    // @ref isn't wired until after the first render, so the load-time
+    // baseline is captured here rather than at the end of OnInitializedAsync.
+    protected override void OnAfterRender(bool firstRender)
     {
-        if (!IsDirty) return;
-        var choice = await TleReportingDashboard.Web.Components.Shared.UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
+        if (!_initialBaselineSet && _guard is not null && !_accessDenied)
         {
-            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.Save:
-                await Save(navigateAfter: false);
-                if (IsDirty) context.PreventNavigation();
-                break;
-            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.DontSave:
-                MarkClean();
-                break;
-            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.Cancel:
-                context.PreventNavigation();
-                break;
-        }
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        var armNow = IsDirty;
-        if (armNow != _beforeUnloadArmed)
-        {
-            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
-            catch { }
-            _beforeUnloadArmed = armNow;
+            _guard.MarkClean();
+            _initialBaselineSet = true;
         }
     }
 
@@ -414,13 +394,15 @@
 
         // Load connections across every active company so templates can be
         // authored against any company's connection — the hardcoded "TLE
-        // only" load was silently hiding other companies' options.
+        // only" load was silently hiding other companies' options. Per-
+        // company fetches are independent; parallelize them so cold load
+        // doesn't pay N × per-call latency.
         _availableConnections = new();
-        foreach (var comp in await CompanyRegistry.GetActiveAsync())
-        {
-            var conns = await ConnectionAdminSvc.GetByCompanyAsync(comp.Id);
+        var companies = await CompanyRegistry.GetActiveAsync();
+        var connsByCompany = await Task.WhenAll(
+            companies.Select(c => ConnectionAdminSvc.GetByCompanyAsync(c.Id)));
+        foreach (var conns in connsByCompany)
             _availableConnections.AddRange(conns);
-        }
 
         if (TemplateId.HasValue)
         {
@@ -474,9 +456,6 @@
             _template.ConnectionId = defaultConn?.Id;
             _domains = await SchemaService.GetDomainGroupsAsync(connectionId: _template.ConnectionId);
         }
-
-        _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
-        MarkClean();
     }
 
     private async Task OnConnectionChanged(Guid? newId)
@@ -660,21 +639,16 @@
         }
         _template.ColumnState = state.Count > 0 ? System.Text.Json.JsonSerializer.Serialize(state) : null;
 
-        try
+        if (await Snackbar.RunAsync(Logger, "saving grid template", async () =>
+            {
+                if (_isNew) await TemplateService.SaveTemplateAsync(_template);
+                else        await TemplateService.UpdateTemplateAsync(_template);
+            }))
         {
-            if (_isNew)
-                await TemplateService.SaveTemplateAsync(_template);
-            else
-                await TemplateService.UpdateTemplateAsync(_template);
-
-            MarkClean();
+            _guard?.MarkClean();
             // Skipped when invoked from the unsaved-changes prompt's
             // Save branch — the originating navigation will resume.
             if (navigateAfter) Navigation.NavigateTo("/grid-templates");
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
         }
     }
 
@@ -682,13 +656,5 @@
     {
         _editorScope?.Dispose();
         _editorScope = null;
-        _navHandlerRegistration?.Dispose();
-        _navHandlerRegistration = null;
-        if (_beforeUnloadArmed)
-        {
-            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
-            catch { }
-            _beforeUnloadArmed = false;
-        }
     }
 }

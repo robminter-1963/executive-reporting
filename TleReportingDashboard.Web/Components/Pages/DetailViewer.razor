@@ -18,6 +18,7 @@
 @inject IJSRuntime JS
 @inject IConfiguration Config
 @inject ICompanyRegistry CompanyRegistry
+@inject IColumnWidthDefaultsService ColumnWidthDefaultsSvc
 @inject ILogger<DetailViewer> Logger
 
 <PageTitle>@_title - Executive Reporting Suite</PageTitle>
@@ -37,6 +38,15 @@
             width: 100%;
             border-collapse: collapse;
             font-size: 0.78rem;
+        }
+        /* No-wrap on every cell regardless of min-width. Long values
+           expand the column to fit (table-layout: auto), pushing the
+           overall table width up — the grouped-detail-wrap div's
+           overflow: auto kicks in a horizontal scrollbar past the
+           viewport. Min-width still sets the floor on header cells. */
+        .grouped-detail-table th,
+        .grouped-detail-table td {
+            white-space: nowrap;
         }
         .grouped-detail-table thead th {
             position: sticky;
@@ -100,7 +110,7 @@
     </style>
 </HeadContent>
 
-<MudMainContent Style="padding: 0;">
+<MudMainContent Style="padding: 0; margin-left: 15px;">
     @* Drill-down detail loads can be expensive (no pagination on the
        grouped output), so the elapsed timer matters here even more
        than on the report list. QueryProgress upgrades to a slow-query
@@ -216,14 +226,31 @@
                    group-footer rows. Footer shows row count and sum of
                    every currency column. Export path is unchanged and
                    strips group rows because they aren't in QueryResponse. *@
+                // Compute once per render. GetVisibleColumns() allocates
+                // a HashSet + Dictionary and walks _detailData.Columns —
+                // calling it from every cell template was the hot path
+                // (10 groups × 200 rows × 20 cols ≈ 4,000 calls per
+                // render). Hoisting to a local makes a grouped-view
+                // first-paint go from seconds to milliseconds.
+                var visibleCols = GetVisibleColumns();
+                var visibleColCount = visibleCols.Count;
                 <div class="grouped-detail-wrap"
                      style="max-height: calc(100vh - 210px); overflow: auto; border: 1px solid #DADCE0; border-radius: 4px;">
                     <table class="grouped-detail-table">
                         <thead>
                             <tr>
-                                @foreach (var col in GetVisibleColumns())
+                                @foreach (var col in visibleCols)
                                 {
-                                    <th class="@(IsNumericColumn(col) ? "num" : "")">@col.Label</th>
+                                    @* Effective min-width = max(explicit FieldDefinition.MinWidth,
+                                       type-based wide-mode floor). The grouped-detail-table is
+                                       table-layout: auto, so a min-width on a single header cell
+                                       propagates down the whole column. Mirrors the wide-mode
+                                       defaults in ReportGrid.TypeBasedWidths so the two viewer
+                                       paths size non-text columns identically (currency, date,
+                                       datetime, integer, etc.). *@
+                                    var minW = EffectiveMinWidth(col);
+                                    <th class="@(IsNumericColumn(col) ? "num" : "")"
+                                        style="@(minW > 0 ? $"min-width: {minW}px;" : "")">@col.Label</th>
                                 }
                             </tr>
                         </thead>
@@ -231,12 +258,12 @@
                             @foreach (var group in BuildGroups())
                             {
                                 <tr class="group-header">
-                                    <td colspan="@GetVisibleColumns().Count">@FormatGroupLabel(group)</td>
+                                    <td colspan="@visibleColCount">@FormatGroupLabel(group)</td>
                                 </tr>
                                 @foreach (var row in group.Rows)
                                 {
                                     <tr class="detail-row">
-                                        @foreach (var col in GetVisibleColumns())
+                                        @foreach (var col in visibleCols)
                                         {
                                             <td class="@(IsNumericColumn(col) ? "num" : "")">
                                                 @FormatCell(row, col)
@@ -245,8 +272,7 @@
                                     </tr>
                                 }
                                 <tr class="group-footer">
-                                    @{ var visibleCols = GetVisibleColumns(); }
-                                    @for (var ci = 0; ci < visibleCols.Count; ci++)
+                                    @for (var ci = 0; ci < visibleColCount; ci++)
                                     {
                                         var col = visibleCols[ci];
                                         if (ci == 0)
@@ -268,13 +294,12 @@
                         <tfoot>
                             @{
                                 var grand = ComputeGrandTotals();
-                                var grandVisibleCols = GetVisibleColumns();
                                 var totalRows = _detailData?.Rows.Count ?? 0;
                             }
                             <tr class="grand-total">
-                                @for (var ci = 0; ci < grandVisibleCols.Count; ci++)
+                                @for (var ci = 0; ci < visibleColCount; ci++)
                                 {
-                                    var col = grandVisibleCols[ci];
+                                    var col = visibleCols[ci];
                                     if (ci == 0)
                                     {
                                         <td>TOTAL &mdash; @totalRows Record(s)</td>
@@ -296,6 +321,7 @@
             else
             {
                 <ReportGrid Data="_detailData"
+                            HonorFieldMinWidth="true"
                             InitialColumnWidths="_columnWidths"
                             InitialColumnOrder="_columnOrder"
                             InitialHiddenColumns="_hiddenColumns"
@@ -405,6 +431,12 @@
         _isLoading = true;
         try
         {
+            // Load admin-configurable column-width defaults so EffectiveMinWidth
+            // can consult them on every cell render without a per-row DB hit.
+            // Non-fatal if it fails — Seed() is used as fallback.
+            try { _columnWidthDefaults = await ColumnWidthDefaultsSvc.GetAsync(); }
+            catch (Exception ex) { Logger.LogWarning(ex, "Loading column-width defaults failed; using seed."); }
+
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
             _userId = authState.User.FindFirst("oid")?.Value
                       ?? authState.User.Identity?.Name
@@ -524,7 +556,7 @@
 
                     // Get group-by label from dashboard config
                     _dashConfig = System.Text.Json.JsonSerializer.Deserialize<DashboardView.DashboardConfig>(
-                        report.ColumnState, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        report.ColumnState, AppJson.Compact);
                     if (_dashConfig is not null && !string.IsNullOrEmpty(_dashConfig.GroupByFieldId))
                     {
                         var fields = await SchemaService.GetFieldConfigsAsync(_connectionId);
@@ -864,6 +896,25 @@
     private bool IsCurrencyColumn(ColumnMeta c) =>
         string.Equals(c.DataType, "currency", StringComparison.OrdinalIgnoreCase);
 
+    // Cached admin-configurable column-width defaults. Loaded once in
+    // OnInitializedAsync; EffectiveMinWidth consults this snapshot.
+    // Null briefly during first render — Seed() is used as fallback.
+    private ColumnWidthDefaults? _columnWidthDefaults;
+
+    // Effective column min-width for the grouped-detail-table header.
+    // Field-level MinWidth is authoritative when set — it replaces the
+    // type default outright (including the case where the override is
+    // smaller). Falls back to the admin-configured WideMin from
+    // ColumnWidthDefaults only when the field has no explicit MinWidth.
+    // A field MinWidth of 0 is an explicit "no minimum" signal — different
+    // from null (unset) and respected.
+    private int EffectiveMinWidth(ColumnMeta col)
+    {
+        var defaults = _columnWidthDefaults ?? ColumnWidthDefaults.Seed();
+        var entry = defaults.Resolve(col.DataType);
+        return col.MinWidth ?? entry.WideMin;
+    }
+
     // Right-align any numeric column, not just currency. Mirrors
     // ReportGrid.IsNumeric so the Builder's table preview and the detail
     // grid agree on alignment for int/decimal/percent fields. Currency
@@ -1112,17 +1163,14 @@
         if (_detailData is null) return;
         var name = _title ?? "Detail";
         var bytes = ExportService.ExportToExcel(BuildExportData(_detailData), name);
-        await JS.InvokeVoidAsync("downloadFile", BuildDetailExportFileName("xlsx"),
-            Convert.ToBase64String(bytes),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        await JS.DownloadAsync(BuildDetailExportFileName("xlsx"), bytes);
     }
 
     private async Task ExportCsv()
     {
         if (_detailData is null) return;
         var bytes = ExportService.ExportToCsv(BuildExportData(_detailData));
-        await JS.InvokeVoidAsync("downloadFile", BuildDetailExportFileName("csv"),
-            Convert.ToBase64String(bytes), "text/csv");
+        await JS.DownloadAsync(BuildDetailExportFileName("csv"), bytes);
     }
 
     private async Task ExportPdf()
@@ -1130,8 +1178,7 @@
         if (_detailData is null) return;
         var name = _title ?? "Detail";
         var bytes = ExportService.ExportToPdf(BuildExportData(_detailData), name);
-        await JS.InvokeVoidAsync("downloadFile", BuildDetailExportFileName("pdf"),
-            Convert.ToBase64String(bytes), "application/pdf");
+        await JS.DownloadAsync(BuildDetailExportFileName("pdf"), bytes);
     }
 
     // Filename = "{Company} - {Title}-Detail.{ext}". Company prefix is

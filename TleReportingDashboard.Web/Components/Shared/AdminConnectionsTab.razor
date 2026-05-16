@@ -2,18 +2,16 @@
 @inject ICompanyRegistry CompanyRegistry
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject ILogger<AdminConnectionsTab> Logger
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.Data.SqlClient
 @using MudBlazor
 
-@* Scoped scroll on the tab body. The editor stacks a long form (SQL
-   Server + Postgres + certs) that used to clip because no ancestor
-   provides a scroll region — MudTabs' panel doesn't scroll by default,
-   and MudMainContent's default overflow is visible. max-height subtracts
-   the app bar (64px), the Admin page header row (~60px), the tab bar
-   (~50px), and a buffer. *@
-<MudStack Spacing="3" Class="pa-2"
-          Style="max-height: calc(100vh - 196px); overflow-y: auto;">
+@* Scroll is provided by the parent Admin.razor's bounded MudStack
+   (height: calc(100vh - 64px); overflow-y: auto). Don't add a
+   per-tab overflow here — it creates a second scrollbar inside
+   the parent's. *@
+<MudStack Spacing="3" Class="pa-2">
     <MudText Typo="Typo.body2" Color="Color.Secondary">
         Each company can have one or more named data-source connections. Exactly one per company is the default; the <code>ICompanyConnectionResolver</code> picks that row unless a caller asks for a specific name.
     </MudText>
@@ -461,38 +459,28 @@
         };
         var dialog = await DialogService.ShowAsync<CopyConnectionsDialog>(
             "Copy connections from another company", dialogParams,
-            new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false, MaxWidth = MaxWidth.Small, FullWidth = true });
+            DialogPresets.Locked(MaxWidth.Small));
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not CopyConnectionsDialog.Result picked)
             return;
 
-        try
-        {
-            var copied = await ConnectionSvc.CopyConnectionsAsync(picked.SourceConnectionIds, targetId, picked.NamePrefix);
-            if (copied == 0)
-            {
-                Snackbar.Add("Nothing was copied — the selected ids didn't resolve to source rows.", Severity.Warning);
-            }
-            else
-            {
-                Snackbar.Add($"Copied {copied} connection(s).", Severity.Success);
-            }
-            // Reload the target's list so the new rows appear.
-            _connections = await ConnectionSvc.GetByCompanyAsync(targetId);
-        }
-        catch (SqlException sqlEx) when (sqlEx.Number == 2601 || sqlEx.Number == 2627)
-        {
-            // Unique-index violation — name prefix didn't make the copies unique.
-            // Tells the admin to pick a different prefix (or delete the prior batch).
-            Snackbar.Add(
+        var (ok, copied) = await Snackbar.RunAsync(Logger, "copying connections",
+            () => ConnectionSvc.CopyConnectionsAsync(picked.SourceConnectionIds, targetId, picked.NamePrefix),
+            duplicateMessage:
                 "Copy failed: a connection with one of the prefixed names already exists on this company. " +
-                "Pick a different prefix or remove the prior copies first.",
-                Severity.Error);
-        }
-        catch (Exception ex)
+                "Pick a different prefix or remove the prior copies first.");
+        if (!ok) return;
+
+        if (copied == 0)
         {
-            Snackbar.Add($"Copy failed: {ex.Message}", Severity.Error);
+            Snackbar.Add("Nothing was copied — the selected ids didn't resolve to source rows.", Severity.Warning);
         }
+        else
+        {
+            Snackbar.Add($"Copied {copied} connection(s).", Severity.Success);
+        }
+        // Reload the target's list so the new rows appear.
+        _connections = await ConnectionSvc.GetByCompanyAsync(targetId);
     }
 
     private void StartEdit(CompanyConnectionRecord r)
@@ -578,38 +566,28 @@
     private async Task SaveEdit()
     {
         if (_form is null) return;
-        try
+        var form = _form;
+        if (await Snackbar.RunAsync(Logger, "saving connection",
+                async () =>
+                {
+                    if (form.Id == Guid.Empty) await ConnectionSvc.CreateAsync(form);
+                    else                       await ConnectionSvc.UpdateAsync(form);
+                },
+                duplicateMessage: "A connection with that name already exists for this company."))
         {
-            if (_form.Id == Guid.Empty)
-                await ConnectionSvc.CreateAsync(_form);
-            else
-                await ConnectionSvc.UpdateAsync(_form);
-
             _editing = false;
             _form = null;
             await ReloadConnectionsAsync();
             if (_saveIndicator is not null) _ = _saveIndicator.Flash("Saved");
         }
-        catch (SqlException ex) when (ex.Number is 2601 or 2627)
-        {
-            Snackbar.Add("A connection with that name already exists for this company.", Severity.Warning);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
-        }
     }
 
     private async Task MakeDefault(CompanyConnectionRecord r)
     {
-        try
+        if (await Snackbar.RunAsync(Logger, "setting default connection",
+                () => ConnectionSvc.SetDefaultAsync(r.CompanyId, r.Id)))
         {
-            await ConnectionSvc.SetDefaultAsync(r.CompanyId, r.Id);
             await ReloadConnectionsAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
         }
     }
 
@@ -624,21 +602,18 @@
         });
         if (confirmed != true) return;
 
-        try
+        if (await Snackbar.RunAsync(Logger, "deleting connection",
+                () => ConnectionSvc.DeleteAsync(r.Id)))
         {
-            await ConnectionSvc.DeleteAsync(r.Id);
             await ReloadConnectionsAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
         }
     }
 
     private async Task OnCertUploaded(IBrowserFile? file, CertKind kind)
     {
         if (file is null || _form is null) return;
-        try
+        var form = _form;
+        await Snackbar.RunAsync(Logger, "uploading certificate", async () =>
         {
             await using var stream = file.OpenReadStream(MaxCertBytes);
             using var ms = new MemoryStream();
@@ -646,15 +621,11 @@
             var bytes = ms.ToArray();
             switch (kind)
             {
-                case CertKind.Root:   _form.PgRootCertificate = bytes; break;
-                case CertKind.Client: _form.PgSslCertificate = bytes; break;
-                case CertKind.Key:    _form.PgSslKey = bytes; break;
+                case CertKind.Root:   form.PgRootCertificate = bytes; break;
+                case CertKind.Client: form.PgSslCertificate = bytes; break;
+                case CertKind.Key:    form.PgSslKey = bytes; break;
             }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Upload failed: {ex.Message}", Severity.Error);
-        }
+        });
     }
 
     private static string DescribeTarget(CompanyConnectionRecord r) => r.ConnectionType switch

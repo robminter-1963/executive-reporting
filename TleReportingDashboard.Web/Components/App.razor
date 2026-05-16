@@ -9,6 +9,11 @@
         var baseHref = string.IsNullOrEmpty(pathBase) ? "/" : $"{pathBase.TrimEnd('/')}/";
     }
     <base href="@baseHref" />
+    @* Inter via Google Fonts. preconnect hints cut ~100ms off the first font request;
+       weight subset (400/500/600/700) covers body / button / heading without bloating. *@
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
     <link rel="stylesheet" href="app.css" />
     <link rel="stylesheet" href="css/print.css" media="print" />

@@ -142,6 +142,12 @@ try
     builder.Services.AddScoped<SchemaBuilderService>();
     builder.Services.AddScoped<ILibrarySectionService, LibrarySectionService>();
     builder.Services.AddScoped<IAppSettingsService, AppSettingsService>();
+    // Scoped to match IAppSettingsService's lifetime — same circuit, same
+    // instance, so ReportGrid + DetailViewer + AdminColumnWidthsTab share
+    // one deserialized copy. Cross-circuit caching happens in the
+    // underlying ConfigDbCache (singleton) so the JSON read isn't repeated
+    // per circuit either.
+    builder.Services.AddScoped<IColumnWidthDefaultsService, ColumnWidthDefaultsService>();
 
     // Per-company data-source connection resolver — reads RPT_company_connections
     // to materialize the ADO.NET connection string for the requested company.

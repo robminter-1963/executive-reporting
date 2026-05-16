@@ -1,0 +1,125 @@
+@implements IDisposable
+@inject NavigationManager Navigation
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+
+@* Non-rendering component that owns the page-level unsaved-changes
+   plumbing every edit page used to reimplement: _dirtySnapshot,
+   _navHandlerRegistration, OnLocationChangingAsync (with the Save /
+   DontSave / Cancel switch), the JS-side `setBeforeUnloadGuard`
+   arm/disarm in OnAfterRenderAsync, and the Dispose cleanup.
+
+   Usage in a parent page:
+
+       <UnsavedChangesGuard @ref="_guard"
+                            ComputeSnapshot="ComputeDirtySnapshot"
+                            SaveAsync="HandleSaveAsync" />
+
+       protected override async Task OnInitializedAsync()
+       {
+           ... load data ...
+           _guard?.MarkClean();  // baseline after load
+       }
+
+       private async Task HandleSaveAsync()
+       {
+           ... save logic ...
+           _guard?.MarkClean();  // baseline after save
+       }
+
+   The parent's only responsibilities are (a) supplying the snapshot
+   builder, (b) supplying the save handler, (c) calling MarkClean()
+   when the state is known-clean (after load and after a successful
+   save). Everything else lives here. *@
+
+@code {
+    // Returns the page's current state serialized to a comparable
+    // string. The component memoizes the "clean" snapshot from the
+    // most recent MarkClean() call and considers the page dirty when
+    // the live snapshot diverges.
+    [Parameter, EditorRequired] public Func<string> ComputeSnapshot { get; set; } = default!;
+
+    // The page's save path. Invoked when the user picks "Save" from
+    // the unsaved-changes prompt (either via the in-app nav handler
+    // or — if you wire it — the page's own Save button). Should call
+    // MarkClean() after a successful save; otherwise the next nav
+    // attempt re-prompts because IsDirty stays true.
+    [Parameter, EditorRequired] public Func<Task> SaveAsync { get; set; } = default!;
+
+    // Snapshot of the state at the most recent "clean" point. Empty
+    // until the parent calls MarkClean() — IsDirty stays false during
+    // that window because both sides are empty, which is the desired
+    // "nothing to lose" semantic.
+    private string _dirtySnapshot = string.Empty;
+    private bool _beforeUnloadArmed;
+    private IDisposable? _navHandlerRegistration;
+
+    public bool IsDirty => !string.Equals(_dirtySnapshot, ComputeSnapshot(), StringComparison.Ordinal);
+
+    // Reset the baseline. Call after load (state is the saved state)
+    // and after every successful save (state is the just-saved state).
+    public void MarkClean() => _dirtySnapshot = ComputeSnapshot();
+
+    protected override void OnInitialized()
+    {
+        // Register the in-app navigation guard once. The handler reads
+        // IsDirty live, so a parent calling MarkClean() AFTER init is
+        // fine — the next nav attempt sees the cleared state.
+        _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
+    }
+
+    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
+    {
+        if (!IsDirty) return;
+        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
+        switch (choice)
+        {
+            case UnsavedChangesResult.Save:
+                await SaveAsync();
+                // If the save left state still dirty (validation
+                // failed, snackbar shown), block the navigation so
+                // the user can fix and retry rather than silently
+                // leaving with unsaved work.
+                if (IsDirty) context.PreventNavigation();
+                break;
+            case UnsavedChangesResult.DontSave:
+                // Pretend the page is clean from now on so the JS-side
+                // beforeunload guard (if armed) doesn't double-prompt
+                // on the imminent unload.
+                MarkClean();
+                break;
+            case UnsavedChangesResult.Cancel:
+                context.PreventNavigation();
+                break;
+        }
+    }
+
+    // Mirrors the dirty state to the browser-side beforeunload handler
+    // so closing the tab / typing a new URL / hitting refresh prompts
+    // too. Only invoke when the armed-state actually changed; otherwise
+    // every parent re-render would burn a JS interop call on a no-op.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var armNow = IsDirty;
+        if (armNow != _beforeUnloadArmed)
+        {
+            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
+            catch { /* circuit tearing down — drop silently */ }
+            _beforeUnloadArmed = armNow;
+        }
+    }
+
+    public void Dispose()
+    {
+        _navHandlerRegistration?.Dispose();
+        _navHandlerRegistration = null;
+        // Fire-and-forget — the circuit is going away and there's no
+        // one to await us. JS-side stop is idempotent.
+        if (_beforeUnloadArmed)
+        {
+            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
+            catch { }
+            _beforeUnloadArmed = false;
+        }
+    }
+}

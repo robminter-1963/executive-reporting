@@ -25,11 +25,6 @@ namespace TleReportingDashboard.Web.Services;
 // only knobs that are a pure function of the SavedReport row.
 public static class QueryRequestFactory
 {
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
     // Build a QueryRequest with every saved-report knob applied.
     // Callers can mutate the returned instance to layer per-surface
     // bits on top — page size, scoping, fallback sort columns, etc.
@@ -179,7 +174,7 @@ public static class QueryRequestFactory
 
     private static T? TryDeserialize<T>(string json)
     {
-        try { return JsonSerializer.Deserialize<T>(json, JsonOpts); }
+        try { return JsonSerializer.Deserialize<T>(json, AppJson.Compact); }
         catch { return default; }
     }
 

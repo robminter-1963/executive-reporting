@@ -22,6 +22,7 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
+@inject ILogger<ReportLibrary> Logger
 @using TleReportingDashboard.Web.Services
 
 <PageTitle>Report Library - Executive Reporting Suite</PageTitle>
@@ -40,7 +41,7 @@
 <HeadContent>
     <style>
         html, body { overflow-y: hidden !important; }
-        .rl-page    { display: flex; flex-direction: column; height: calc(100vh - 64px); }
+        .rl-page    { display: flex; flex-direction: column; height: calc(100vh - 64px); margin-left: 15px; }
         .rl-grow    { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
         /* Override MudTabs internals so the active panel fills the
            available column space. MudTabs nests several wrappers; each
@@ -181,7 +182,7 @@
     <MudTabs ActivePanelIndex="_activeTabIndex"
              ActivePanelIndexChanged="OnTabChanged"
              Elevation="0" Rounded ApplyEffectsToContainer
-             Class="pa-4">
+             Class="pa-2">
 
         @* ── Tab 1: My Reports ──
            Authoring tab — hidden for viewer-only users. They never own
@@ -1296,13 +1297,15 @@
             }
 
             // Load connections across every active company so we can render
-            // each report's connection name AND bucket it by company. One
-            // call per company — small fan-out (companies are a handful).
+            // each report's connection name AND bucket it by company. Per-
+            // company fetches are independent — parallelize so cold Library
+            // load doesn't pay N × per-call latency on multi-company tenants.
             _connectionNamesById = new();
             _connectionCompanyById = new();
-            foreach (var c in _companies)
+            var connsByCompany = await Task.WhenAll(
+                _companies.Select(c => ConnectionAdminSvc.GetByCompanyAsync(c.Id)));
+            foreach (var conns in connsByCompany)
             {
-                var conns = await ConnectionAdminSvc.GetByCompanyAsync(c.Id);
                 foreach (var conn in conns)
                 {
                     _connectionNamesById[conn.Id] = conn.Name;
@@ -1643,8 +1646,7 @@
             { x => x.Label, "Section name" }
         };
         var dlg = await DialogService.ShowAsync<RenameDialog>("Create Library Section", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true,
-                                BackdropClick = false, CloseOnEscapeKey = false });
+            DialogPresets.Locked(MaxWidth.ExtraSmall));
         var result = await dlg.Result;
         if (result is null || result.Canceled || result.Data is not string name) return;
         name = name.Trim();
@@ -1675,36 +1677,29 @@
 
     private async Task CloneReport(SavedReport source)
     {
-        try
+        var cloned = new SavedReport
         {
-            var cloned = new SavedReport
-            {
-                Id = Guid.NewGuid(),
-                Name = $"{source.Name} (Copy)",
-                InternalName = source.InternalName,
-                Category = source.Category,
-                LibrarySectionId = source.LibrarySectionId,
-                OwnerId = _userId,
-                OwnerEmail = _userEmail,
-                FieldIds = source.FieldIds,
-                Filters = source.Filters,
-                Aggregations = source.Aggregations,
-                ColumnState = source.ColumnState,
-                GridTemplateId = source.GridTemplateId,
-                ConnectionId = source.ConnectionId,
-                PrimaryTable = source.PrimaryTable,
-                LastRunAt = null,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            var saved = await ReportService.SaveReportAsync(cloned);
-            _myReports.Add(saved);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Clone failed: {ex.Message}", Severity.Error);
-        }
+            Id = Guid.NewGuid(),
+            Name = $"{source.Name} (Copy)",
+            InternalName = source.InternalName,
+            Category = source.Category,
+            LibrarySectionId = source.LibrarySectionId,
+            OwnerId = _userId,
+            OwnerEmail = _userEmail,
+            FieldIds = source.FieldIds,
+            Filters = source.Filters,
+            Aggregations = source.Aggregations,
+            ColumnState = source.ColumnState,
+            GridTemplateId = source.GridTemplateId,
+            ConnectionId = source.ConnectionId,
+            PrimaryTable = source.PrimaryTable,
+            LastRunAt = null,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+        var (ok, saved) = await Snackbar.RunAsync(Logger, "cloning report",
+            () => ReportService.SaveReportAsync(cloned));
+        if (ok && saved is not null) _myReports.Add(saved);
     }
 
     // ── Share dialog ──
@@ -1717,14 +1712,7 @@
             { x => x.ReportName, report.Name },
             { x => x.CurrentUserId, _userId }
         };
-        var options = new DialogOptions
-        {
-            MaxWidth = MaxWidth.Small,
-            FullWidth = true,
-            BackdropClick = false,
-            CloseOnEscapeKey = false
-        };
-        await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, options);
+        await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, DialogPresets.Locked(MaxWidth.Small));
     }
 
     // ── Delete confirmation ──
@@ -1746,30 +1734,21 @@
 
         if (result == true)
         {
-            try
+            if (!ownedByMe && !_isAdmin)
             {
-                if (ownedByMe)
-                {
-                    await ReportService.DeleteReportAsync(report.Id, _userId);
-                }
-                else if (_isAdmin)
-                {
-                    // Cleanup path for departed users — bypasses the
-                    // owner_id filter. Gated to global admins only;
-                    // limited-access roles never see the Delete button
-                    // for other users' reports.
-                    await ReportService.DeleteReportAsAdminAsync(report.Id);
-                }
-                else
-                {
-                    Snackbar.Add("You can only delete reports you own.", Severity.Warning);
-                    return;
-                }
-                _myReports.RemoveAll(r => r.Id == report.Id);
+                Snackbar.Add("You can only delete reports you own.", Severity.Warning);
+                return;
             }
-            catch (Exception ex)
+            if (await Snackbar.RunAsync(Logger, "deleting report",
+                    () => ownedByMe
+                        ? ReportService.DeleteReportAsync(report.Id, _userId)
+                        // Cleanup path for departed users — bypasses the
+                        // owner_id filter. Gated to global admins only;
+                        // limited-access roles never see the Delete button
+                        // for other users' reports.
+                        : ReportService.DeleteReportAsAdminAsync(report.Id)))
             {
-                Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+                _myReports.RemoveAll(r => r.Id == report.Id);
             }
         }
     }

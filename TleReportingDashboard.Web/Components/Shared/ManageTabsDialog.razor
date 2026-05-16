@@ -1,0 +1,147 @@
+@inject IMasterDashboardService MasterService
+@inject ILogger<ManageTabsDialog> Logger
+@inject ISnackbar Snackbar
+@using TleReportingDashboard.Web.Models
+
+@* Admin-curated per-user dashboard tab visibility.
+   Admin / System Support pick a user, then toggle which tabs the selected
+   user sees. Hidden state lives in RPT_user_hidden_dashboard_tabs (PK on
+   user_id + tab_id). Tabs themselves stay shared at the company level.
+   Each switch flip persists immediately; the dialog returns `true` on
+   close if anything changed so the parent can re-sync its own hidden set
+   (in case the admin edited their own row). *@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+            Pick a user, then toggle which dashboard tabs they see in this
+            company. Hiding a tab affects only the selected user's view —
+            the canonical layout stays shared.
+        </MudText>
+
+        <MudSelect T="UserOption" Value="_selectedUser" ValueChanged="OnUserChangedAsync"
+                   Label="User" Variant="Variant.Outlined" Margin="Margin.Dense"
+                   ToStringFunc="@(u => u is null ? "" : u.Label)"
+                   Class="mb-4">
+            @foreach (var u in Users)
+            {
+                <MudSelectItem T="UserOption" Value="@u">@u.Label</MudSelectItem>
+            }
+        </MudSelect>
+
+        @if (_loading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+        else if (_selectedUser is null)
+        {
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="padding: 16px 0;">
+                Select a user above to view their tab visibility.
+            </MudText>
+        }
+        else
+        {
+            <MudStack Spacing="0">
+                @foreach (var tab in Tabs)
+                {
+                    var t = tab;
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween"
+                              Style="padding: 6px 4px; border-bottom: 1px solid #E2E8F0;">
+                        <MudText>@t.Label</MudText>
+                        <MudSwitch T="bool" Value="@(!_hidden.Contains(t.Id))"
+                                   ValueChanged="@(async (bool v) => await ToggleAsync(t.Id, !v))"
+                                   Color="Color.Primary" />
+                    </MudStack>
+                }
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close" Color="Color.Primary" Variant="Variant.Filled">Done</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public List<MasterDashboardTab> Tabs { get; set; } = new();
+    [Parameter] public List<UserOption> Users { get; set; } = new();
+    [Parameter] public Guid CompanyId { get; set; }
+    // Initial selection: typically the signed-in admin so the dialog opens
+    // ready-to-use on their own view. Caller can pass any user from Users.
+    [Parameter] public UserOption? InitialUser { get; set; }
+    // Tracks whether anything changed so the parent knows to re-sync its
+    // own hidden set on close (the admin may have edited their own row).
+    private bool _dirty;
+
+    private UserOption? _selectedUser;
+    private HashSet<int> _hidden = new();
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _selectedUser = InitialUser;
+        if (_selectedUser is not null)
+            await LoadHiddenAsync(_selectedUser.UserId);
+    }
+
+    private async Task OnUserChangedAsync(UserOption? next)
+    {
+        _selectedUser = next;
+        _hidden = new();
+        if (next is null) return;
+        await LoadHiddenAsync(next.UserId);
+    }
+
+    // Pulls the selected user's hidden-tab set from the DB so the switches
+    // render the right state. Failures degrade to an empty set + a
+    // snackbar so the admin can still see the tab list (and any toggle
+    // saved against an unknown initial state will be the new authoritative
+    // state — that's acceptable here).
+    private async Task LoadHiddenAsync(string userId)
+    {
+        _loading = true;
+        try
+        {
+            _hidden = await MasterService.GetHiddenTabIdsAsync(userId, CompanyId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Loading hidden tabs failed for {UserId}", userId);
+            Snackbar.Add("Couldn't load this user's hidden tabs. Toggles will still save.", Severity.Warning);
+            _hidden = new();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // Saves the new state for the SELECTED user (not the signed-in admin)
+    // and updates the local set so the switch reflects the new value.
+    // Failures revert the local state to match the DB.
+    private async Task ToggleAsync(int tabId, bool hidden)
+    {
+        if (_selectedUser is null) return;
+        if (hidden) _hidden.Add(tabId); else _hidden.Remove(tabId);
+        try
+        {
+            await MasterService.SetTabHiddenAsync(_selectedUser.UserId, tabId, hidden);
+            _dirty = true;
+        }
+        catch (Exception ex)
+        {
+            if (hidden) _hidden.Remove(tabId); else _hidden.Add(tabId);
+            Logger.LogWarning(ex, "Saving tab visibility failed for user {UserId} tab {TabId}", _selectedUser.UserId, tabId);
+            Snackbar.Add("Couldn't save that change. Please try again.", Severity.Error);
+        }
+    }
+
+    private void Close() => MudDialog?.Close(DialogResult.Ok(_dirty));
+
+    // Lightweight option row for the user picker. Carries the canonical
+    // user_id (Entra OID or anonymous fallback — same key the service
+    // uses for RPT_user_hidden_dashboard_tabs.user_id) plus a display
+    // label so callers can render whatever they like (typically Name +
+    // Email). Kept as a record so equality works correctly in MudSelect's
+    // ValueChanged comparisons.
+    public sealed record UserOption(string UserId, string Label);
+}

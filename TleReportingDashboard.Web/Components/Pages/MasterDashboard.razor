@@ -28,6 +28,8 @@
 
 <PageTitle>@(_initialized ? $"{_dashboardTitle} - Executive Reporting Suite" : "Executive Reporting Suite")</PageTitle>
 
+<UnsavedChangesGuard @ref="_guard" ComputeSnapshot="ComputeDirtySnapshot" SaveAsync="HandleSaveForGuard" />
+
 @if (!_initialized)
 {
     <MudMainContent Style="padding: 16px;">
@@ -41,7 +43,7 @@
     return;
 }
 
-<MudMainContent Style="padding: 16px 16px 32px 16px; overflow-x: hidden; overflow-y: auto; height: calc(100vh - 64px);">
+<MudMainContent Style="padding: 0; margin-left: 15px; overflow-x: hidden; overflow-y: auto; height: calc(100vh - 64px);">
     <MudStack Spacing="3">
         @* ── Header ── *@
         <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
@@ -128,6 +130,19 @@
                                StartIcon="@Icons.Material.Filled.LibraryBooks"
                                OnClick="@(() => Navigation.NavigateTo("/reports"))">
                         @(_userRoleForCompany == UserRoles.Viewer ? "Shared Reports" : "Report Library")
+                    </MudButton>
+                }
+                @* Per-user tab visibility manager. Gated to Admin / System Support
+                   roles only — those users can curate any user's hidden-tab list
+                   inside the dialog. Non-admins see the canonical tab strip and
+                   have no UI to mutate visibility. Hidden in edit mode because
+                   admins always see the full canonical layout while editing. *@
+                @if (_canManageTabs && !_editMode && _tabs.Any())
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Visibility"
+                               OnClick="OpenManageTabsDialogAsync">
+                        Manage Tabs@(_hiddenTabIds.Count > 0 ? $" ({_hiddenTabIds.Count} hidden)" : "")
                     </MudButton>
                 }
                 @* Edit is admin-only — the shared dashboard is the company's
@@ -228,15 +243,15 @@
         }
 
         @* ── Tabs ── *@
-        @if (_tabs.Any())
+        @if (VisibleTabs.Any())
         {
             <MudTabs ActivePanelIndex="_activeTabIndex" ActivePanelIndexChanged="OnTabChanged"
                      Elevation="0" Rounded ApplyEffectsToContainer
                      Class="dashboard-tabs">
-                @foreach (var tab in _tabs)
+                @foreach (var tab in VisibleTabs)
                 {
                     var t = tab;
-                    var tIdx = _tabs.IndexOf(t);
+                    var tIdx = VisibleTabs.IndexOf(t);
                     <MudTabPanel>
                         <TabContent>
                             @* Tab header doubles as a drop target for two
@@ -682,6 +697,29 @@
                 }
             </MudTabs>
         }
+        else if (!_loading && _tabs.Any())
+        {
+            @* Tabs exist for this company but every one of them is hidden
+               for this user. Admin / System Support get a CTA back to the
+               dialog so they can restore visibility. Everyone else sees a
+               read-only message pointing at their admin — tab visibility
+               is managed for them, not by them. *@
+            @if (_canManageTabs)
+            {
+                <EmptyState Icon="@Icons.Material.Filled.VisibilityOff"
+                            Heading="All tabs are hidden in your view"
+                            Body="@($"Every dashboard tab for this company ({_hiddenTabIds.Count} total) is currently hidden. Use Manage Tabs to restore visibility.")"
+                            CtaLabel="Manage Tabs"
+                            CtaIcon="@Icons.Material.Filled.Visibility"
+                            OnCtaClick="OpenManageTabsDialogAsync" />
+            }
+            else
+            {
+                <EmptyState Icon="@Icons.Material.Filled.VisibilityOff"
+                            Heading="No tabs are visible to you"
+                            Body="An admin has hidden every dashboard tab in your view. Contact your administrator if you need access restored." />
+            }
+        }
         else if (!_loading)
         {
             @* Empty-state copy + CTA depends on whether the user can
@@ -905,6 +943,15 @@
     private string? _logoMimeType;
     private string? _logoDataUri;
     private List<MasterDashboardTab> _tabs = new();
+    // Per-user view filter — tab IDs this user has hidden from their own
+    // view of the (shared, company-wide) dashboard. Loaded once per mount.
+    // Bypassed entirely in edit mode so admins always see the canonical layout.
+    private HashSet<int> _hiddenTabIds = new();
+    // Gates the "Tabs" button + the Manage Tabs dialog. True for global
+    // admins, per-company Admins, and users whose job-function role is
+    // "System Support". Anyone else sees the full canonical tab set and
+    // has no UI to mutate visibility (their own or others').
+    private bool _canManageTabs;
     private int _activeTabIndex;
     private List<MasterDashboardTile> _tiles = new();
     private List<MasterDashboardTile> _pendingRemovals = new();
@@ -961,22 +1008,23 @@
     private const int IdleRefreshThresholdMs = 5 * 60 * 1000;
     private bool _idleWatcherStarted;
 
-    // Snapshot of the edit-mode-relevant state at the most recent "clean"
-    // point — when the user enters edit mode and after each successful
-    // SaveLayout. Compared against the live state on navigation; mismatch
-    // = dirty = prompt. Only consulted while _editMode is true (viewing
-    // the dashboard never trips the guard). Serialized JSON rather than
-    // a structural compare so we don't hand-enumerate every nested field.
-    private string _dirtySnapshot = string.Empty;
-    // Tracks the last-sent value of the JS-side beforeunload guard so we
-    // don't thrash JS interop on every render.
-    private bool _beforeUnloadArmed;
-    // Disposable returned by RegisterLocationChangingHandler. Released
-    // on Dispose so the handler doesn't leak across navigations.
-    private IDisposable? _navHandlerRegistration;
+    // Non-rendering guard handles in-app nav prompts, beforeunload, and
+    // disposable cleanup. We supply the snapshot builder and a save
+    // wrapper; everything else lives in the component.
+    //
+    // The dashboard is a viewing surface most of the time — only edit
+    // mode mutates dashboard state. So ComputeDirtySnapshot returns ""
+    // when !_editMode, which keeps the component's IsDirty false (both
+    // sides equal "") and short-circuits the prompt for passive viewers.
+    private UnsavedChangesGuard? _guard;
 
     private string ComputeDirtySnapshot()
     {
+        // Viewing mode is never dirty — the empty string keeps the
+        // guard's IsDirty false (it compares against its stored
+        // baseline, which also starts as "").
+        if (!_editMode) return string.Empty;
+
         // Capture every edit-mode-mutable field. The active-tab edits
         // live in _tiles / _sections / _pendingRemovals; the per-tab
         // caches hold edits to tabs the user navigated away from while
@@ -1022,44 +1070,7 @@
         }
     }
 
-    // Reset the baseline — call when entering edit mode and after a
-    // successful save so the current state becomes the new "clean" ref.
-    private void MarkClean() => _dirtySnapshot = ComputeDirtySnapshot();
-
-    // Only dirty when actively editing. The dashboard is a viewing
-    // surface most of the time, and a passive viewer should never see
-    // the unsaved-changes prompt.
-    private bool IsDirty => _editMode
-        && !string.Equals(_dirtySnapshot, ComputeDirtySnapshot(), StringComparison.Ordinal);
-
-    // Intercepts in-app navigation. The Blazor handler is awaited
-    // before navigation actually proceeds, so we can prompt and call
-    // PreventNavigation if the user picks Cancel. Save runs SaveLayout;
-    // DontSave just lets nav proceed.
-    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
-    {
-        if (!IsDirty) return;
-        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
-        {
-            case UnsavedChangesResult.Save:
-                await SaveLayout();
-                // SaveLayout sets the new baseline; if it failed (snackbar
-                // shown by SaveLayout), state is still dirty. Block the
-                // navigation so the user can fix and retry rather than
-                // silently leaving with unsaved layout edits.
-                if (IsDirty) context.PreventNavigation();
-                break;
-            case UnsavedChangesResult.DontSave:
-                // Disarm guards so the imminent unload doesn't double-prompt
-                // (LocationChanging then beforeunload).
-                MarkClean();
-                break;
-            case UnsavedChangesResult.Cancel:
-                context.PreventNavigation();
-                break;
-        }
-    }
+    private Task HandleSaveForGuard() => SaveLayout();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -1110,18 +1121,6 @@
             }
             catch { /* JS not ready on very first render — next render will catch up */ }
         }
-
-        // Sync the JS-side beforeunload guard with the live dirty state
-        // every render, but only invoke when it actually changed — saves
-        // a JS-interop call per re-render of a clean page. IsDirty is
-        // already gated on _editMode, so non-edit-mode renders are no-ops.
-        var armNow = IsDirty;
-        if (armNow != _beforeUnloadArmed)
-        {
-            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
-            catch { /* circuit may be tearing down — drop silently */ }
-            _beforeUnloadArmed = armNow;
-        }
     }
 
     [JSInvokable]
@@ -1166,17 +1165,6 @@
             // Fire-and-forget; the circuit may already be torn down in
             // which case the JS call no-ops harmlessly.
             _ = JS.InvokeVoidAsync("stopIdleWatcher").AsTask().ContinueWith(_ => { });
-        }
-        _navHandlerRegistration?.Dispose();
-        _navHandlerRegistration = null;
-        // Clear the JS-side guard so the next page mount doesn't
-        // inherit a stale "armed" state. Fire-and-forget — the
-        // circuit is tearing down and there's no one to await us.
-        if (_beforeUnloadArmed)
-        {
-            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
-            catch { }
-            _beforeUnloadArmed = false;
         }
         _dotNetRef?.Dispose();
     }
@@ -1260,6 +1248,30 @@
             }
             if (grant is not null && !string.IsNullOrWhiteSpace(grant.CompanyEmail))
                 activeEmail = grant.CompanyEmail;
+
+            // Resolve "can this user manage tab visibility?" — admins (global
+            // or per-company) always can; System Support is granted the same
+            // privilege so they can curate other users' tab views as part of
+            // troubleshooting. Other admin-section roles (e.g. report curators)
+            // are intentionally excluded — tab visibility isn't part of their
+            // bag. Cached lookup; cheap.
+            if (_userRoleForCompany == UserRoles.Admin)
+            {
+                _canManageTabs = true;
+            }
+            else if (!string.IsNullOrEmpty(_userEmail))
+            {
+                try
+                {
+                    var userRec = await UserManagement.GetByEmailAsync(_userEmail);
+                    _canManageTabs = string.Equals(userRec?.RoleName, RoleRecord.SystemSupportName, StringComparison.OrdinalIgnoreCase);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Resolving System Support role failed for {Email} — tab management gated off", _userEmail);
+                    _canManageTabs = false;
+                }
+            }
 
             // Resolve "does this user have any reports shared with
             // them right now?" — gates the Shared Reports header
@@ -1354,14 +1366,11 @@
         await LoadTabs();
         await LoadFavoritesAsync();
 
-        // Register the in-app navigation guard once init is past the
-        // bulk of state setup, so an early bail-out above doesn't leak
-        // a registered handler. Snapshot baseline AFTER the load so the
-        // dashboard's own data isn't read as "dirty." IsDirty is also
-        // gated on _editMode, so the baseline only matters once the
-        // user enters edit mode (where MarkClean is called again).
-        _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
-        MarkClean();
+        // No initial MarkClean needed — ComputeDirtySnapshot returns ""
+        // when !_editMode, matching the guard's empty baseline, so the
+        // viewer-mode dashboard is never reported dirty. The MarkClean
+        // calls in ToggleEditMode() establish the baseline when the
+        // user actually enters edit mode.
         _initialized = true;
     }
 
@@ -1439,9 +1448,18 @@
         try
         {
             _tabs = await MasterService.GetTabsAsync(_companyId);
+            // Per-user hidden-tab filter. Loaded alongside the shared tabs so
+            // the first render can already filter; admins flipping into edit
+            // mode bypass the filter at render time without a reload.
+            _hiddenTabIds = await MasterService.GetHiddenTabIdsAsync(_userId, _companyId);
             if (_tabs.Any())
             {
-                _activeTabIndex = 0;
+                // Active-tab index is computed against the VISIBLE list so the
+                // initial selection doesn't land on a hidden tab. Falls back to
+                // the first tab overall if every tab is hidden (the empty-view
+                // case — user sees a "no visible tabs" hint with a way back).
+                var firstVisible = _tabs.FindIndex(t => !_hiddenTabIds.Contains(t.Id));
+                _activeTabIndex = firstVisible >= 0 ? firstVisible : 0;
                 await LoadTilesForActiveTab();
             }
         }
@@ -1644,7 +1662,7 @@
             try
             {
                 config = System.Text.Json.JsonSerializer.Deserialize<DashboardView.DashboardConfig>(
-                    report.ColumnState, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    report.ColumnState, AppJson.Compact);
                 using var doc = System.Text.Json.JsonDocument.Parse(report.ColumnState);
                 if (doc.RootElement.TryGetProperty("HiddenColumns", out var hcEl))
                     reportHiddenColumns = System.Text.Json.JsonSerializer.Deserialize<List<string>>(hcEl.GetRawText());
@@ -1808,16 +1826,12 @@
     private async Task RemoveTab(MasterDashboardTab tab)
     {
         if (_tabs.Count <= 1) return;
-        try
+        if (await Snackbar.RunAsync(Logger, "removing dashboard tab",
+                () => MasterService.RemoveTabAsync(tab.Id, _userEmail)))
         {
-            await MasterService.RemoveTabAsync(tab.Id, _userEmail);
             _tabs.Remove(tab);
             _activeTabIndex = Math.Min(_activeTabIndex, _tabs.Count - 1);
             await LoadTilesForActiveTab();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to remove tab: {ex.Message}", Severity.Error);
         }
     }
 
@@ -1878,18 +1892,15 @@
         }
         var label = await JS.InvokeAsync<string>("prompt", "Enter a name for the section:", $"Section {_sections.Count + 1}");
         if (string.IsNullOrWhiteSpace(label)) return;
-        try
+        var (ok, section) = await Snackbar.RunAsync(Logger, "creating section",
+            () => MasterService.AddSectionAsync(tab.Id, label.Trim(), _userEmail));
+        if (ok && section is not null)
         {
-            var section = await MasterService.AddSectionAsync(tab.Id, label.Trim(), _userEmail);
             _sections.Add(section);
             // Auto-switch the section-tab strip onto the new section so the
             // admin can immediately drop tiles into it / rename / etc.
             _activeSectionId = section.Id;
             StateHasChanged();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to add section: {ex.Message}", Severity.Error);
         }
     }
 
@@ -1917,26 +1928,22 @@
     {
         var newName = await JS.InvokeAsync<string>("prompt", "Enter a new name for this section:", section.Label);
         if (string.IsNullOrWhiteSpace(newName) || newName.Trim() == section.Label) return;
-        try
+        if (await Snackbar.RunAsync(Logger, "renaming section",
+                () => MasterService.RenameSectionAsync(section.Id, newName.Trim(), _userEmail)))
         {
-            await MasterService.RenameSectionAsync(section.Id, newName.Trim(), _userEmail);
             section.Label = newName.Trim();
             StateHasChanged();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to rename section: {ex.Message}", Severity.Error);
         }
     }
 
     private async Task RemoveSection(MasterDashboardSection section)
     {
-        var ok = await JS.InvokeAsync<bool>("confirm",
+        var confirmed = await JS.InvokeAsync<bool>("confirm",
             $"Remove section \"{section.Label}\"? Tiles in this section will move to the \"(no section)\" group.");
-        if (!ok) return;
-        try
+        if (!confirmed) return;
+        if (await Snackbar.RunAsync(Logger, "removing section",
+                () => MasterService.RemoveSectionAsync(section.Id, _userEmail)))
         {
-            await MasterService.RemoveSectionAsync(section.Id, _userEmail);
             _sections.Remove(section);
             // Server cleared section_id on every tile that referenced this
             // section. Mirror that locally so the next render groups them
@@ -1952,10 +1959,6 @@
                 _activeSectionId = _sections.Count > 0 ? _sections[0].Id : 0;
             }
             StateHasChanged();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to remove section: {ex.Message}", Severity.Error);
         }
     }
 
@@ -2007,14 +2010,10 @@
         for (var i = 0; i < _sections.Count; i++) _sections[i].SortOrder = i;
         _sectionDragSource = -1;
         _headerDropTargetIdx = -1;
-        try
+        if (await Snackbar.RunAsync(Logger, "saving section order",
+                () => MasterService.UpdateSectionOrderAsync(_sections, _userEmail)))
         {
-            await MasterService.UpdateSectionOrderAsync(_sections, _userEmail);
             StateHasChanged();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to save section order: {ex.Message}", Severity.Error);
         }
     }
 
@@ -2062,13 +2061,7 @@
             { "Sections", _sections }
         };
         var dialog = await DialogService.ShowAsync<AddTileDialog>("Add Report to Dashboard", parameters,
-            new DialogOptions
-            {
-                MaxWidth = MaxWidth.Small,
-                FullWidth = true,
-                BackdropClick = false,
-                CloseOnEscapeKey = false
-            });
+            DialogPresets.Locked(MaxWidth.Small));
 
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not AddTileDialog.AddTileResult tileResult) return;
@@ -2110,8 +2103,19 @@
             _chartVisibleTiles.Add(tileId);
     }
 
+    // Visible tabs respects the per-user hidden-tab filter in view mode and
+    // bypasses it entirely in edit mode (admin needs the full canonical
+    // layout to manage it). Computed each render — cheap; _tabs is short.
+    private List<MasterDashboardTab> VisibleTabs =>
+        _editMode ? _tabs : _tabs.Where(t => !_hiddenTabIds.Contains(t.Id)).ToList();
+
     private async Task ToggleEditMode()
     {
+        // Capture the currently-active tab id BEFORE the visible list changes
+        // size (toggling edit mode swaps the filter in/out), so we can find it
+        // again in the post-toggle list and keep the user on the same tab.
+        var activeTabId = VisibleTabs.ElementAtOrDefault(_activeTabIndex)?.Id;
+
         if (_editMode)
         {
             // Leaving edit mode discards unsaved per-tab edits — drop the snapshots
@@ -2123,18 +2127,114 @@
             if (hadDirtyState)
                 await LoadTilesForActiveTab();
             _editMode = false;
-            // Discarding edits returns the page to a clean (viewing) state
-            // — IsDirty would short-circuit on _editMode anyway, but keep
-            // the snapshot in sync for clarity / consistency.
-            MarkClean();
+            // Discarding edits returns the page to a clean (viewing) state.
+            // ComputeDirtySnapshot returns "" when !_editMode, so the
+            // guard short-circuits to !IsDirty regardless — but call
+            // MarkClean to re-baseline explicitly for clarity.
+            _guard?.MarkClean();
         }
         else
         {
             _editMode = true;
             // Baseline matches the current state at the moment editing
             // begins — anything mutated from here is "dirty."
-            MarkClean();
+            _guard?.MarkClean();
         }
+
+        // Re-anchor the active index against the new visible list. If the
+        // previously-active tab isn't in the new list (e.g. they were on a
+        // hidden tab somehow), fall back to the first visible tab.
+        if (activeTabId.HasValue)
+        {
+            var newIdx = VisibleTabs.FindIndex(t => t.Id == activeTabId.Value);
+            _activeTabIndex = newIdx >= 0 ? newIdx : 0;
+        }
+    }
+
+    // Opens the admin-curated "manage tabs" dialog. Loads the company's
+    // user list just-in-time (not on every dashboard mount; admins rarely
+    // open this) and pre-selects the signed-in admin so the dialog opens
+    // ready-to-use on their own view. When the dialog closes, re-pulls
+    // THIS user's hidden set (the admin may have edited their own row)
+    // and re-anchors the active tab if its visibility changed.
+    private async Task OpenManageTabsDialogAsync()
+    {
+        List<ManageTabsDialog.UserOption> users;
+        try
+        {
+            // All users in the directory, filtered to those with access to
+            // the active company plus global admins (who have implicit
+            // access). Sort by display name + email for predictable picker
+            // order. ~one round-trip per user is acceptable here — admins
+            // open this rarely and the directory is small at this scale.
+            var allUsers = await UserManagement.GetAllAsync();
+            var pairs = new List<(UserRecord User, bool HasAccess)>();
+            foreach (var u in allUsers)
+            {
+                if (u.IsAdmin)
+                {
+                    pairs.Add((u, true));
+                    continue;
+                }
+                try
+                {
+                    var access = await UserManagement.GetCompanyAccessAsync(u.Email);
+                    pairs.Add((u, access.Any(a => a.CompanyId == _companyId)));
+                }
+                catch { pairs.Add((u, false)); }
+            }
+            users = pairs
+                .Where(p => p.HasAccess)
+                .Select(p => new ManageTabsDialog.UserOption(
+                    UserId: !string.IsNullOrEmpty(p.User.UserId) ? p.User.UserId : p.User.Email,
+                    Label: string.IsNullOrWhiteSpace(p.User.DisplayName)
+                        ? p.User.Email
+                        : $"{p.User.DisplayName} ({p.User.Email})"))
+                .OrderBy(o => o.Label, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Loading user list for Manage Tabs dialog failed");
+            Snackbar.Add("Couldn't load the user list. Try again or check the connection to ConfigDb.", Severity.Error);
+            return;
+        }
+
+        // Pre-select the signed-in admin so the dialog opens on their own
+        // view. Falls back to the first user in the list if the admin
+        // isn't in it (e.g. global admin without a RPT_users row).
+        var initial = users.FirstOrDefault(u => string.Equals(u.UserId, _userId, StringComparison.OrdinalIgnoreCase))
+                      ?? users.FirstOrDefault();
+
+        var parameters = new DialogParameters
+        {
+            ["Tabs"] = _tabs,
+            ["Users"] = users,
+            ["CompanyId"] = _companyId,
+            ["InitialUser"] = initial
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<ManageTabsDialog>("Manage Tabs", parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not true) return;
+
+        // Capture the active tab id BEFORE we replace the hidden set so we
+        // can land back on the same tab if it's still visible.
+        var activeTabId = VisibleTabs.ElementAtOrDefault(_activeTabIndex)?.Id;
+        try
+        {
+            _hiddenTabIds = await MasterService.GetHiddenTabIdsAsync(_userId, _companyId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Reloading hidden tabs after Manage Tabs dialog failed");
+        }
+        if (activeTabId.HasValue)
+        {
+            var newIdx = VisibleTabs.FindIndex(t => t.Id == activeTabId.Value);
+            _activeTabIndex = newIdx >= 0 ? newIdx : 0;
+        }
+        StateHasChanged();
     }
 
     private void RemoveTile(MasterDashboardTile tile)
@@ -2198,7 +2298,7 @@
             // re-prompt over the just-saved state. The user remains
             // in edit mode after Save Layout, so this only takes
             // effect for subsequent edits.
-            MarkClean();
+            _guard?.MarkClean();
         }
         catch (Exception ex)
         {
@@ -2208,7 +2308,7 @@
 
     private async Task OnLogoUploaded(IBrowserFile file)
     {
-        try
+        await Snackbar.RunAsync(Logger, "uploading logo", async () =>
         {
             using var stream = file.OpenReadStream(maxAllowedSize: 2 * 1024 * 1024); // 2MB max
             using var ms = new MemoryStream();
@@ -2216,11 +2316,7 @@
             _logoBytes = ms.ToArray();
             _logoMimeType = file.ContentType;
             _logoDataUri = BuildLogoDataUri();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to upload logo: {ex.Message}", Severity.Error);
-        }
+        });
     }
 
     private void RemoveLogo()
@@ -2251,9 +2347,9 @@
     private async Task MoveTileToSection(MasterDashboardTile tile, int? sectionId)
     {
         if (tile.SectionId == sectionId) return;
-        try
+        if (await Snackbar.RunAsync(Logger, "moving tile",
+                () => MasterService.MoveTileToSectionAsync(tile.Id, sectionId, _userEmail)))
         {
-            await MasterService.MoveTileToSectionAsync(tile.Id, sectionId, _userEmail);
             tile.SectionId = sectionId;
             // Follow the tile to its new home so the admin sees the move
             // confirmed visually. Without this auto-switch the tile would
@@ -2262,10 +2358,6 @@
             // bug even when it's working correctly.
             _activeSectionId = sectionId ?? 0;
             StateHasChanged();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to move tile: {ex.Message}", Severity.Error);
         }
     }
 
@@ -2385,14 +2477,10 @@
             if (newActive >= 0) _activeTabIndex = newActive;
         }
 
-        try
+        if (await Snackbar.RunAsync(Logger, "saving tab order",
+                () => MasterService.UpdateTabOrderAsync(_tabs, _userEmail)))
         {
-            await MasterService.UpdateTabOrderAsync(_tabs, _userEmail);
             StateHasChanged();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to save tab order: {ex.Message}", Severity.Error);
         }
     }
 
@@ -2413,18 +2501,14 @@
         if (targetTabId == activeId) return;
 
         var tile = _tiles[sourceIdx];
-        try
+        var targetLabel = _tabs.FirstOrDefault(x => x.Id == targetTabId)?.Label ?? "another tab";
+        if (await Snackbar.RunAsync(Logger, "moving tile across tabs",
+                () => MasterService.MoveTileToTabAsync(tile.Id, targetTabId, _userEmail),
+                successMessage: $"Moved \"{tile.ReportName}\" to {targetLabel}."))
         {
-            await MasterService.MoveTileToTabAsync(tile.Id, targetTabId, _userEmail);
             _tiles.RemoveAt(sourceIdx);
             _tileData.Remove(tile.ReportId);
             _tileLoadedAtUtc.Remove(tile.ReportId);
-            var targetLabel = _tabs.FirstOrDefault(x => x.Id == targetTabId)?.Label ?? "another tab";
-            Snackbar.Add($"Moved \"{tile.ReportName}\" to {targetLabel}.", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to move tile: {ex.Message}", Severity.Error);
         }
     }
 
@@ -2441,10 +2525,7 @@
         var data = BuildTileExportData(td);
         var name = tile.ReportName ?? "Report";
         var bytes = ExportService.ExportToExcel(data, name);
-        await JS.InvokeVoidAsync("downloadFile",
-            BuildTileExportFileName(tile, "xlsx"),
-            Convert.ToBase64String(bytes),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        await JS.DownloadAsync(BuildTileExportFileName(tile, "xlsx"), bytes);
     }
 
     private async Task ExportTileDetailCsv(MasterDashboardTile tile)
@@ -2452,10 +2533,7 @@
         if (!_tileData.TryGetValue(tile.ReportId, out var td)) return;
         var data = BuildTileExportData(td);
         var bytes = ExportService.ExportToCsv(data);
-        await JS.InvokeVoidAsync("downloadFile",
-            BuildTileExportFileName(tile, "csv"),
-            Convert.ToBase64String(bytes),
-            "text/csv");
+        await JS.DownloadAsync(BuildTileExportFileName(tile, "csv"), bytes);
     }
 
     private async Task ExportTileDetailPdf(MasterDashboardTile tile)
@@ -2464,10 +2542,7 @@
         var data = BuildTileExportData(td);
         var name = tile.ReportName ?? "Report";
         var bytes = ExportService.ExportToPdf(data, name);
-        await JS.InvokeVoidAsync("downloadFile",
-            BuildTileExportFileName(tile, "pdf"),
-            Convert.ToBase64String(bytes),
-            "application/pdf");
+        await JS.DownloadAsync(BuildTileExportFileName(tile, "pdf"), bytes);
     }
 
     // Drops any columns the dashboard config marked hidden so the

@@ -413,14 +413,7 @@
             { x => x.CurrentHex, current },
             { x => x.Label, label }
         };
-        var options = new DialogOptions
-        {
-            BackdropClick = false,
-            CloseOnEscapeKey = false,
-            MaxWidth = MaxWidth.Small,
-            FullWidth = true
-        };
-        var dialog = await DialogService.ShowAsync<NamedColorPickerDialog>($"Pick — {label}", dialogParams, options);
+        var dialog = await DialogService.ShowAsync<NamedColorPickerDialog>($"Pick — {label}", dialogParams, DialogPresets.Locked(MaxWidth.Small));
         var result = await dialog.Result;
         if (result is null || result.Canceled) return;
         if (result.Data is string picked && !string.IsNullOrWhiteSpace(picked))
@@ -435,15 +428,12 @@
         _saving = true;
         try
         {
-            await ThemeSvc.SaveAsync(_theme, _selectedCompanyId, CurrentUserEmail);
             var scopeLabel = _selectedCompanyId is null
                 ? "Global theme"
                 : $"Theme for {CompanyToLabel(_selectedCompanyId)}";
-            Snackbar.Add($"{scopeLabel} saved. Refresh affected browsers to see the new palette.", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add(FriendlyError.FromException(ex, Logger, "saving theme"), Severity.Error);
+            await Snackbar.RunAsync(Logger, "saving theme",
+                () => ThemeSvc.SaveAsync(_theme, _selectedCompanyId, CurrentUserEmail),
+                successMessage: $"{scopeLabel} saved. Refresh affected browsers to see the new palette.");
         }
         finally
         {

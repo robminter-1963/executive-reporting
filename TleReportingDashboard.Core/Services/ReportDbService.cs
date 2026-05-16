@@ -312,17 +312,34 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         schedule.CreatedAt = DateTime.UtcNow;
 
         await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            @"INSERT INTO EMPOWER.RPT_report_schedules
-              (id, report_id, owner_id, owner_email, cron_expression, schedule_pattern, start_date, end_date,
-               subject, recipients, cc_recipients, bcc_recipients,
-               kind, team_id, team_connection_id, dist_email, team_fanout,
-               attachment_format, include_preview, is_active, created_at)
-              VALUES (@Id, @ReportId, @OwnerId, @OwnerEmail, @Cron, @Pattern, @StartDate, @EndDate,
-                      @Subject, @Recipients, @Cc, @Bcc,
-                      @Kind, @TeamId, @TeamConnId, @DistEmail, @TeamFanout,
-                      @Format, @Preview, @Active, @CreatedAt)", conn);
-        AddScheduleParams(cmd, schedule);
+        // Defensive write: include team_fanout only when the column
+        // exists. Lets editing/creating schedules keep working on a DB
+        // where 2026-05-09_17-00_schedule_team_fanout.sql hasn't been
+        // applied yet — the schedule falls through to the legacy Members
+        // fan-out (same default the migration uses). Process-cached so
+        // we don't probe per call.
+        var hasFanout = await HasTeamFanoutColumnAsync(conn);
+        var insertSql = hasFanout
+            ? @"INSERT INTO EMPOWER.RPT_report_schedules
+                (id, report_id, owner_id, owner_email, cron_expression, schedule_pattern, start_date, end_date,
+                 subject, recipients, cc_recipients, bcc_recipients,
+                 kind, team_id, team_connection_id, dist_email, team_fanout,
+                 attachment_format, include_preview, is_active, created_at)
+                VALUES (@Id, @ReportId, @OwnerId, @OwnerEmail, @Cron, @Pattern, @StartDate, @EndDate,
+                        @Subject, @Recipients, @Cc, @Bcc,
+                        @Kind, @TeamId, @TeamConnId, @DistEmail, @TeamFanout,
+                        @Format, @Preview, @Active, @CreatedAt)"
+            : @"INSERT INTO EMPOWER.RPT_report_schedules
+                (id, report_id, owner_id, owner_email, cron_expression, schedule_pattern, start_date, end_date,
+                 subject, recipients, cc_recipients, bcc_recipients,
+                 kind, team_id, team_connection_id, dist_email,
+                 attachment_format, include_preview, is_active, created_at)
+                VALUES (@Id, @ReportId, @OwnerId, @OwnerEmail, @Cron, @Pattern, @StartDate, @EndDate,
+                        @Subject, @Recipients, @Cc, @Bcc,
+                        @Kind, @TeamId, @TeamConnId, @DistEmail,
+                        @Format, @Preview, @Active, @CreatedAt)";
+        await using var cmd = new SqlCommand(insertSql, conn);
+        AddScheduleParams(cmd, schedule, includeTeamFanout: hasFanout);
         cmd.Parameters.Add(new SqlParameter("@CreatedAt", schedule.CreatedAt));
         await cmd.ExecuteNonQueryAsync();
         _cache.Invalidate("ReportDbService:Schedules:");
@@ -332,23 +349,56 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
     public async Task<ReportSchedule> UpdateScheduleAsync(ReportSchedule schedule)
     {
         await using var conn = await OpenConnectionAsync();
-        await using var cmd = new SqlCommand(
-            @"UPDATE EMPOWER.RPT_report_schedules SET
-              cron_expression = @Cron, schedule_pattern = @Pattern,
-              start_date = @StartDate, end_date = @EndDate,
-              subject = @Subject,
-              recipients = @Recipients, cc_recipients = @Cc, bcc_recipients = @Bcc,
-              kind = @Kind, team_id = @TeamId, team_connection_id = @TeamConnId, dist_email = @DistEmail,
-              team_fanout = @TeamFanout,
-              attachment_format = @Format, include_preview = @Preview, is_active = @Active
-              WHERE id = @Id AND owner_id = @OwnerId", conn);
-        AddScheduleParams(cmd, schedule);
+        // Same defensive shape as CreateScheduleAsync — see comment there.
+        var hasFanout = await HasTeamFanoutColumnAsync(conn);
+        var updateSql = hasFanout
+            ? @"UPDATE EMPOWER.RPT_report_schedules SET
+                cron_expression = @Cron, schedule_pattern = @Pattern,
+                start_date = @StartDate, end_date = @EndDate,
+                subject = @Subject,
+                recipients = @Recipients, cc_recipients = @Cc, bcc_recipients = @Bcc,
+                kind = @Kind, team_id = @TeamId, team_connection_id = @TeamConnId, dist_email = @DistEmail,
+                team_fanout = @TeamFanout,
+                attachment_format = @Format, include_preview = @Preview, is_active = @Active
+                WHERE id = @Id AND owner_id = @OwnerId"
+            : @"UPDATE EMPOWER.RPT_report_schedules SET
+                cron_expression = @Cron, schedule_pattern = @Pattern,
+                start_date = @StartDate, end_date = @EndDate,
+                subject = @Subject,
+                recipients = @Recipients, cc_recipients = @Cc, bcc_recipients = @Bcc,
+                kind = @Kind, team_id = @TeamId, team_connection_id = @TeamConnId, dist_email = @DistEmail,
+                attachment_format = @Format, include_preview = @Preview, is_active = @Active
+                WHERE id = @Id AND owner_id = @OwnerId";
+        await using var cmd = new SqlCommand(updateSql, conn);
+        AddScheduleParams(cmd, schedule, includeTeamFanout: hasFanout);
         await cmd.ExecuteNonQueryAsync();
         _cache.Invalidate("ReportDbService:Schedules:");
         return schedule;
     }
 
-    private static void AddScheduleParams(SqlCommand cmd, ReportSchedule s)
+    // Process-cached probe — runs once per app lifetime. If the admin
+    // applies the migration mid-process, restart the app to pick it up
+    // (the cache is intentionally one-way false → re-checked on next
+    // start; a true result stays).
+    private static bool? _hasTeamFanoutColumnCache;
+    private static async Task<bool> HasTeamFanoutColumnAsync(SqlConnection conn)
+    {
+        if (_hasTeamFanoutColumnCache is bool cached) return cached;
+        await using var probe = new SqlCommand(
+            "SELECT CASE WHEN COL_LENGTH('EMPOWER.RPT_report_schedules','team_fanout') IS NULL THEN 0 ELSE 1 END;",
+            conn);
+        var result = await probe.ExecuteScalarAsync();
+        var has = result is int i && i == 1;
+        _hasTeamFanoutColumnCache = has;
+        return has;
+    }
+
+    // includeTeamFanout = false skips the @TeamFanout binding so the
+    // pre-migration INSERT/UPDATE statements (which don't reference the
+    // column) don't carry an unused parameter. SqlClient throws
+    // "@TeamFanout undefined" when the SQL doesn't bind it but the
+    // parameter is supplied, so the two have to agree.
+    private static void AddScheduleParams(SqlCommand cmd, ReportSchedule s, bool includeTeamFanout = true)
     {
         cmd.Parameters.Add(new SqlParameter("@Id", s.Id));
         cmd.Parameters.Add(new SqlParameter("@ReportId", s.ReportId));
@@ -371,15 +421,18 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@TeamId", (object?)s.TeamId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@TeamConnId", (object?)s.TeamConnectionId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@DistEmail", (object?)s.DistEmail ?? DBNull.Value));
-        // Persisted as the lowercase string ('members' / 'manager' / 'both')
-        // to match the team_fanout CHECK constraint and stay readable in
-        // SSMS — same convention as @Kind above.
-        cmd.Parameters.Add(new SqlParameter("@TeamFanout", s.TeamFanout switch
+        if (includeTeamFanout)
         {
-            TeamFanout.Manager => "manager",
-            TeamFanout.Both => "both",
-            _ => "members"
-        }));
+            // Persisted as the lowercase string ('members' / 'manager' / 'both')
+            // to match the team_fanout CHECK constraint and stay readable in
+            // SSMS — same convention as @Kind above.
+            cmd.Parameters.Add(new SqlParameter("@TeamFanout", s.TeamFanout switch
+            {
+                TeamFanout.Manager => "manager",
+                TeamFanout.Both => "both",
+                _ => "members"
+            }));
+        }
         cmd.Parameters.Add(new SqlParameter("@Format", s.AttachmentFormat));
         cmd.Parameters.Add(new SqlParameter("@Preview", s.IncludePreview));
         cmd.Parameters.Add(new SqlParameter("@Active", s.IsActive));
@@ -423,14 +476,14 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
                 Name = reader.GetString(reader.GetOrdinal("name")),
                 // TryGet so envs that haven't run the internal_name migration
                 // yet keep working — null falls back to Name in every consumer.
-                InternalName = TryGetOptionalString(reader, "internal_name"),
+                InternalName = reader.OptString("internal_name"),
                 // TryGet so envs that haven't applied the category migration
                 // yet keep working — null falls back to "uncategorized" everywhere.
-                Category = TryGetOptionalString(reader, "category"),
+                Category = reader.OptString("category"),
                 // TryGet so envs that haven't applied the library_sections
                 // migration keep working — null falls back to the catch-all
                 // bucket in the Library.
-                LibrarySectionId = TryGetOptionalGuid(reader, "library_section_id"),
+                LibrarySectionId = reader.OptGuid("library_section_id"),
                 OwnerId = reader.GetString(reader.GetOrdinal("owner_id")),
                 OwnerEmail = reader.GetString(reader.GetOrdinal("owner_email")),
                 CompanyId = reader.GetGuid(reader.GetOrdinal("company_id")),
@@ -439,8 +492,8 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
                 Aggregations = reader.IsDBNull(reader.GetOrdinal("aggregations")) ? null : reader.GetString(reader.GetOrdinal("aggregations")),
                 ColumnState = reader.IsDBNull(reader.GetOrdinal("column_state")) ? null : reader.GetString(reader.GetOrdinal("column_state")),
                 GridTemplateId = reader.IsDBNull(reader.GetOrdinal("grid_template_id")) ? null : reader.GetGuid(reader.GetOrdinal("grid_template_id")),
-                ConnectionId = TryGetOptionalGuid(reader, "connection_id"),
-                PrimaryTable = TryGetOptionalString(reader, "primary_table"),
+                ConnectionId = reader.OptGuid("connection_id"),
+                PrimaryTable = reader.OptString("primary_table"),
                 LastRunAt = reader.IsDBNull(reader.GetOrdinal("last_run_at")) ? null : reader.GetDateTime(reader.GetOrdinal("last_run_at")),
                 CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
                 UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
@@ -469,29 +522,6 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         return shares;
     }
 
-    // Returns NULL when the column name doesn't exist in the reader (migration
-    // not yet applied) or when the value is DBNull. Keeps schedule reads working
-    // against an older DB schema without crashing.
-    private static string? GetNullableString(SqlDataReader reader, string column)
-    {
-        try
-        {
-            var ord = reader.GetOrdinal(column);
-            return reader.IsDBNull(ord) ? null : reader.GetString(ord);
-        }
-        catch (IndexOutOfRangeException) { return null; }
-    }
-
-    private static DateTime? GetNullableDate(SqlDataReader reader, string column)
-    {
-        try
-        {
-            var ord = reader.GetOrdinal(column);
-            return reader.IsDBNull(ord) ? null : reader.GetDateTime(ord);
-        }
-        catch (IndexOutOfRangeException) { return null; }
-    }
-
     private static async Task<List<ReportSchedule>> ReadSchedulesAsync(SqlCommand cmd)
     {
         var schedules = new List<ReportSchedule>();
@@ -505,26 +535,26 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
                 OwnerId = reader.GetString(reader.GetOrdinal("owner_id")),
                 OwnerEmail = reader.GetString(reader.GetOrdinal("owner_email")),
                 CronExpression = reader.GetString(reader.GetOrdinal("cron_expression")),
-                SchedulePatternJson = GetNullableString(reader, "schedule_pattern"),
-                StartDate = GetNullableDate(reader, "start_date"),
-                EndDate = GetNullableDate(reader, "end_date"),
+                SchedulePatternJson = reader.OptString("schedule_pattern"),
+                StartDate = reader.OptDate("start_date"),
+                EndDate = reader.OptDate("end_date"),
                 Subject = reader.GetString(reader.GetOrdinal("subject")),
-                Recipients = GetNullableString(reader, "recipients"),
-                CcRecipients = GetNullableString(reader, "cc_recipients"),
-                BccRecipients = GetNullableString(reader, "bcc_recipients"),
+                Recipients = reader.OptString("recipients"),
+                CcRecipients = reader.OptString("cc_recipients"),
+                BccRecipients = reader.OptString("bcc_recipients"),
                 // Kind / team / dist columns are read defensively via
-                // TryGetOptional* — envs that haven't applied the
+                // reader.Opt* — envs that haven't applied the
                 // 2026-05-05 schedule_kind migration return nulls here
                 // and the row falls through to the legacy owner-email
                 // distribution path in the Worker.
-                Kind = ParseScheduleKind(TryGetOptionalString(reader, "kind")),
-                TeamId = TryGetOptionalInt(reader, "team_id"),
-                TeamConnectionId = TryGetOptionalGuid(reader, "team_connection_id"),
-                DistEmail = TryGetOptionalString(reader, "dist_email"),
+                Kind = ParseScheduleKind(reader.OptString("kind")),
+                TeamId = reader.OptInt("team_id"),
+                TeamConnectionId = reader.OptGuid("team_connection_id"),
+                DistEmail = reader.OptString("dist_email"),
                 // Defensive — envs without the 2026-05-09_17-00 migration
                 // return null here and fall through to the legacy Members
                 // fan-out, preserving every existing schedule's behavior.
-                TeamFanout = ParseTeamFanout(TryGetOptionalString(reader, "team_fanout")),
+                TeamFanout = ParseTeamFanout(reader.OptString("team_fanout")),
                 AttachmentFormat = reader.GetString(reader.GetOrdinal("attachment_format")),
                 IncludePreview = reader.GetBoolean(reader.GetOrdinal("include_preview")),
                 IsActive = reader.GetBoolean(reader.GetOrdinal("is_active")),
@@ -560,38 +590,6 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@LastRunAt", (object?)r.LastRunAt ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@CreatedAt", r.CreatedAt));
         cmd.Parameters.Add(new SqlParameter("@UpdatedAt", r.UpdatedAt));
-    }
-
-    // Tolerate a missing column (e.g. migration not yet applied on some env)
-    // by returning null instead of throwing. Callers fall back to null-means-default.
-    private static Guid? TryGetOptionalGuid(SqlDataReader reader, string column)
-    {
-        try
-        {
-            var ord = reader.GetOrdinal(column);
-            return reader.IsDBNull(ord) ? null : reader.GetGuid(ord);
-        }
-        catch (IndexOutOfRangeException) { return null; }
-    }
-
-    private static string? TryGetOptionalString(SqlDataReader reader, string column)
-    {
-        try
-        {
-            var ord = reader.GetOrdinal(column);
-            return reader.IsDBNull(ord) ? null : reader.GetString(ord);
-        }
-        catch (IndexOutOfRangeException) { return null; }
-    }
-
-    private static int? TryGetOptionalInt(SqlDataReader reader, string column)
-    {
-        try
-        {
-            var ord = reader.GetOrdinal(column);
-            return reader.IsDBNull(ord) ? null : reader.GetInt32(ord);
-        }
-        catch (IndexOutOfRangeException) { return null; }
     }
 
     // Maps the lowercase string persisted by AddScheduleParams back to

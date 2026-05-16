@@ -243,17 +243,10 @@
     // unsaved-changes prompt. "Save" here means run Apply if a preview
     // produced matches; if there's no usable preview yet there's nothing to
     // save and we just dismiss. DontSave dismisses without applying.
-    private async Task TryCancelAsync()
-    {
-        if (!IsDirty)
-        {
-            MudDialog?.Cancel();
-            return;
-        }
-        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
-        {
-            case UnsavedChangesResult.Save:
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
+            {
                 if (_previewed && _matches.Count > 0)
                 {
                     Apply();
@@ -264,12 +257,6 @@
                     // anything meaningful, so dismiss.
                     MudDialog?.Cancel();
                 }
-                return;
-            case UnsavedChangesResult.Cancel:
-                return;
-            case UnsavedChangesResult.DontSave:
-                MudDialog?.Cancel();
-                return;
-        }
-    }
+                return Task.CompletedTask;
+            });
 }

@@ -60,4 +60,17 @@ public interface IMasterDashboardService
     // the limit, and enforced server-side in AddSectionAsync so a bypassed
     // UI can't blow past it.
     const int MaxSectionsPerTab = 10;
+
+    // ── Per-user tab visibility ── Hidden tabs are scoped to (user, tab).
+    // Tabs themselves remain shared at the company level — this is purely a
+    // view filter. Admin/edit mode bypasses the filter so admins can still
+    // see and mutate hidden tabs. Cascading FK on tab_id means admin-removed
+    // tabs don't leave dangling hidden rows.
+    //
+    // GetHiddenTabIdsAsync returns the set of tab IDs this user has hidden
+    // within the given company; callers filter their _tabs list against it.
+    // SetTabHiddenAsync inserts/deletes a row based on `hidden`. Idempotent
+    // — re-hiding an already-hidden tab is a no-op.
+    Task<HashSet<int>> GetHiddenTabIdsAsync(string userId, Guid companyId);
+    Task SetTabHiddenAsync(string userId, int tabId, bool hidden);
 }

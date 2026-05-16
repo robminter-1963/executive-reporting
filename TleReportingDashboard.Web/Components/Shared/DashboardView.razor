@@ -2331,7 +2331,7 @@
         var dialog = await DialogService.ShowAsync<CalculatedColumnDialog>(
             existing is null ? "Add Calculated Column" : "Edit Calculated Column",
             parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
+            DialogPresets.Locked(MaxWidth.Small));
 
         var result = await dialog.Result;
         if (result is null || result.Canceled) return;

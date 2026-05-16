@@ -1,17 +1,17 @@
 @page "/preferences"
 @rendermode InteractiveServer
-@implements IDisposable
 @inject IUserPreferenceService PreferenceService
 @inject UserPreferenceState PreferenceState
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
-@inject IDialogService DialogService
-@inject IJSRuntime JS
+@inject ILogger<UserPreferences> Logger
 
 <PageTitle>Preferences - Executive Reporting Suite</PageTitle>
 
-<MudMainContent Style="padding: 16px; max-width: 700px; margin: 0 auto;">
+<UnsavedChangesGuard @ref="_guard" ComputeSnapshot="ComputeDirtySnapshot" SaveAsync="HandleSaveForGuard" />
+
+<MudMainContent Style="padding: 0; max-width: 700px; margin-left: 15px;">
     <MudStack Spacing="3">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
             <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
@@ -108,10 +108,10 @@
     private bool _saving;
     private string _userId = "anonymous";
 
-    // ── Unsaved-changes guard ──
-    private string _dirtySnapshot = string.Empty;
-    private bool _beforeUnloadArmed;
-    private IDisposable? _navHandlerRegistration;
+    // Non-rendering guard handles in-app nav prompts, beforeunload, and
+    // disposable cleanup. We supply the snapshot builder and a save
+    // wrapper; everything else lives in the component.
+    private UnsavedChangesGuard? _guard;
 
     private string ComputeDirtySnapshot()
     {
@@ -127,29 +127,7 @@
         catch { return Guid.NewGuid().ToString(); }
     }
 
-    private void MarkClean() => _dirtySnapshot = ComputeDirtySnapshot();
-
-    private bool IsDirty =>
-        !string.Equals(_dirtySnapshot, ComputeDirtySnapshot(), StringComparison.Ordinal);
-
-    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
-    {
-        if (!IsDirty) return;
-        var choice = await TleReportingDashboard.Web.Components.Shared.UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
-        {
-            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.Save:
-                await Save(navigateAfter: false);
-                if (IsDirty) context.PreventNavigation();
-                break;
-            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.DontSave:
-                MarkClean();
-                break;
-            case TleReportingDashboard.Web.Components.Shared.UnsavedChangesResult.Cancel:
-                context.PreventNavigation();
-                break;
-        }
-    }
+    private Task HandleSaveForGuard() => Save(navigateAfter: false);
 
     protected override async Task OnInitializedAsync()
     {
@@ -161,31 +139,17 @@
         _pref = await PreferenceService.GetPreferencesAsync(_userId);
         _pref.UserId = _userId;
         _loading = false;
-
-        _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
-        MarkClean();
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    // @ref isn't wired until after the first render, so the load-time
+    // baseline is captured here rather than at the end of OnInitializedAsync.
+    private bool _initialBaselineSet;
+    protected override void OnAfterRender(bool firstRender)
     {
-        var armNow = IsDirty;
-        if (armNow != _beforeUnloadArmed)
+        if (!_initialBaselineSet && _guard is not null && !_loading)
         {
-            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
-            catch { }
-            _beforeUnloadArmed = armNow;
-        }
-    }
-
-    public void Dispose()
-    {
-        _navHandlerRegistration?.Dispose();
-        _navHandlerRegistration = null;
-        if (_beforeUnloadArmed)
-        {
-            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
-            catch { }
-            _beforeUnloadArmed = false;
+            _guard.MarkClean();
+            _initialBaselineSet = true;
         }
     }
 
@@ -218,20 +182,19 @@
         _saving = true;
         try
         {
-            await PreferenceService.SavePreferencesAsync(_pref);
-            PreferenceState.Set(_pref);
-            MarkClean();
-            // Land back on the picker, which redirects to the user's
-            // last-visited company dashboard. Same destination Cancel
-            // / Back use, so the page has one consistent exit target.
-            // Skipped when invoked from the unsaved-changes prompt's
-            // Save branch — the originating navigation will resume on
-            // its own.
-            if (navigateAfter) Navigation.NavigateTo("/");
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+            if (await Snackbar.RunAsync(Logger, "saving preferences",
+                    () => PreferenceService.SavePreferencesAsync(_pref)))
+            {
+                PreferenceState.Set(_pref);
+                _guard?.MarkClean();
+                // Land back on the picker, which redirects to the user's
+                // last-visited company dashboard. Same destination Cancel
+                // / Back use, so the page has one consistent exit target.
+                // Skipped when invoked from the unsaved-changes prompt's
+                // Save branch — the originating navigation will resume on
+                // its own.
+                if (navigateAfter) Navigation.NavigateTo("/");
+            }
         }
         finally
         {

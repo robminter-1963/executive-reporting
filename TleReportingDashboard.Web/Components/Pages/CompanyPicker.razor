@@ -19,11 +19,11 @@
    many companies, rather than doubling up with the outer layout. *@
 <HeadContent>
     <style>
-        html, body { overflow-y: auto !important; }
+        html, body { overflow-y: auto !important; overflow-x: hidden !important; }
     </style>
 </HeadContent>
 
-<MudContainer MaxWidth="MaxWidth.Large" Class="py-6">
+<MudContainer MaxWidth="MaxWidth.False" Style="margin-left: 15px; padding: 0 0 32px 0;">
     @if (_loading)
     {
         <MudProgressLinear Color="Color.Primary" Indeterminate="true" />

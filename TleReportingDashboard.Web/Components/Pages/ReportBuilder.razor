@@ -31,6 +31,8 @@
 
 <PageTitle>Report Builder - Executive Reporting Suite</PageTitle>
 
+<UnsavedChangesGuard @ref="_guard" ComputeSnapshot="ComputeDirtySnapshot" SaveAsync="HandleSaveForGuard" />
+
 @* ── Left drawer: Field Picker (resizable) ── *@
 @if (_drawerOpen)
 {
@@ -53,7 +55,7 @@
     </div>
 }
 
-<MudMainContent Style="@($"padding: 0 16px 16px 16px; margin-left: {(_drawerOpen ? _drawerWidth + 5 : 0)}px; transition: margin-left 0.15s; height: calc(100vh - 64px); overflow-y: auto;")">
+<MudMainContent Style="@($"padding: 0; margin-left: {(_drawerOpen ? _drawerWidth + 5 : 0) + 15}px; transition: margin-left 0.15s; height: calc(100vh - 64px); overflow-y: auto;")">
     @* ── Loading indicator ── *@
     @if (_isLoading)
     {
@@ -803,6 +805,7 @@
                         </MudText>
                     </MudStack>
                     <ReportGrid @ref="_reportGrid" @key="_gridRenderKey" Data="_queryData" IsTruncated="@(_queryData?.IsTruncated ?? false)"
+                                HonorFieldMinWidth="true"
                                 InitialColumnWidths="_currentConfig.ColumnWidths"
                                 OnColumnWidthsChanged="w => _currentConfig.ColumnWidths = w"
                                 InitialColumnOrder="_currentConfig.ColumnOrder"
@@ -1137,19 +1140,11 @@
     private IDisposable? _editorScope;
 
     // ── Unsaved-changes guard ──
-    // Snapshot of the report state at the most recent "clean" point —
-    // initial load (new or existing) and successful save. Compared against
-    // the live state whenever the user tries to navigate away; mismatch =
-    // dirty = prompt. Snapshot is a serialized JSON string rather than a
-    // structural compare so we don't have to enumerate every nested config
-    // field by hand.
-    private string _dirtySnapshot = string.Empty;
-    // Tracks the last-sent value of the JS-side beforeunload guard so
-    // we don't thrash JS interop on every render.
-    private bool _beforeUnloadArmed;
-    // Disposable returned by RegisterLocationChangingHandler. Released
-    // on Dispose so the handler doesn't leak across navigations.
-    private IDisposable? _navHandlerRegistration;
+    // Non-rendering guard handles in-app nav prompts, beforeunload, and
+    // disposable cleanup. We supply the snapshot builder and a save
+    // wrapper; everything else lives in the component.
+    private UnsavedChangesGuard? _guard;
+    private bool _initialBaselineSet;
 
     private string ComputeDirtySnapshot()
     {
@@ -1179,41 +1174,11 @@
         }
     }
 
-    // Reset the baseline — call after a successful load or save so the
-    // current state is treated as the new "clean" reference point.
-    private void MarkClean() => _dirtySnapshot = ComputeDirtySnapshot();
-
-    private bool IsDirty =>
-        !string.Equals(_dirtySnapshot, ComputeDirtySnapshot(), StringComparison.Ordinal);
-
-    // Intercepts in-app navigation. The Blazor handler is awaited
-    // before the navigation actually proceeds, so we can prompt and
-    // call PreventNavigation if the user picks Cancel. Save runs the
-    // existing save path; DontSave just lets nav proceed.
-    private async ValueTask OnLocationChangingAsync(LocationChangingContext context)
-    {
-        if (!IsDirty) return;
-        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
-        {
-            case UnsavedChangesResult.Save:
-                await HandleSave();
-                // Save sets the new baseline; if it failed (snackbar
-                // shown by HandleSave), state is still dirty. Block
-                // navigation so the user can fix and retry rather
-                // than silently leaving with unsaved work.
-                if (IsDirty) context.PreventNavigation();
-                break;
-            case UnsavedChangesResult.DontSave:
-                // Disarm guards so the imminent unload doesn't
-                // double-prompt (LocationChanging then beforeunload).
-                MarkClean();
-                break;
-            case UnsavedChangesResult.Cancel:
-                context.PreventNavigation();
-                break;
-        }
-    }
+    // Wraps the existing save path so the guard component can invoke it
+    // when the user picks "Save" from the unsaved-changes prompt.
+    // HandleSave already calls _guard?.MarkClean() on success and shows
+    // a snackbar / leaves the page dirty on failure.
+    private Task HandleSaveForGuard() => HandleSave();
 
     protected override async Task OnInitializedAsync()
     {
@@ -1265,15 +1230,25 @@
                 }
             }
 
+            // Per-company connection fetches are independent — fan them
+            // out in parallel instead of serially awaiting each round-trip.
+            // On a tenant with N companies this drops cold Builder init
+            // from ~N × per-call latency down to roughly the slowest
+            // single call. The merge into _availableConnections /
+            // _connectionCompanyIdByConnectionId happens after Task.WhenAll
+            // so the order is deterministic (iteration over _companies)
+            // and we don't need a concurrent collection for the dict.
             _availableConnections = new();
             _connectionCompanyIdByConnectionId = new();
-            foreach (var comp in _companies)
+            var connsByCompany = await Task.WhenAll(
+                _companies.Select(c => ConnectionAdminSvc.GetByCompanyAsync(c.Id)));
+            for (var i = 0; i < _companies.Count; i++)
             {
-                var conns = await ConnectionAdminSvc.GetByCompanyAsync(comp.Id);
-                foreach (var conn in conns)
+                var compId = _companies[i].Id;
+                foreach (var conn in connsByCompany[i])
                 {
                     _availableConnections.Add(conn);
-                    _connectionCompanyIdByConnectionId[conn.Id] = comp.Id;
+                    _connectionCompanyIdByConnectionId[conn.Id] = compId;
                 }
             }
 
@@ -1324,12 +1299,6 @@
                 _editingName = true;
             }
 
-            // Register the in-app navigation guard once init is past the
-            // bulk of state setup, so an early bail-out (snackbar above)
-            // doesn't leak a registered handler. Snapshot baseline AFTER
-            // the load so the report's own data isn't read as "dirty."
-            _navHandlerRegistration = Navigation.RegisterLocationChangingHandler(OnLocationChangingAsync);
-            MarkClean();
         }
         catch (Exception ex)
         {
@@ -1518,7 +1487,7 @@
                             {
                                 _filterRoot = System.Text.Json.JsonSerializer
                                     .Deserialize<TleReportingDashboard.Web.Models.FilterGroup>(afElement.GetRawText(),
-                                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                                        AppJson.Compact)
                                     ?? NewEmptyFilterRoot();
                             }
                         }
@@ -1556,7 +1525,7 @@
                     // The rest is dashboard config — deserialize the whole thing
                     // (DashboardConfig ignores unknown properties like ColumnWidths)
                     _dashboardConfig = System.Text.Json.JsonSerializer.Deserialize<DashboardView.DashboardConfig>(report.ColumnState,
-                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        AppJson.Compact);
                     _currentConfig.DashboardConfigJson = report.ColumnState;
 
                     // Restore extra group-by field IDs. Both the legacy
@@ -1784,7 +1753,7 @@
         var dialog = await DialogService.ShowAsync<CalculatedColumnDialog>(
             existing is null ? "Add Calculated Column" : "Edit Calculated Column",
             parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
+            DialogPresets.Locked(MaxWidth.Small));
 
         var result = await dialog.Result;
         if (result is null || result.Canceled) return;
@@ -2528,7 +2497,7 @@
             .Where(f => f.DataType.Equals("text", StringComparison.OrdinalIgnoreCase) ||
                          f.DataType.Equals("integer", StringComparison.OrdinalIgnoreCase) ||
                          f.DataType.Equals("int", StringComparison.OrdinalIgnoreCase))
-            .Select(f => new ColumnMeta { FieldId = f.Id, Label = f.Label, DataType = f.DataType, MaxLength = f.MaxLength, ValueSortOrder = f.ValueSortOrder, Format = f.Format })
+            .Select(f => new ColumnMeta { FieldId = f.Id, Label = f.Label, DataType = f.DataType, MaxLength = f.MaxLength, MinWidth = f.MinWidth, ValueSortOrder = f.ValueSortOrder, Format = f.Format })
             .OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -2908,7 +2877,7 @@
 
         var parameters = new DialogParameters { { "Templates", templates } };
         var dialog = await DialogService.ShowAsync<ApplyTemplateDialog>("Apply Grid Template", parameters,
-            new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false, MaxWidth = MaxWidth.Small, FullWidth = true });
+            DialogPresets.Locked(MaxWidth.Small));
 
         var result = await dialog.Result;
         if (result is null || result.Canceled || result.Data is not GridTemplate selected) return;
@@ -3133,7 +3102,7 @@
                     existing.UpdatedAt = DateTime.UtcNow;
                     existing.LastRunAt = DateTime.UtcNow;
                     await ReportService.UpdateReportAsync(existing);
-                    MarkClean();
+                    _guard?.MarkClean();
                     Snackbar.Add($"Report \"{existing.Name}\" saved.", Severity.Success);
                     return;
                 }
@@ -3182,7 +3151,7 @@
             // Save was the explicit clean point — re-baseline so a
             // navigation away that follows doesn't re-prompt over the
             // just-saved state.
-            MarkClean();
+            _guard?.MarkClean();
             Snackbar.Add($"Report \"{saved.Name}\" saved.", Severity.Success);
         }
         catch (Exception ex)
@@ -3225,45 +3194,39 @@
         var dialogResult = await dialog.Result;
         if (dialogResult is null || dialogResult.Canceled || dialogResult.Data is not string templateName) return;
 
-        try
+        // Build the GridTemplate-shaped ColumnState: only the grid layout
+        // keys the grid-template editor/ResolveTemplateAsync know about.
+        var columnState = new Dictionary<string, object?>();
+        if (_currentConfig.ColumnOrder is { Count: > 0 })
+            columnState["TableColumnOrder"] = _currentConfig.ColumnOrder;
+        if (_currentConfig.HiddenColumns is { Count: > 0 })
+            columnState["HiddenColumns"] = _currentConfig.HiddenColumns;
+        if (_currentConfig.ColumnWidths is { Count: > 0 })
+            columnState["ColumnWidths"] = _currentConfig.ColumnWidths;
+        if (!string.IsNullOrWhiteSpace(_currentConfig.DefaultSortField))
         {
-            // Build the GridTemplate-shaped ColumnState: only the grid layout
-            // keys the grid-template editor/ResolveTemplateAsync know about.
-            var columnState = new Dictionary<string, object?>();
-            if (_currentConfig.ColumnOrder is { Count: > 0 })
-                columnState["TableColumnOrder"] = _currentConfig.ColumnOrder;
-            if (_currentConfig.HiddenColumns is { Count: > 0 })
-                columnState["HiddenColumns"] = _currentConfig.HiddenColumns;
-            if (_currentConfig.ColumnWidths is { Count: > 0 })
-                columnState["ColumnWidths"] = _currentConfig.ColumnWidths;
-            if (!string.IsNullOrWhiteSpace(_currentConfig.DefaultSortField))
-            {
-                columnState["TableSortField"] = _currentConfig.DefaultSortField;
-                columnState["TableSortDirection"] = _currentConfig.DefaultSortDirection ?? "asc";
-            }
+            columnState["TableSortField"] = _currentConfig.DefaultSortField;
+            columnState["TableSortDirection"] = _currentConfig.DefaultSortDirection ?? "asc";
+        }
 
-            var template = new GridTemplate
-            {
-                Id = Guid.NewGuid(),
-                Name = templateName,
-                OwnerId = _userId,
-                OwnerEmail = _userEmail,
-                IsShared = true,
-                FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds),
-                ColumnState = columnState.Count > 0
-                    ? System.Text.Json.JsonSerializer.Serialize(columnState)
-                    : null,
-                ConnectionId = _currentConfig.ConnectionId,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-            await GridTemplateService.SaveTemplateAsync(template);
-            Snackbar.Add($"Grid template \"{template.Name}\" saved.", Severity.Success);
-        }
-        catch (Exception ex)
+        var template = new GridTemplate
         {
-            Snackbar.Add($"Save as Template failed: {ex.Message}", Severity.Error);
-        }
+            Id = Guid.NewGuid(),
+            Name = templateName,
+            OwnerId = _userId,
+            OwnerEmail = _userEmail,
+            IsShared = true,
+            FieldIds = System.Text.Json.JsonSerializer.Serialize(_selectedFieldIds),
+            ColumnState = columnState.Count > 0
+                ? System.Text.Json.JsonSerializer.Serialize(columnState)
+                : null,
+            ConnectionId = _currentConfig.ConnectionId,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+        await Snackbar.RunAsync<GridTemplate>(Logger, "saving grid template",
+            () => GridTemplateService.SaveTemplateAsync(template),
+            successMessage: $"Grid template \"{template.Name}\" saved.");
     }
 
     // ── Export ──
@@ -3271,39 +3234,25 @@
     private async Task ExportExcel()
     {
         if (_queryData is null || !_queryData.Rows.Any()) return;
-
-        try
+        await Snackbar.RunAsync(Logger, "exporting to Excel", async () =>
         {
             var reportName = _loadedReportName ?? "Report";
             var bytes = ExportService.ExportToExcel(BuildExportData(_queryData), reportName);
             var fileName = $"{reportName}-{DateTime.Now:yyyyMMdd-HHmmss}.xlsx";
-            await JS.InvokeVoidAsync("downloadFile", fileName,
-                Convert.ToBase64String(bytes),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
-        }
+            await JS.DownloadAsync(fileName, bytes);
+        });
     }
 
     private async Task ExportCsv()
     {
         if (_queryData is null || !_queryData.Rows.Any()) return;
-
-        try
+        await Snackbar.RunAsync(Logger, "exporting to CSV", async () =>
         {
             var reportName = _loadedReportName ?? "Report";
             var bytes = ExportService.ExportToCsv(BuildExportData(_queryData));
             var fileName = $"{reportName}-{DateTime.Now:yyyyMMdd-HHmmss}.csv";
-            await JS.InvokeVoidAsync("downloadFile", fileName,
-                Convert.ToBase64String(bytes),
-                "text/csv");
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
-        }
+            await JS.DownloadAsync(fileName, bytes);
+        });
     }
 
     // Mirrors what the grid shows: drops user-hidden columns (HiddenColumns) and
@@ -3344,14 +3293,7 @@
             { x => x.ReportName, _loadedReportName ?? "Report" },
             { x => x.CurrentUserId, _userId }
         };
-        var options = new DialogOptions
-        {
-            MaxWidth = MaxWidth.Small,
-            FullWidth = true,
-            BackdropClick = false,
-            CloseOnEscapeKey = false
-        };
-        await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, options);
+        await DialogService.ShowAsync<ShareDialog>("Share Report", parameters, DialogPresets.Locked(MaxWidth.Small));
     }
 
     // ── KPI management ──
@@ -3490,8 +3432,7 @@
             CustomFilterIds = _currentConfig.CustomFilterIds,
             ColumnState = TryParseObject(BuildColumnStateJson())
         };
-        var json = System.Text.Json.JsonSerializer.Serialize(snapshot,
-            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        var json = System.Text.Json.JsonSerializer.Serialize(snapshot, AppJson.Indented);
 
         var parameters = new DialogParameters
         {
@@ -3760,22 +3701,20 @@
     private static ReportBuilder? _staticInstance;
     private static int _staticDrawerWidth = 240;
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    protected override void OnAfterRender(bool firstRender)
     {
         if (firstRender)
         {
             _staticInstance = this;
             _drawerWidth = _staticDrawerWidth;
         }
-        // Sync the JS-side beforeunload guard with the live dirty state
-        // every render, but only invoke when it actually changed — saves
-        // a JS-interop call per re-render of a clean page.
-        var armNow = IsDirty;
-        if (armNow != _beforeUnloadArmed)
+        // @ref isn't wired until after the first render, so the load-time
+        // baseline is captured here rather than at the end of OnInitializedAsync.
+        // The guard component registers its own nav handler internally.
+        if (!_initialBaselineSet && _guard is not null)
         {
-            try { await JS.InvokeVoidAsync("setBeforeUnloadGuard", armNow); }
-            catch { /* circuit may be tearing down — drop silently */ }
-            _beforeUnloadArmed = armNow;
+            _guard.MarkClean();
+            _initialBaselineSet = true;
         }
     }
 
@@ -3783,16 +3722,5 @@
     {
         _editorScope?.Dispose();
         _editorScope = null;
-        _navHandlerRegistration?.Dispose();
-        _navHandlerRegistration = null;
-        // Clear the JS-side guard so the next page mount doesn't
-        // inherit a stale "armed" state. Fire-and-forget — the
-        // circuit is tearing down and there's no one to await us.
-        if (_beforeUnloadArmed)
-        {
-            try { _ = JS.InvokeVoidAsync("setBeforeUnloadGuard", false).AsTask(); }
-            catch { }
-            _beforeUnloadArmed = false;
-        }
     }
 }

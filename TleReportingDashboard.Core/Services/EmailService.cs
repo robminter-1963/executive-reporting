@@ -136,7 +136,7 @@ public class EmailService : IEmailService
 
             // Attachment part
             sb.Append("--").Append(boundary).Append("\r\n");
-            sb.Append("Content-Type: ").Append(GuessMimeType(attachmentFileName))
+            sb.Append("Content-Type: ").Append(MimeTypes.For(attachmentFileName))
               .Append("; name=\"").Append(attachmentFileName).Append("\"\r\n");
             sb.Append("Content-Transfer-Encoding: base64\r\n");
             sb.Append("Content-Disposition: attachment; filename=\"").Append(attachmentFileName).Append("\"\r\n");
@@ -177,17 +177,4 @@ public class EmailService : IEmailService
         return sb.ToString();
     }
 
-    private static string GuessMimeType(string fileName)
-    {
-        var ext = Path.GetExtension(fileName).ToLowerInvariant();
-        return ext switch
-        {
-            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".xls"  => "application/vnd.ms-excel",
-            ".csv"  => "text/csv",
-            ".pdf"  => "application/pdf",
-            ".txt"  => "text/plain",
-            _       => "application/octet-stream"
-        };
-    }
 }

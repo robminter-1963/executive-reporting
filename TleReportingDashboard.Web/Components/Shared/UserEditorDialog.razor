@@ -4,6 +4,7 @@
 @inject IRoleService RoleService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject ILogger<UserEditorDialog> Logger
 
 @* Dirty-tracked: edits to email/display name/role/active flag/team picks
    vs. the initial snapshot trigger the unsaved-changes prompt on any
@@ -246,50 +247,45 @@
 
     private async Task Save()
     {
-        try
-        {
-            if (IsNew)
+        if (await Snackbar.RunAsync(Logger, IsNew ? "creating user" : "saving user", async () =>
             {
-                await UserManagement.CreateAsync(
-                    _email.Trim(),
-                    string.IsNullOrWhiteSpace(_displayName) ? null : _displayName.Trim(),
-                    _roleId,
-                    CreatedBy);
-            }
-            else
-            {
-                await UserManagement.UpdateAsync(
-                    _email,
-                    string.IsNullOrWhiteSpace(_displayName) ? null : _displayName.Trim(),
-                    _roleId,
-                    _isActive);
-
-                // Persist team assignments only when the selector was visible
-                // — i.e. current scope is 'team'. Rows stay dormant across
-                // scope toggles by design (per product requirement).
-                if (IsTeamScope())
+                if (IsNew)
                 {
-                    var picks = _selectedTeamKeys
-                        .Select(k => k.Split(':'))
-                        .Where(p => p.Length == 2
-                                    && Guid.TryParseExact(p[0], "N", out _)
-                                    && int.TryParse(p[1], out _))
-                        .Select(p => new UserTeamAssignment(
-                            Guid.ParseExact(p[0], "N"),
-                            int.Parse(p[1])))
-                        .ToList();
-                    await UserManagement.SetUserTeamsAsync(_email, picks);
+                    await UserManagement.CreateAsync(
+                        _email.Trim(),
+                        string.IsNullOrWhiteSpace(_displayName) ? null : _displayName.Trim(),
+                        _roleId,
+                        CreatedBy);
                 }
-            }
+                else
+                {
+                    await UserManagement.UpdateAsync(
+                        _email,
+                        string.IsNullOrWhiteSpace(_displayName) ? null : _displayName.Trim(),
+                        _roleId,
+                        _isActive);
+
+                    // Persist team assignments only when the selector was visible
+                    // — i.e. current scope is 'team'. Rows stay dormant across
+                    // scope toggles by design (per product requirement).
+                    if (IsTeamScope())
+                    {
+                        var picks = _selectedTeamKeys
+                            .Select(k => k.Split(':'))
+                            .Where(p => p.Length == 2
+                                        && Guid.TryParseExact(p[0], "N", out _)
+                                        && int.TryParse(p[1], out _))
+                            .Select(p => new UserTeamAssignment(
+                                Guid.ParseExact(p[0], "N"),
+                                int.Parse(p[1])))
+                            .ToList();
+                        await UserManagement.SetUserTeamsAsync(_email, picks);
+                    }
+                }
+            },
+            duplicateMessage: "A user with that email already exists."))
+        {
             MudDialog.Close(DialogResult.Ok(true));
-        }
-        catch (SqlException ex) when (ex.Number is 2601 or 2627)
-        {
-            Snackbar.Add("A user with that email already exists.", Severity.Warning);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
         }
     }
 
@@ -299,24 +295,10 @@
     // unsaved-changes prompt so an accidental close never silently throws
     // away pending edits. Save runs the standard Save path (with its
     // CanSave gate); DontSave dismisses without saving.
-    private async Task TryCancelAsync()
-    {
-        if (!IsDirty)
-        {
-            MudDialog.Cancel();
-            return;
-        }
-        var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-        switch (choice)
-        {
-            case UnsavedChangesResult.Save:
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: async () =>
+            {
                 if (CanSave()) await Save();
-                return;
-            case UnsavedChangesResult.Cancel:
-                return;
-            case UnsavedChangesResult.DontSave:
-                MudDialog.Cancel();
-                return;
-        }
-    }
+            });
 }

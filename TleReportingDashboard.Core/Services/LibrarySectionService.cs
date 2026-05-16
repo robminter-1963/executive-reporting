@@ -50,7 +50,7 @@ public class LibrarySectionService : ILibrarySectionService
                         });
                     }
                 }
-                catch (SqlException ex) when (ex.Number == 208) // Invalid object name
+                catch (SqlException ex) when (ex.IsObjectMissing()) // Invalid object name
                 {
                     // Migration not applied on this DB yet — return empty so
                     // the Library / Builder fall back to the catch-all bucket.
@@ -88,7 +88,7 @@ public class LibrarySectionService : ILibrarySectionService
         {
             await cmd.ExecuteNonQueryAsync();
         }
-        catch (SqlException ex) when (ex.Number == 2601 || ex.Number == 2627)
+        catch (SqlException ex) when (ex.IsDuplicateKey())
         {
             // Unique-index collision (duplicate active name in same company).
             // Re-throw as InvalidOperationException so the dialog can show
@@ -118,7 +118,7 @@ public class LibrarySectionService : ILibrarySectionService
         {
             await cmd.ExecuteNonQueryAsync();
         }
-        catch (SqlException ex) when (ex.Number == 2601 || ex.Number == 2627)
+        catch (SqlException ex) when (ex.IsDuplicateKey())
         {
             throw new InvalidOperationException(
                 $"A section named \"{newName.Trim()}\" already exists for this company.");

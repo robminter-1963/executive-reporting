@@ -192,24 +192,13 @@
     // through the unsaved-changes prompt so an accidental dismiss
     // never silently throws away a typed-in custom hex. Save runs
     // ApplyCustom; DontSave dismisses.
-    private async Task TryCancelAsync()
-    {
-        if (IsDirty)
-        {
-            var choice = await UnsavedChangesPrompt.AskAsync(DialogService);
-            switch (choice)
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
             {
-                case UnsavedChangesResult.Save:
-                    if (IsValidHex(_customHex)) ApplyCustom();
-                    return;
-                case UnsavedChangesResult.Cancel:
-                    return; // stay
-                case UnsavedChangesResult.DontSave:
-                    break; // fall through to close
-            }
-        }
-        MudDialog.Cancel();
-    }
+                if (IsValidHex(_customHex)) ApplyCustom();
+                return Task.CompletedTask;
+            });
 
     // Loose hex validation: accepts "#RRGGBB" or "RRGGBB" (case-
     // insensitive). Skips the 3-digit short form because the AppTheme

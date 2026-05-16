@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TleReportingDashboard.Web.Services;
 
 namespace TleReportingDashboard.Web.Models;
 
@@ -31,8 +32,7 @@ public class SchedulePattern
         if (string.IsNullOrWhiteSpace(json)) return new SchedulePattern();
         try
         {
-            return JsonSerializer.Deserialize<SchedulePattern>(json,
-                       new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            return JsonSerializer.Deserialize<SchedulePattern>(json, AppJson.Compact)
                    ?? new SchedulePattern();
         }
         catch
@@ -42,5 +42,5 @@ public class SchedulePattern
     }
 
     public string ToJson() =>
-        JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = false });
+        JsonSerializer.Serialize(this, AppJson.Compact);
 }

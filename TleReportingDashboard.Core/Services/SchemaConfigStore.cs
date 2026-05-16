@@ -13,12 +13,6 @@ namespace TleReportingDashboard.Web.Services;
 // connection so concurrent first-access requests don't both hit the DB.
 public class SchemaConfigStore : ISchemaConfigStore
 {
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        WriteIndented = true
-    };
-
     private readonly string _connStr;
     private readonly ILogger<SchemaConfigStore> _logger;
     private readonly ConfigDbCache _configCache;
@@ -72,7 +66,7 @@ public class SchemaConfigStore : ISchemaConfigStore
 
     public async Task SaveAsync(SchemaConfig config, Guid connectionId, string? updatedBy = null)
     {
-        var json = JsonSerializer.Serialize(config, JsonOpts);
+        var json = JsonSerializer.Serialize(config, AppJson.Indented);
 
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync();
@@ -138,8 +132,8 @@ public class SchemaConfigStore : ISchemaConfigStore
         // Don't reference the same SchemaConfig instance on both connections
         // — a later edit to the target would silently mutate the source's cache.
         // Round-trip through JSON to make a deep copy.
-        var copyJson = JsonSerializer.Serialize(source, JsonOpts);
-        var copy = JsonSerializer.Deserialize<SchemaConfig>(copyJson, JsonOpts) ?? new SchemaConfig();
+        var copyJson = JsonSerializer.Serialize(source, AppJson.Indented);
+        var copy = JsonSerializer.Deserialize<SchemaConfig>(copyJson, AppJson.Indented) ?? new SchemaConfig();
 
         await SaveAsync(copy, targetConnectionId, updatedBy ?? $"clone-from:{sourceConnectionId:N}");
     }
@@ -175,7 +169,7 @@ public class SchemaConfigStore : ISchemaConfigStore
             var raw = cmd.ExecuteScalar() as string;
             if (string.IsNullOrWhiteSpace(raw)) return null;
 
-            var parsed = JsonSerializer.Deserialize<SchemaConfig>(raw, JsonOpts);
+            var parsed = JsonSerializer.Deserialize<SchemaConfig>(raw, AppJson.Indented);
             if (parsed is null) return null;
 
             SeedDomainsIfEmpty(parsed);

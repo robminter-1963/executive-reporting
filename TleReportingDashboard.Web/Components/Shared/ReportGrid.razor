@@ -1,4 +1,5 @@
 @inject IJSRuntime JS
+@inject TleReportingDashboard.Web.Services.IColumnWidthDefaultsService ColumnWidthDefaultsSvc
 @implements IDisposable
 
 @if (Data is not null && Data.Columns.Any())
@@ -16,11 +17,11 @@
         <table>
             <thead>
                 <tr>
-                    @foreach (var entry in BuildRenderColumns())
+                    @foreach (var entry in RenderColumns)
                     {
                         if (entry is ColumnMeta col)
                         {
-                            var (minWidth, defaultMax) = GetColumnWidths(col);
+                            var (minWidth, defaultMax) = GetColumnWidths(col, HonorFieldMinWidth);
                             var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
                             var align = GetCellAlign(col.DataType);
                             <th class="mud-table-cell"
@@ -47,11 +48,11 @@
                 @foreach (var row in PagedSortedRows)
                 {
                     <tr>
-                        @foreach (var entry in BuildRenderColumns())
+                        @foreach (var entry in RenderColumns)
                         {
                             if (entry is ColumnMeta col)
                             {
-                                var (minWidth, defaultMax) = GetColumnWidths(col);
+                                var (minWidth, defaultMax) = GetColumnWidths(col, HonorFieldMinWidth);
                                 var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
                                 var align = GetCellAlign(col.DataType);
                                 <td class="mud-table-cell"
@@ -119,11 +120,11 @@ else
                    wherever the admin dragged them in the chip bar instead of
                    always at the end. Each entry is either a ColumnMeta or a
                    TableCalcColumnDef. *@
-                @foreach (var entry in BuildRenderColumns())
+                @foreach (var entry in RenderColumns)
                 {
                     if (entry is ColumnMeta col)
                     {
-                        var (minWidth, defaultMax) = GetColumnWidths(col);
+                        var (minWidth, defaultMax) = GetColumnWidths(col, HonorFieldMinWidth);
                         var w = _customWidths.TryGetValue(col.FieldId, out var cw) ? cw : defaultMax;
                         var align = GetCellAlign(col.DataType);
                         var c = col;
@@ -321,6 +322,20 @@ else
 @code {
     [Parameter] public QueryResponse? Data { get; set; }
     [Parameter] public bool IsTruncated { get; set; }
+    // When true, two related "readable layout" behaviors kick in:
+    //   1. ColumnMeta.MinWidth (admin-set on FieldDefinition) is applied
+    //      as a floor on the auto-sized column width.
+    //   2. Non-text data types (currency, date, datetime, integer, decimal,
+    //      phone, boolean, percent) widen to their typical formatted-output
+    //      size — "$1,234,567.89", "May 15, 2026 2:30 PM" etc. fit without
+    //      truncation instead of squeezing to ~50px.
+    // Off by default so the Report Viewer + Master Dashboard tile drill-
+    // down keep their compact rendering; opted into by the Report Builder
+    // (table view) and the Detail Viewer where wider columns aid editing
+    // / drill-down reading. Total report width grows accordingly; the
+    // wrapping container's overflow-x: auto kicks in a horizontal
+    // scrollbar when columns sum wider than the viewport.
+    [Parameter] public bool HonorFieldMinWidth { get; set; }
     [Parameter] public Dictionary<string, int>? InitialColumnWidths { get; set; }
     [Parameter] public EventCallback<Dictionary<string, int>> OnColumnWidthsChanged { get; set; }
     [Parameter] public string? DefaultSortField { get; set; }
@@ -416,6 +431,25 @@ else
     // and JSInterop's serializer throws ObjectDisposedException trying
     // to write the reference.
     private bool _disposed;
+
+    // Cached snapshot of admin-configurable column-width defaults. Loaded once
+    // per component init; TypeBasedWidths consults this instead of hard-coded
+    // values. Null briefly during first render — Seed() is used as fallback
+    // so initial column sizing doesn't crash.
+    private TleReportingDashboard.Web.Models.ColumnWidthDefaults? _columnWidthDefaults;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _columnWidthDefaults = await ColumnWidthDefaultsSvc.GetAsync();
+        }
+        catch
+        {
+            // Service hiccup shouldn't crash the grid — fall back to seed.
+            _columnWidthDefaults = TleReportingDashboard.Web.Models.ColumnWidthDefaults.Seed();
+        }
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -634,49 +668,91 @@ else
         _dotNetRef = null;
     }
 
-    private static (int min, int max) GetColumnWidths(ColumnMeta col)
+    private (int min, int max) GetColumnWidths(ColumnMeta col, bool honorFieldMinWidth)
     {
         // ~6px per character at body2 font size + padding
         const int pxPerChar = 6;
         const int cellPadding = 12;
 
+        // Wide-mode type defaults apply uniformly to every column type
+        // (including text) when HonorFieldMinWidth is on — admins fully
+        // control text behavior via Admin → Column Widths (text WideMin=0
+        // means text columns size to content; a positive value gives all
+        // text columns that floor).
+        var typeBased = TypeBasedWidths(col.DataType, wide: honorFieldMinWidth);
+
         // The header-text floor is enforced in CSS via `min-width: max-content` on th
         // (see .resizable-grid th below) — no character-width estimate needed here.
         if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
         {
-            // For percent/currency, the formatted output is wider than raw char count
-            // (e.g., "95.250%" = 7 chars but needs ~80px, "$1,234,567.89" needs ~100px)
-            var typeFloor = col.DataType.ToLowerInvariant() switch
-            {
-                "percent" or "percentage" => 80,
-                "currency" or "money" => 70,
-                "date" => 90,
-                "integer" or "int" => 30,
-                _ => 40
-            };
-
             var charWidth = col.MaxLength.Value * pxPerChar + cellPadding;
-            var min = Math.Max(typeFloor, Math.Min(charWidth, 100));
+            var min = Math.Max(typeBased.min, Math.Min(charWidth, 100));
             var max = Math.Max(min, Math.Min(charWidth, 250));
-            return (min, max);
+            // Floor by typeBased.min so a non-text column with a small
+            // MaxLength (e.g. date with MaxLength=10) still hits the
+            // readable minimum in wide mode.
+            min = Math.Max(min, typeBased.min);
+            max = Math.Max(max, typeBased.min);
+            return honorFieldMinWidth ? ApplyMinWidthOverride(col.MinWidth, min, max) : (min, max);
         }
 
-        // Fallback by data type when MaxLength is not set
-        return col.DataType.ToLowerInvariant() switch
-        {
-            "currency" or "money"       => (70, 100),
-            "percent" or "percentage"   => (80, 100),
-            "date"                      => (90, 100),
-            "datetime"                  => (100, 120),
-            "integer" or "int"          => (35, 50),
-            _                           => (70, 150)
-        };
+        return honorFieldMinWidth
+            ? ApplyMinWidthOverride(col.MinWidth, typeBased.min, typeBased.max)
+            : (typeBased.min, typeBased.max);
+    }
+
+
+    // Two tiers of type-based default widths driven by ColumnWidthDefaults
+    // (admin-configurable via Admin → Column Widths). Falls back to the
+    // in-code seed when the service hasn't loaded yet (very brief window
+    // during first render).
+    //   compact (Report Viewer, dashboard tile drill-down): legacy small
+    //     widths — keeps dense reports dense.
+    //   wide (Report Builder table view, Detail Viewer): sizes non-text
+    //     columns to their typical formatted-output width so dates show
+    //     "May 15, 2026 2:30 PM" without truncation, etc.
+    private (int min, int max) TypeBasedWidths(string? dataType, bool wide)
+    {
+        var defaults = _columnWidthDefaults ?? TleReportingDashboard.Web.Models.ColumnWidthDefaults.Seed();
+        var entry = defaults.Resolve(dataType);
+        return wide ? (entry.WideMin, entry.WideMax) : (entry.CompactMin, entry.CompactMax);
+    }
+
+    // Layers the schema-asserted MinWidth on top of the auto-sized pair. A
+    // set MinWidth raises both the floor (so the column never sizes below
+    // it) and the default max (so the column actually OPENS at the
+    // requested width instead of needing a manual resize). Cap both at a
+    // sensible upper bound so an absurd value (e.g. 9999) doesn't dominate
+    // the grid layout. No-op when MinWidth is unset or non-positive.
+    // Authoritative override: when the field has an explicit MinWidth set,
+    // it replaces the auto-sized min directly (no Math.Max with the type
+    // default). The max is bumped to at least the override only when
+    // necessary — a column literally can't render at width < min, so the
+    // max has to accommodate. A MinWidth of 0 is treated as an explicit
+    // "no minimum" — distinct from null (unset).
+    private static (int min, int max) ApplyMinWidthOverride(int? minWidth, int min, int max)
+    {
+        if (!minWidth.HasValue) return (min, max);
+        var clamped = Math.Min(Math.Max(minWidth.Value, 0), 2000);
+        return (clamped, Math.Max(max, clamped));
     }
 
     // Numeric fields right-align; dates, text, bool, and everything else stay left.
     private static string GetCellAlign(string dataType) => IsNumeric(dataType) ? "text-align: right;" : "";
 
     // ── Calc column rendering (TC-4) ──────────────────────────────────
+    // Memoized projection used by the header + row + MudDataGrid render
+    // paths. Built once per state mutation that affects the column set
+    // (column order changes, hidden-column toggles, parameter changes
+    // — all clear the cache via _renderColumns = null). Without this,
+    // the read-only branch called BuildRenderColumns() once for the
+    // header AND inside the per-row @foreach, which meant N+1 dictionary
+    // builds on every render — measurable cost on a 500-row, 20-column
+    // detail view.
+    private List<object>? _renderColumns;
+
+    private List<object> RenderColumns => _renderColumns ??= BuildRenderColumns();
+
     // Width pair for a calc column. Mirrors the type-driven branch in
     // GetColumnWidths(ColumnMeta) but without MaxLength (calc results
     // don't have a declared max).
@@ -981,6 +1057,12 @@ else
                 _orderLoaded = true;
             }
         }
+
+        // Parameters could have shifted any of the inputs to BuildRenderColumns
+        // (Data, InitialColumnOrder, CalcColumns, AlwaysHiddenColumns, etc.).
+        // Drop the memoized cache so the next render rebuilds against the
+        // fresh inputs. Cheap — just nulls a reference.
+        _renderColumns = null;
     }
 
     // Used as @key on the data grid wrapper so the grid remounts when the column
@@ -1014,6 +1096,10 @@ else
         {
             _hiddenColumns.Add(fieldId);
         }
+
+        // Hidden-set change affects VisibleColumns → invalidate the
+        // RenderColumns memo so the next render rebuilds.
+        _renderColumns = null;
 
         if (OnHiddenColumnsChanged.HasDelegate)
             await OnHiddenColumnsChanged.InvokeAsync(_hiddenColumns.ToList());
@@ -1064,6 +1150,9 @@ else
         // this the grid would only update on the next query re-run because
         // BuildRenderColumns reads from InitialColumnOrder otherwise.
         _combinedColumnOrder = new List<string>(fieldIds);
+        // Order mutation → invalidate the RenderColumns memo so the next
+        // render reflects the new interleave.
+        _renderColumns = null;
         StateHasChanged();
     }
 

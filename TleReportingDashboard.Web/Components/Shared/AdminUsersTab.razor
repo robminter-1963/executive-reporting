@@ -3,6 +3,7 @@
 @inject IAdminService AdminService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject ILogger<AdminUsersTab> Logger
 @using TleReportingDashboard.Web.Services
 @using MudBlazor
 
@@ -173,14 +174,7 @@
             { x => x.CreatedBy, CurrentUserEmail },
             { x => x.ActingUserIsAdmin, AdminService.IsAdmin(CurrentUserEmail) }
         };
-        var options = new DialogOptions
-        {
-            BackdropClick = false,
-            CloseOnEscapeKey = false,
-            MaxWidth = MaxWidth.Small,
-            FullWidth = true
-        };
-        var dialog = await DialogService.ShowAsync<UserEditorDialog>("Add user", parameters, options);
+        var dialog = await DialogService.ShowAsync<UserEditorDialog>("Add user", parameters, DialogPresets.Locked(MaxWidth.Small));
         var result = await dialog.Result;
         if (result is not null && !result.Canceled) await ReloadAsync();
     }
@@ -193,14 +187,7 @@
             { x => x.CreatedBy, CurrentUserEmail },
             { x => x.ActingUserIsAdmin, AdminService.IsAdmin(CurrentUserEmail) }
         };
-        var options = new DialogOptions
-        {
-            BackdropClick = false,
-            CloseOnEscapeKey = false,
-            MaxWidth = MaxWidth.Small,
-            FullWidth = true
-        };
-        var dialog = await DialogService.ShowAsync<UserEditorDialog>("Edit user", parameters, options);
+        var dialog = await DialogService.ShowAsync<UserEditorDialog>("Edit user", parameters, DialogPresets.Locked(MaxWidth.Small));
         var result = await dialog.Result;
         if (result is not null && !result.Canceled) await ReloadAsync();
     }
@@ -216,15 +203,11 @@
         });
         if (confirmed != true) return;
 
-        try
+        if (await Snackbar.RunAsync(Logger, "deleting user",
+                () => UserManagement.DeleteAsync(u.Email)))
         {
-            await UserManagement.DeleteAsync(u.Email);
             _accessCountByEmail.Remove(u.Email);
             await ReloadAsync();
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to delete: {ex.Message}", Severity.Error);
         }
     }
 
@@ -235,14 +218,7 @@
             { x => x.Email, u.Email },
             { x => x.IsAdmin, u.IsAdmin }
         };
-        var options = new DialogOptions
-        {
-            BackdropClick = false,
-            CloseOnEscapeKey = false,
-            MaxWidth = MaxWidth.Small,
-            FullWidth = true
-        };
-        var dialog = await DialogService.ShowAsync<ManageUserAccessDialog>("Company access", parameters, options);
+        var dialog = await DialogService.ShowAsync<ManageUserAccessDialog>("Company access", parameters, DialogPresets.Locked(MaxWidth.Small));
         await dialog.Result;
         await ReloadAsync();
     }

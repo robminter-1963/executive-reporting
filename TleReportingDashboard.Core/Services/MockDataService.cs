@@ -174,6 +174,7 @@ public class MockDataService : ISchemaService, IQueryService, IReportService, IS
                 Label = fieldLookup[id].Label,
                 DataType = fieldLookup[id].DataType,
                 MaxLength = fieldLookup[id].MaxLength,
+                MinWidth = fieldLookup[id].MinWidth,
                 ValueSortOrder = fieldLookup[id].ValueSortOrder,
                 Format = fieldLookup[id].Format
             })

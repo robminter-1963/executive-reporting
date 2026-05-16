@@ -7,12 +7,6 @@ namespace TleReportingDashboard.Web.Services.Promotion;
 
 public sealed class PromotionPackageService : IPromotionPackageService
 {
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        WriteIndented = true
-    };
-
     private readonly ISchemaConfigStore _schemaStore;
     private readonly ICompanyConnectionAdminService _connections;
     private readonly ICompanyRegistry _companies;
@@ -91,7 +85,7 @@ public sealed class PromotionPackageService : IPromotionPackageService
             });
         }
 
-        var json = JsonSerializer.Serialize(pkg, JsonOpts);
+        var json = JsonSerializer.Serialize(pkg, AppJson.Indented);
         _logger.LogInformation(
             "Promotion package exported: {Entries} schema entries from {Env} by {User}",
             pkg.SchemaConfigs.Count, pkg.SourceEnvironment, exportedBy ?? "unknown");
@@ -106,7 +100,7 @@ public sealed class PromotionPackageService : IPromotionPackageService
         PromotionPackage? parsed;
         try
         {
-            parsed = JsonSerializer.Deserialize<PromotionPackage>(packageBytes, JsonOpts);
+            parsed = JsonSerializer.Deserialize<PromotionPackage>(packageBytes, AppJson.Indented);
         }
         catch (JsonException ex)
         {
@@ -154,8 +148,8 @@ public sealed class PromotionPackageService : IPromotionPackageService
         // Round-trip through JSON so the saved instance doesn't share
         // memory with the package's copy — same defensive copy the
         // schema store's Clone path uses.
-        var json = JsonSerializer.Serialize(entry.Schema, JsonOpts);
-        var copy = JsonSerializer.Deserialize<SchemaConfig>(json, JsonOpts) ?? new SchemaConfig();
+        var json = JsonSerializer.Serialize(entry.Schema, AppJson.Indented);
+        var copy = JsonSerializer.Deserialize<SchemaConfig>(json, AppJson.Indented) ?? new SchemaConfig();
 
         try
         {

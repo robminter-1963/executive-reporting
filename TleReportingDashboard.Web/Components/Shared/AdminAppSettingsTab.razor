@@ -2,6 +2,7 @@
 @using MudBlazor
 @inject IAppSettingsService AppSettingsSvc
 @inject ISnackbar Snackbar
+@inject ILogger<AdminAppSettingsTab> Logger
 
 <MudStack Spacing="3" Class="pa-2">
     <MudText Typo="Typo.body2" Color="Color.Secondary" Style="max-width: 720px;">
@@ -66,12 +67,9 @@
         _saving = true;
         try
         {
-            await AppSettingsSvc.SetAsync(AppSettingKeys.WorkerDashboardUrl, trimmed, CurrentUserEmail);
-            Snackbar.Add("Worker Dashboard URL saved.", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+            await Snackbar.RunAsync(Logger, "saving worker dashboard URL",
+                () => AppSettingsSvc.SetAsync(AppSettingKeys.WorkerDashboardUrl, trimmed, CurrentUserEmail),
+                successMessage: "Worker Dashboard URL saved.");
         }
         finally
         {

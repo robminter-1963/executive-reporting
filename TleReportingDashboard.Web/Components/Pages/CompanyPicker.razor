@@ -8,6 +8,7 @@
 @inject IAdminAccessService AdminAccess
 @inject IUserPreferenceService PreferenceService
 @inject IReportService ReportService
+@inject INotificationService Notifications
 @inject LandingGreetingState GreetingState
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Navigation
@@ -42,7 +43,7 @@
             <MudStack AlignItems="AlignItems.Center" Spacing="3">
                 @if (!_isRegistered)
                 {
-                    <MudIcon Icon="@Icons.Material.Filled.Block" Color="Color.Error" Style="font-size: 64px;" />
+                    <MudIcon Icon="@Icons.Material.Outlined.Block" Color="Color.Error" Style="font-size: 64px;" />
                     <MudText Typo="Typo.h5" Style="font-weight: 600;">You do not have access to this site</MudText>
                     <MudText Typo="Typo.body2" Color="Color.Secondary" Style="text-align: center;">
                         Your account isn't registered here. Contact your administrator to request access.
@@ -50,7 +51,7 @@
                 }
                 else
                 {
-                    <MudIcon Icon="@Icons.Material.Filled.Lock" Color="Color.Default" Style="font-size: 64px;" />
+                    <MudIcon Icon="@Icons.Material.Outlined.Lock" Color="Color.Default" Style="font-size: 64px;" />
                     <MudText Typo="Typo.h5" Style="font-weight: 600;">No access yet</MudText>
                     <MudText Typo="Typo.body2" Color="Color.Secondary" Style="text-align: center;">
                         Your account isn't mapped to any company yet. Ask your administrator to grant access and try signing in again.
@@ -78,6 +79,7 @@
             <LandingGreeting DisplayName="@_userName"
                              LastSeenUtc="@_lastSeenUtc"
                              UpdatedSinceCount="@_updatedSinceLastVisit"
+                             UnreadNotificationCount="@_unreadNotificationCount"
                              OnDismissed="HandleGreetingDismissed" />
         }
         <MudStack Spacing="4">
@@ -193,6 +195,9 @@
     // their granted companies — same authorization model as _visible).
     private DateTime? _lastSeenUtc;
     private int _updatedSinceLastVisit;
+    // Bell-icon unread count, fetched once at greeting time so the toast
+    // chip can mirror the count the user would see on the bell.
+    private int _unreadNotificationCount;
     // Local "the greeting is currently mounted on this page" flag.
     // True only when this page claimed the once-per-circuit slot.
     // Flipped off by the dismiss callback so the slide-up animation
@@ -361,6 +366,18 @@
                     }
                 }
                 _ = PreferenceService.TouchLastMasterDashboardSeenAsync(_userId);
+                // Unread bell count — separate try inside so a notifications
+                // table miss (pre-migration) or DB blip doesn't suppress
+                // the rest of the greeting payload above.
+                try
+                {
+                    if (!string.IsNullOrEmpty(_userEmail))
+                        _unreadNotificationCount = await Notifications.GetUnreadCountAsync(_userEmail);
+                }
+                catch (Exception nex)
+                {
+                    Logger.LogDebug(nex, "Unread notification count fetch failed on CompanyPicker");
+                }
             }
             catch (Exception ex)
             {

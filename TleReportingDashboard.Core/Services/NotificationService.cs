@@ -151,6 +151,52 @@ public sealed class NotificationService : INotificationService
         cmd.Parameters.Add(new SqlParameter("@email", userEmail));
         await cmd.ExecuteNonQueryAsync(ct);
     }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(@"
+            DELETE FROM EMPOWER.RPT_user_notifications
+             WHERE id = @id;", conn);
+        cmd.Parameters.Add(new SqlParameter("@id", id));
+        try { await cmd.ExecuteNonQueryAsync(ct); }
+        catch (SqlException ex) when (ex.IsObjectMissing())
+        {
+            _logger.LogDebug(ex, "RPT_user_notifications missing — delete no-op.");
+        }
+    }
+
+    public async Task<int> DeleteRangeAsync(
+        string userEmail,
+        DateTime? olderThanUtc = null,
+        bool readOnly = false,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(userEmail)) return 0;
+
+        // Compose WHERE filters dynamically rather than running multiple
+        // round-trips. SqlCommand auto-skips a parameter that doesn't
+        // appear in the SQL, so we build the predicate inline.
+        var clauses = new List<string> { "user_email = @email" };
+        if (olderThanUtc.HasValue) clauses.Add("created_at < @cutoff");
+        if (readOnly) clauses.Add("is_read = 1");
+        var sql = $"DELETE FROM EMPOWER.RPT_user_notifications WHERE {string.Join(" AND ", clauses)};";
+
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@email", userEmail));
+        if (olderThanUtc.HasValue)
+            cmd.Parameters.Add(new SqlParameter("@cutoff", olderThanUtc.Value));
+
+        try { return await cmd.ExecuteNonQueryAsync(ct); }
+        catch (SqlException ex) when (ex.IsObjectMissing())
+        {
+            _logger.LogDebug(ex, "RPT_user_notifications missing — delete-range no-op.");
+            return 0;
+        }
+    }
 }
 
 // Mock for in-memory dev mode (when ConfigDb isn't configured).
@@ -214,5 +260,25 @@ public sealed class InMemoryNotificationService : INotificationService
             }
         }
         return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        lock (_gate) { _store.RemoveAll(n => n.Id == id); }
+        return Task.CompletedTask;
+    }
+
+    public Task<int> DeleteRangeAsync(string userEmail, DateTime? olderThanUtc = null,
+        bool readOnly = false, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(userEmail)) return Task.FromResult(0);
+        lock (_gate)
+        {
+            var removed = _store.RemoveAll(n =>
+                string.Equals(n.UserEmail, userEmail, StringComparison.OrdinalIgnoreCase)
+                && (!olderThanUtc.HasValue || n.CreatedAt < olderThanUtc.Value)
+                && (!readOnly || n.IsRead));
+            return Task.FromResult(removed);
+        }
     }
 }

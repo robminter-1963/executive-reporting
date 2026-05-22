@@ -8,7 +8,7 @@
                                 Margin="Margin.Dense" Style="max-width: 260px;"
                                 PickerVariant="PickerVariant.Dialog"
                                 ShowToolbar="false" />
-            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+            <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                            Color="Color.Default" OnClick="ClearDateRange"
                            Style="@(_dateRange is null ? "visibility: hidden;" : "")"
                            title="Clear date range" />
@@ -59,13 +59,13 @@
                                       DebounceInterval="500" OnDebounceIntervalElapsed="() => EmitFilters()" />
                     }
                 </MudTooltip>
-                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                OnClick="() => RemoveFilter(filter.FieldId)"
                                title="Remove filter" />
             </MudStack>
         }
 
-        <MudMenu Icon="@Icons.Material.Filled.Add" Variant="Variant.Text" Color="Color.Primary"
+        <MudMenu Icon="@Icons.Material.Outlined.Add" Variant="Variant.Text" Color="Color.Primary"
                  Dense Size="Size.Small" Label="Add Filter">
             @foreach (var field in FilterableFields)
             {

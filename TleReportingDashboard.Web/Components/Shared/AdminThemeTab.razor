@@ -40,12 +40,12 @@
         </MudText>
         <MudStack Row Spacing="1">
             <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                       StartIcon="@Icons.Material.Filled.RestartAlt"
+                       StartIcon="@Icons.Material.Outlined.RestartAlt"
                        OnClick="ResetToDefaults">
                 Reset to defaults
             </MudButton>
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                       StartIcon="@Icons.Material.Filled.Save"
+                       StartIcon="@Icons.Material.Outlined.Save"
                        Disabled="@_saving"
                        OnClick="Save">
                 @(_saving ? "Saving..." : "Save")

@@ -42,7 +42,7 @@
             @if (_savedAt is not null)
             {
                 <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined"
-                         Icon="@Icons.Material.Filled.Save">
+                         Icon="@Icons.Material.Outlined.Save">
                     Saved @_savedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
                     @(string.IsNullOrEmpty(_savedBy) ? "" : $" by {_savedBy}")
                 </MudChip>
@@ -50,7 +50,7 @@
             else if (_selectedConnectionId is not null)
             {
                 <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
-                         Icon="@Icons.Material.Filled.EditNote">
+                         Icon="@Icons.Material.Outlined.EditNote">
                     Not configured
                 </MudChip>
             }
@@ -105,7 +105,7 @@
                               Style="font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85rem;"
                               HelperText="Must return: member_ext_id, email." />
                 <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                           StartIcon="@Icons.Material.Filled.AlternateEmail"
+                           StartIcon="@Icons.Material.Outlined.AlternateEmail"
                            OnClick="PreviewUserEmails"
                            Disabled="@(_busy || string.IsNullOrWhiteSpace(_userEmailsSql))">
                     Preview emails
@@ -181,7 +181,7 @@
                             </MudSelect>
                         </MudTd>
                         <MudTd>
-                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                            <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                            Color="Color.Default"
                                            OnClick="@(() => _typeRows.Remove(context))" />
                         </MudTd>
@@ -189,14 +189,14 @@
                 </MudTable>
                 <MudStack Row Spacing="2">
                     <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                               StartIcon="@Icons.Material.Filled.Add"
+                               StartIcon="@Icons.Material.Outlined.Add"
                                OnClick="AddTypeRow">
                         Add type
                     </MudButton>
                     @if (_discoveredTypes.Count > 0)
                     {
                         <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                                   StartIcon="@Icons.Material.Filled.AutoAwesome"
+                                   StartIcon="@Icons.Material.Outlined.AutoAwesome"
                                    OnClick="ImportDiscoveredTypes">
                             Import types from last preview (@_discoveredTypes.Count)
                         </MudButton>
@@ -209,19 +209,19 @@
         <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
             <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
                 <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                           StartIcon="@Icons.Material.Filled.Visibility"
+                           StartIcon="@Icons.Material.Outlined.Visibility"
                            OnClick="Preview"
                            Disabled="@(_busy || string.IsNullOrWhiteSpace(_teamsSql))">
                     Preview teams
                 </MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                           StartIcon="@Icons.Material.Filled.Code"
+                           StartIcon="@Icons.Material.Outlined.Code"
                            OnClick="@(() => ShowJoinSql(null))"
                            Disabled="@(string.IsNullOrWhiteSpace(_teamsSql) || string.IsNullOrWhiteSpace(_membersSql))">
                     Show join SQL
                 </MudButton>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           StartIcon="@Icons.Material.Filled.Save"
+                           StartIcon="@Icons.Material.Outlined.Save"
                            OnClick="Save"
                            Disabled="@(_busy || string.IsNullOrWhiteSpace(_teamsSql))">
                     Save
@@ -321,12 +321,12 @@
                         </MudText>
                         <MudSpacer />
                         <MudButton Variant="Variant.Text" Color="Color.Default" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.Code"
+                                   StartIcon="@Icons.Material.Outlined.Code"
                                    OnClick="@(() => ShowJoinSql(_selectedTeam.TeamId))"
                                    Disabled="@(string.IsNullOrWhiteSpace(_teamsSql) || string.IsNullOrWhiteSpace(_membersSql))">
                             Show SQL
                         </MudButton>
-                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                        <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                        OnClick="@(() => _selectedTeam = null)" />
                     </MudStack>
 

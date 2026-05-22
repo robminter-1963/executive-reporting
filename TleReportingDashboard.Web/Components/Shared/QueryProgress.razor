@@ -52,8 +52,8 @@
 
     private string _icon =>
         _elapsedSeconds >= SlowThresholdSeconds
-            ? Icons.Material.Filled.WarningAmber
-            : Icons.Material.Filled.HourglassTop;
+            ? Icons.Material.Outlined.WarningAmber
+            : Icons.Material.Outlined.HourglassTop;
 
     private string _iconColor =>
         _elapsedSeconds >= VerySlowThresholdSeconds ? "#D32F2F" :

@@ -14,6 +14,26 @@ public interface IQueryPipeline
     Task<QueryResponse> ExecuteAsync(QueryRequest request, IReadOnlyCollection<string> userRoles);
 }
 
+// Thrown when the SQL has been built and dispatched to the DB but the
+// driver rejected it (syntax error, missing column, type mismatch, etc.).
+// Carries the actual SQL + bound parameters so callers can surface them
+// in a debug dialog instead of just "exception happened". Build-time
+// failures (schema misconfig, unknown field id, join resolution) still
+// throw their original exception types — they're caught before any SQL
+// is emitted, so there's nothing to attach.
+public sealed class QueryExecutionException : Exception
+{
+    public string Sql { get; }
+    public Dictionary<string, object?>? Parameters { get; }
+
+    public QueryExecutionException(string sql, Dictionary<string, object?>? parameters, Exception inner)
+        : base(inner.Message, inner)
+    {
+        Sql = sql;
+        Parameters = parameters;
+    }
+}
+
 public sealed partial class SqlEmitter : IQueryPipeline
 {
     private readonly ISchemaConfigStore _schemaStore;
@@ -24,6 +44,27 @@ public sealed partial class SqlEmitter : IQueryPipeline
 
     [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]{0,127}(\.[A-Za-z_][A-Za-z0-9_]{0,127})?$", RegexOptions.Compiled)]
     private static partial Regex SafeIdentifierRegex();
+
+    // Matches "<alias>.<column>" references in a SQL fragment. Used by the
+    // custom-filter pass below to discover alias references in a filter's
+    // SqlCondition when the filter's JoinId metadata isn't set. The first
+    // capture group is the alias; we ignore the column part.
+    [GeneratedRegex(@"\b([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_]", RegexOptions.Compiled)]
+    private static partial Regex AliasRefRegex();
+
+    // Extracts the distinct aliases referenced as "<alias>.<column>" in a
+    // SQL fragment (case-insensitive). Used to discover unintroduced aliases
+    // in custom-filter SqlConditions.
+    private static IEnumerable<string> ExtractAliasesFromSql(string? sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql)) yield break;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (System.Text.RegularExpressions.Match m in AliasRefRegex().Matches(sql))
+        {
+            var alias = m.Groups[1].Value;
+            if (seen.Add(alias)) yield return alias;
+        }
+    }
 
     public SqlEmitter(
         ISchemaConfigStore schemaStore,
@@ -89,9 +130,24 @@ public sealed partial class SqlEmitter : IQueryPipeline
             });
         }
 
+        // Include the date-filter field's table in join resolution. Normal
+        // reports usually have the date field as one of the report's display
+        // columns, so it's already in resolvedFields — this is a no-op for
+        // them. KPIs only reference the date field for filtering (it's never
+        // in FieldIds), so without this they'd miss the JOIN whenever the
+        // date field's source table differs from the aggregated field's.
+        var dateFilterFields = new List<FieldDefinition>();
+        if (!string.IsNullOrWhiteSpace(request.DateFieldId))
+        {
+            var df = schema.Fields.FirstOrDefault(f =>
+                f.Id.Equals(request.DateFieldId, StringComparison.OrdinalIgnoreCase));
+            if (df is not null) dateFilterFields.Add(df);
+        }
+
         var allReferencedFields = resolvedFields
             .Concat(filterFields)
             .Concat(advancedFilterFields)
+            .Concat(dateFilterFields)
             .DistinctBy(f => f.Id)
             .ToList();
 
@@ -116,6 +172,52 @@ public sealed partial class SqlEmitter : IQueryPipeline
         // surface here so admins can spot them via standard log search.
         var joins = JoinResolver.ResolveJoins(allReferencedFields, schema.Joins, primaryName, primaryAlias,
             warnings: msg => _logger.LogWarning("JoinResolver: {Message}", msg));
+
+        // Active custom filters can declare a JoinId that references an
+        // existing schema join their SqlCondition relies on. The field-
+        // driven resolver above doesn't know about custom filters, so a
+        // filter like "c_30.CODEINT <> 21" would silently miss its
+        // c_30 join. Fold those joins (with their prerequisite chains)
+        // into the result so the WHERE clause's aliases are in scope.
+        if (request.CustomFilterIds is { Count: > 0 })
+        {
+            var activeFilters = schema.CustomFilters
+                .Where(cf => request.CustomFilterIds.Contains(cf.Id, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+
+            // Pass 1: explicit JoinId references (cleanest path).
+            var explicitJoinIds = activeFilters
+                .Select(cf => cf.JoinId)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!);
+
+            // Pass 2: defensive — admins sometimes author a filter that
+            // references an alias in SqlCondition without setting JoinId.
+            // Scan the condition text for any "<alias>.<column>" references
+            // and find a schema join whose TargetAlias matches. Folds the
+            // discovered joins in alongside the explicit ones so the WHERE
+            // clause's aliases stay in scope even when the filter's metadata
+            // is incomplete.
+            var inferredJoinIds = new List<string>();
+            var aliasToJoin = schema.Joins
+                .Where(j => !string.IsNullOrWhiteSpace(j.TargetAlias))
+                .GroupBy(j => j.TargetAlias!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            foreach (var cf in activeFilters)
+            {
+                if (string.IsNullOrWhiteSpace(cf.SqlCondition)) continue;
+                foreach (var alias in ExtractAliasesFromSql(cf.SqlCondition))
+                {
+                    if (aliasToJoin.TryGetValue(alias, out var match))
+                        inferredJoinIds.Add(match.Id);
+                }
+            }
+
+            joins = JoinResolver.AddJoins(joins,
+                explicitJoinIds.Concat(inferredJoinIds),
+                schema.Joins, primaryName, primaryAlias,
+                warnings: msg => _logger.LogWarning("JoinResolver: {Message}", msg));
+        }
 
         // Diagnostic — always emitted at Error level so it bypasses the
         // default Serilog filter (which is set to "Error" in appsettings).
@@ -167,8 +269,25 @@ public sealed partial class SqlEmitter : IQueryPipeline
             guardrails, filterFields, advancedFilterFields,
             schema.CustomFilters, schema.Lookups, dialect, request.PrimaryTable);
 
-        var (rows, totalCount, isTruncated) = await ExecuteSqlAsync(
-            sql, parameters, guardrails, request.ConnectionId, dialect);
+        List<Dictionary<string, object?>> rows;
+        int totalCount;
+        bool isTruncated;
+        try
+        {
+            (rows, totalCount, isTruncated) = await ExecuteSqlAsync(
+                sql, parameters, guardrails, request.ConnectionId, dialect);
+        }
+        catch (Exception ex)
+        {
+            // Attach the emitted SQL + bound parameters to the exception so the
+            // caller's Show-SQL dialog can render them alongside the error.
+            // Without this, an execute failure propagates only the driver message,
+            // and the SQL is lost between BuildSql above and the exception itself.
+            var paramDict = parameters.ToDictionary(
+                p => p.ParameterName,
+                p => p.Value is DBNull ? null : p.Value);
+            throw new QueryExecutionException(sql, paramDict, ex);
+        }
 
         stopwatch.Stop();
 
@@ -197,7 +316,16 @@ public sealed partial class SqlEmitter : IQueryPipeline
             Rows = rows,
             TotalCount = totalCount,
             IsTruncated = isTruncated,
-            ExecutionMs = stopwatch.ElapsedMilliseconds
+            ExecutionMs = stopwatch.ElapsedMilliseconds,
+            // Surfaced for the right-click "Show SQL" dialog. Same shape
+            // QueryService produces — DBNull → null so the dialog's simple
+            // table rendering shows "<null>" rather than the sentinel.
+            Sql = sql,
+            Parameters = parameters.ToDictionary(
+                p => p.ParameterName,
+                p => p.Value is DBNull ? null : p.Value),
+            ScopingNote = request.Scoping?.Reason,
+            ScopingForceNoMatch = request.Scoping?.ForceNoMatch == true
         };
     }
 
@@ -379,27 +507,43 @@ public sealed partial class SqlEmitter : IQueryPipeline
             sb.AppendLine($"GROUP BY {string.Join(", ", aggregation.GroupByExpressions)}");
         }
 
-        // ORDER BY
-        AppendOrderBy(sb, request, resolvedFields, lookups);
+        // Single-row aggregation: every selected field is wrapped in an
+        // aggregate function AND there are no GROUP BY columns. The query
+        // returns exactly one row, so ORDER BY + OFFSET/FETCH are dead
+        // weight (and the bare-column fallback ORDER BY would violate the
+        // GROUP BY rule anyway). KPI cards hit this path; report tiles
+        // never do because they aggregate client-side in DashboardView.
+        var aggLookup = request.Aggregations is { Count: > 0 }
+            ? new HashSet<string>(request.Aggregations.Keys, StringComparer.OrdinalIgnoreCase)
+            : null;
+        var isSingleRowAggregation = aggLookup is not null
+            && aggregation.GroupByExpressions.Count == 0
+            && resolvedFields.All(f => aggLookup.Contains(f.Id));
 
-        // Pagination: OFFSET/FETCH. Clamp at the absolute MaxPageSize,
-        // then again at guardrails.MaxRows so a scheduled-export pageSize
-        // of QueryRequest.MaxPageSize never exceeds the admin-configured
-        // row cap. (Don't clamp at guardrails.PageSize — that's the UI
-        // default page size for interactive paging, not the upper bound.)
-        var pageSize = Math.Clamp(request.PageSize, 1, QueryRequest.MaxPageSize);
-        if (guardrails.MaxRows > 0)
-            pageSize = Math.Min(pageSize, guardrails.MaxRows);
-        var page = Math.Max(request.Page, 1);
-        var offset = (page - 1) * pageSize;
+        if (!isSingleRowAggregation)
+        {
+            // ORDER BY
+            AppendOrderBy(sb, request, resolvedFields, lookups);
 
-        // OFFSET/FETCH NEXT is ANSI SQL — both SQL Server and Postgres
-        // support it. (Postgres also has LIMIT/OFFSET but OFFSET/FETCH
-        // works in both.)
-        sb.AppendLine("OFFSET @_offset ROWS");
-        sb.AppendLine("FETCH NEXT @_pageSize ROWS ONLY");
-        parameters.Add(dialect.CreateParameter("@_offset", offset));
-        parameters.Add(dialect.CreateParameter("@_pageSize", pageSize));
+            // Pagination: OFFSET/FETCH. Clamp at the absolute MaxPageSize,
+            // then again at guardrails.MaxRows so a scheduled-export pageSize
+            // of QueryRequest.MaxPageSize never exceeds the admin-configured
+            // row cap. (Don't clamp at guardrails.PageSize — that's the UI
+            // default page size for interactive paging, not the upper bound.)
+            var pageSize = Math.Clamp(request.PageSize, 1, QueryRequest.MaxPageSize);
+            if (guardrails.MaxRows > 0)
+                pageSize = Math.Min(pageSize, guardrails.MaxRows);
+            var page = Math.Max(request.Page, 1);
+            var offset = (page - 1) * pageSize;
+
+            // OFFSET/FETCH NEXT is ANSI SQL — both SQL Server and Postgres
+            // support it. (Postgres also has LIMIT/OFFSET but OFFSET/FETCH
+            // works in both.)
+            sb.AppendLine("OFFSET @_offset ROWS");
+            sb.AppendLine("FETCH NEXT @_pageSize ROWS ONLY");
+            parameters.Add(dialect.CreateParameter("@_offset", offset));
+            parameters.Add(dialect.CreateParameter("@_pageSize", pageSize));
+        }
 
         return (sb.ToString(), parameters);
     }
@@ -551,7 +695,24 @@ public sealed partial class SqlEmitter : IQueryPipeline
         }
         else
         {
-            // Default ORDER BY first field (required by SQL Server for OFFSET/FETCH)
+            // Default ORDER BY first field (required by SQL Server for OFFSET/FETCH).
+            // EXCEPT when every selected field is itself aggregated — there are no
+            // dimension columns to ORDER BY on, and the raw column reference would
+            // violate the aggregation/GROUP-BY rule. Used by KPI cards which run a
+            // single-row aggregation (SUM/AVG/etc) with no GROUP BY at all.
+            // ORDER BY (SELECT NULL) is Microsoft's canonical placeholder when you
+            // must satisfy the OFFSET/FETCH syntax but don't actually care about
+            // ordering — single-row results have nothing meaningful to sort by.
+            var aggLookup = request.Aggregations is { Count: > 0 }
+                ? new HashSet<string>(request.Aggregations.Keys, StringComparer.OrdinalIgnoreCase)
+                : null;
+            var allFieldsAggregated = aggLookup is not null
+                && resolvedFields.All(f => aggLookup.Contains(f.Id));
+            if (allFieldsAggregated)
+            {
+                sb.AppendLine("ORDER BY (SELECT NULL)");
+                return;
+            }
             var first = resolvedFields[0];
             var sortExpr = ResolveSortExpression(first, lookups);
             sb.AppendLine($"ORDER BY {sortExpr} ASC");

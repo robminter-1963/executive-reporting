@@ -18,7 +18,7 @@
         <MudChip T="string" Size="Size.Small"
                  Variant="Variant.Outlined"
                  Color="@(Bytes is null ? Color.Default : Color.Success)"
-                 Icon="@(Bytes is null ? Icons.Material.Filled.DoNotDisturb : Icons.Material.Filled.CheckCircle)">
+                 Icon="@(Bytes is null ? Icons.Material.Outlined.DoNotDisturb : Icons.Material.Outlined.CheckCircle)">
             @(Bytes is null ? "not set" : $"{Bytes.Length:N0} bytes loaded")
         </MudChip>
 
@@ -27,7 +27,7 @@
         <MudFileUpload T="IBrowserFile" Accept="@Accept" FilesChanged="OnFileChanged">
             <ActivatorContent>
                 <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                           StartIcon="@Icons.Material.Filled.UploadFile">
+                           StartIcon="@Icons.Material.Outlined.UploadFile">
                     Choose file…
                 </MudButton>
             </ActivatorContent>
@@ -36,7 +36,7 @@
         @if (Bytes is not null)
         {
             <MudTooltip Text="Clear">
-                <MudIconButton Icon="@Icons.Material.Filled.Clear" Size="Size.Small"
+                <MudIconButton Icon="@Icons.Material.Outlined.Clear" Size="Size.Small"
                                Color="Color.Error" OnClick="OnClearClicked" />
             </MudTooltip>
         }

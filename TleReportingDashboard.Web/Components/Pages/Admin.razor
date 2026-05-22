@@ -28,7 +28,7 @@
            fresh tab — fall back to the all-companies picker (/?all=1).
            A System Support user landing directly on /admin previously
            had no path back to the picker; this restores it. *@
-        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+        <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                        title="Back"
                        OnClick="GoBack" />
         @* Explicit shortcut to the all-companies picker — reachable
@@ -36,14 +36,14 @@
            Support users who jump between admin sections and the
            picker repeatedly. *@
         <MudTooltip Text="All companies">
-            <MudIconButton Icon="@Icons.Material.Filled.Apps"
+            <MudIconButton Icon="@Icons.Material.Outlined.Apps"
                            OnClick="@(() => Navigation.NavigateTo("/?all=1"))" />
         </MudTooltip>
         <MudText Typo="Typo.h5" Style="font-weight: 600;">Admin</MudText>
         @if (_isFullAdmin)
         {
             <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
-                     Icon="@Icons.Material.Filled.Shield"
+                     Icon="@Icons.Material.Outlined.Shield"
                      Style="font-size: 0.65rem; height: 22px;">
                 GLOBAL ADMIN
             </MudChip>
@@ -54,27 +54,17 @@
                scoped access (e.g. System Support). The chip color shifts
                to differentiate it from the global-admin chip. *@
             <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined"
-                     Icon="@Icons.Material.Filled.LockPerson"
+                     Icon="@Icons.Material.Outlined.LockPerson"
                      Style="font-size: 0.65rem; height: 22px;">
                 LIMITED ACCESS
             </MudChip>
         }
         <MudSpacer />
-        @if (_isFullAdmin)
-        {
-            <MudTooltip Text="Preview the proposed ad-hoc filter UX — nothing persists">
-                <MudButton Variant="Variant.Outlined" Color="Color.Warning"
-                           StartIcon="@Icons.Material.Filled.Science"
-                           OnClick="@(() => Navigation.NavigateTo("/prototype/filters"))">
-                    Filter Prototype
-                </MudButton>
-            </MudTooltip>
-        }
         @if (_allowedSections.Contains(AdminSections.SchemaBuilder))
         {
             <MudTooltip Text="Schema Builder — edit per-company field catalog">
                 <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                           StartIcon="@Icons.Material.Filled.DataObject"
+                           StartIcon="@Icons.Material.Outlined.DataObject"
                            OnClick="@(() => Navigation.NavigateTo("/admin/schema-builder"))">
                     Schema Builder
                 </MudButton>
@@ -99,68 +89,68 @@
                component-level guard inside each tab is a backstop. *@
             @if (_allowedSections.Contains(AdminSections.Companies))
             {
-                <MudTabPanel Text="Companies" Icon="@Icons.Material.Filled.Business">
+                <MudTabPanel Text="Companies" Icon="@Icons.Material.Outlined.Business">
                     <AdminCompaniesTab />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.DbConnections))
             {
-                <MudTabPanel Text="DB Connections" Icon="@Icons.Material.Filled.Storage">
+                <MudTabPanel Text="DB Connections" Icon="@Icons.Material.Outlined.Storage">
                     <AdminConnectionsTab />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.Users))
             {
-                <MudTabPanel Text="Users" Icon="@Icons.Material.Filled.ManageAccounts">
+                <MudTabPanel Text="Users" Icon="@Icons.Material.Outlined.ManageAccounts">
                     <AdminUsersTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.Roles))
             {
-                <MudTabPanel Text="Roles" Icon="@Icons.Material.Filled.Badge">
+                <MudTabPanel Text="Roles" Icon="@Icons.Material.Outlined.Badge">
                     <AdminRolesTab CurrentUserEmail="@_currentUserEmail" CanEditAdminSections="@_isFullAdmin" />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.TeamBuilder))
             {
-                <MudTabPanel Text="Team Builder" Icon="@Icons.Material.Filled.Groups">
+                <MudTabPanel Text="Team Builder" Icon="@Icons.Material.Outlined.Groups">
                     <AdminTeamBuilderTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.Schedules))
             {
-                <MudTabPanel Text="Schedules" Icon="@Icons.Material.Filled.Schedule">
+                <MudTabPanel Text="Schedules" Icon="@Icons.Material.Outlined.Schedule">
                     <AdminSchedulesTab CurrentUserEmail="@_currentUserEmail"
                                        CurrentUserId="@_currentUserId" />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.SchemaHistory))
             {
-                <MudTabPanel Text="Schema History" Icon="@Icons.Material.Filled.History">
+                <MudTabPanel Text="Schema History" Icon="@Icons.Material.Outlined.History">
                     <AdminSchemaHistoryTab />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.Promotion))
             {
-                <MudTabPanel Text="Promotion" Icon="@Icons.Material.Filled.Sync">
+                <MudTabPanel Text="Promotion" Icon="@Icons.Material.Outlined.Sync">
                     <AdminPromotionTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.Theme))
             {
-                <MudTabPanel Text="Theme" Icon="@Icons.Material.Filled.Palette">
+                <MudTabPanel Text="Theme" Icon="@Icons.Material.Outlined.Palette">
                     <AdminThemeTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.AppSettings))
             {
-                <MudTabPanel Text="App Settings" Icon="@Icons.Material.Filled.Tune">
+                <MudTabPanel Text="App Settings" Icon="@Icons.Material.Outlined.Tune">
                     <AdminAppSettingsTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
             @if (_allowedSections.Contains(AdminSections.ColumnWidths))
             {
-                <MudTabPanel Text="Column Widths" Icon="@Icons.Material.Filled.ViewColumn">
+                <MudTabPanel Text="Column Widths" Icon="@Icons.Material.Outlined.ViewColumn">
                     <AdminColumnWidthsTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
@@ -173,8 +163,7 @@
     private bool _accessGranted;
     // True for global admins (everything visible). False for limited-access
     // roles like System Support — they see only the tabs / buttons their
-    // role allows. Drives the chip color in the header and the visibility
-    // of the Filter Prototype button.
+    // role allows. Drives the chip color in the header.
     private bool _isFullAdmin;
     private IReadOnlySet<string> _allowedSections =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);

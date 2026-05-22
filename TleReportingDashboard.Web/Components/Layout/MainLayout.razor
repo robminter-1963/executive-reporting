@@ -111,7 +111,7 @@
             }
             @foreach (var crumb in _crumbs)
             {
-                <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" Style="color: #94A3B8;" />
+                <MudIcon Icon="@Icons.Material.Outlined.ChevronRight" Size="Size.Small" Style="color: #94A3B8;" />
                 @if (!string.IsNullOrEmpty(crumb.Url))
                 {
                     <MudLink Href="@crumb.Url" Typo="Typo.body2"
@@ -155,7 +155,7 @@
                                    Variant="Variant.Text" DisableElevation
                                    Class="user-badge-button"
                                    Style="text-transform: none; color: #0F172A; padding: 6px 8px; min-width: 0; max-width: none; width: max-content; flex-shrink: 0;"
-                                   EndIcon="@Icons.Material.Filled.ArrowDropDown"
+                                   EndIcon="@Icons.Material.Outlined.ArrowDropDown"
                                    OnClick="ToggleUserMenu">
                             <MudStack Spacing="0" Style="text-align: right; line-height: 1.25; min-width: max-content; width: max-content; padding: 2px 0;">
                                 <MudText Typo="Typo.body2" Style="font-weight: 500; color: #0F172A;">
@@ -188,22 +188,22 @@
                            Worker URL is configured (Admin → App Settings). *@
                         @if (_hasAdminAccess)
                         {
-                            <MudMenuItem Icon="@Icons.Material.Filled.LibraryBooks"
+                            <MudMenuItem Icon="@Icons.Material.Outlined.LibraryBooks"
                                          OnClick="@(() => Navigation.NavigateTo("/reports"))">
                                 Report Library
                             </MudMenuItem>
-                            <MudMenuItem Icon="@Icons.Material.Filled.AdminPanelSettings"
+                            <MudMenuItem Icon="@Icons.Material.Outlined.AdminPanelSettings"
                                          OnClick="@(() => Navigation.NavigateTo("/admin"))">
                                 Admin
                             </MudMenuItem>
                         }
-                        <MudMenuItem Icon="@Icons.Material.Filled.Settings"
+                        <MudMenuItem Icon="@Icons.Material.Outlined.Settings"
                                      OnClick="@(() => Navigation.NavigateTo("/preferences"))">
                             User Preferences
                         </MudMenuItem>
                         @if (_hasAdminAccess && !string.IsNullOrWhiteSpace(_workerDashboardUrl))
                         {
-                            <MudMenuItem Icon="@Icons.Material.Filled.Engineering"
+                            <MudMenuItem Icon="@Icons.Material.Outlined.Engineering"
                                          Href="@_workerDashboardUrl"
                                          Target="_blank">
                                 Worker Jobs
@@ -221,7 +221,7 @@
                             </MudText>
                             @foreach (var u in _simUsers)
                             {
-                                <MudMenuItem Icon="@(u.IsAdmin ? Icons.Material.Filled.AdminPanelSettings : Icons.Material.Filled.Person)"
+                                <MudMenuItem Icon="@(u.IsAdmin ? Icons.Material.Outlined.AdminPanelSettings : Icons.Material.Outlined.Person)"
                                              OnClick="@(() => Navigation.NavigateTo($"/dev/switch-user?email={Uri.EscapeDataString(u.Email)}", forceLoad: true))">
                                     @(u.DisplayName ?? u.Email)
                                     @if (string.Equals(u.Email, _userEmail, StringComparison.OrdinalIgnoreCase))
@@ -237,7 +237,7 @@
                                StubAuthenticationHandler synthesizes claims
                                from the email alone when RPT_users has no
                                matching row. *@
-                            <MudMenuItem Icon="@Icons.Material.Filled.PersonOff"
+                            <MudMenuItem Icon="@Icons.Material.Outlined.PersonOff"
                                          OnClick="@(() => Navigation.NavigateTo($"/dev/switch-user?email={Uri.EscapeDataString(GhostEmail)}", forceLoad: true))">
                                 @GhostLabel
                                 @if (string.Equals(GhostEmail, _userEmail, StringComparison.OrdinalIgnoreCase))
@@ -245,7 +245,7 @@
                                     <span style="color: #94A3B8; margin-left: 8px;">(current)</span>
                                 }
                             </MudMenuItem>
-                            <MudMenuItem Icon="@Icons.Material.Filled.RestartAlt"
+                            <MudMenuItem Icon="@Icons.Material.Outlined.RestartAlt"
                                          OnClick="@(() => Navigation.NavigateTo("/dev/clear-user", forceLoad: true))">
                                 Reset to default
                             </MudMenuItem>
@@ -260,7 +260,7 @@
                         @if (!_isDevMode)
                         {
                             <MudDivider />
-                            <MudMenuItem Icon="@Icons.Material.Filled.Logout"
+                            <MudMenuItem Icon="@Icons.Material.Outlined.Logout"
                                          OnClick="@(() => Navigation.NavigateTo("/MicrosoftIdentity/Account/SignOut", forceLoad: true))">
                                 Sign out
                             </MudMenuItem>
@@ -285,7 +285,7 @@
                             <MudBadge Content="@_unreadCount" Color="Color.Error"
                                       Overlap="true" Visible="@(_unreadCount > 0)"
                                       Bordered="true">
-                                <MudIconButton Icon="@(_unreadCount > 0 ? Icons.Material.Filled.NotificationsActive : Icons.Material.Filled.Notifications)"
+                                <MudIconButton Icon="@(_unreadCount > 0 ? Icons.Material.Outlined.NotificationsActive : Icons.Material.Outlined.Notifications)"
                                                Size="Size.Small"
                                                Style="color: #475569;"
                                                OnClick="ToggleNotificationMenu" />
@@ -321,7 +321,7 @@
                                                   Style="@($"padding: 4px 0; opacity: {(n.IsRead ? 0.6 : 1)};")">
                                             <MudIcon Icon="@NotificationIcon(n.Kind)" Size="Size.Small"
                                                      Style="@($"color: {(n.IsRead ? "#94A3B8" : "#4F46E5")}; margin-top: 4px;")" />
-                                            <MudStack Spacing="0">
+                                            <MudStack Spacing="0" Style="flex: 1; min-width: 0;">
                                                 <MudText Typo="Typo.body2"
                                                          Style="@($"font-weight: {(n.IsRead ? "400" : "600")}; line-height: 1.3;")">
                                                     @n.Title
@@ -338,15 +338,47 @@
                                                     @FormatRelativeTime(n.CreatedAt)
                                                 </MudText>
                                             </MudStack>
+                                            @* Per-row delete. stopPropagation keeps the click from
+                                               also firing the parent MudMenuItem's OnClick (which
+                                               would mark-as-read and possibly navigate). *@
+                                            <div @onclick:stopPropagation="true">
+                                                <MudTooltip Text="Remove this notification" Placement="Placement.Left">
+                                                    <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                                                                   Size="Size.Small"
+                                                                   OnClick="@(() => DeleteNotification(n))" />
+                                                </MudTooltip>
+                                            </div>
                                         </MudStack>
                                     </MudMenuItem>
                                 }
+                                @* Bulk-clear footer. Divider + four options ordered from
+                                   least-destructive (read only) to most (everything). Always
+                                   visible when there is at least one notification so users
+                                   can prune the inbox without per-item clicking. *@
+                                <MudDivider />
+                                <MudMenuItem OnClick="ClearReadNotifications"
+                                             Icon="@Icons.Material.Outlined.DoneAll">
+                                    Clear read notifications
+                                </MudMenuItem>
+                                <MudMenuItem OnClick="@(() => ClearOlderThanAsync(7))"
+                                             Icon="@Icons.Material.Outlined.History">
+                                    Clear older than 7 days
+                                </MudMenuItem>
+                                <MudMenuItem OnClick="@(() => ClearOlderThanAsync(30))"
+                                             Icon="@Icons.Material.Outlined.History">
+                                    Clear older than 30 days
+                                </MudMenuItem>
+                                <MudMenuItem OnClick="ClearAllNotifications"
+                                             Icon="@Icons.Material.Outlined.DeleteSweep"
+                                             IconColor="Color.Error">
+                                    Clear all
+                                </MudMenuItem>
                             </div>
                         }
                     </ChildContent>
                 </MudMenu>
                 <MudTooltip Text="Help" Placement="Placement.Bottom">
-                    <MudIconButton Icon="@Icons.Material.Filled.HelpOutline" Size="Size.Small"
+                    <MudIconButton Icon="@Icons.Material.Outlined.HelpOutline" Size="Size.Small"
                                    Style="color: var(--text-on-toolbar, #0F172A);" OnClick="OpenHelp" />
                 </MudTooltip>
             }
@@ -746,16 +778,56 @@
         _unreadCount = 0;
     }
 
+    // ── Notification removal ──
+    // Server-side delete + optimistic in-memory prune. Failures are
+    // logged but don't surface to the user — the bell dropdown's job
+    // is to be lightweight; if the DB delete really fails the row
+    // reappears on the next menu open, which is its own signal.
+
+    private async Task DeleteNotification(NotificationRecord n)
+    {
+        try { await Notifications.DeleteAsync(n.Id); }
+        catch (Exception ex) { Logger.LogWarning(ex, "Delete failed for {Id}", n.Id); }
+        _notifications.Remove(n);
+        _unreadCount = _notifications.Count(x => !x.IsRead);
+    }
+
+    private async Task ClearReadNotifications()
+    {
+        try { await Notifications.DeleteRangeAsync(_userEmail, olderThanUtc: null, readOnly: true); }
+        catch (Exception ex) { Logger.LogWarning(ex, "Clear-read failed for {Email}", _userEmail); }
+        _notifications.RemoveAll(n => n.IsRead);
+        // Unread count is unchanged by definition; recompute defensively.
+        _unreadCount = _notifications.Count(x => !x.IsRead);
+    }
+
+    private async Task ClearOlderThanAsync(int days)
+    {
+        var cutoff = DateTime.UtcNow.AddDays(-days);
+        try { await Notifications.DeleteRangeAsync(_userEmail, olderThanUtc: cutoff, readOnly: false); }
+        catch (Exception ex) { Logger.LogWarning(ex, "Clear-older-than-{Days}d failed for {Email}", days, _userEmail); }
+        _notifications.RemoveAll(n => n.CreatedAt < cutoff);
+        _unreadCount = _notifications.Count(x => !x.IsRead);
+    }
+
+    private async Task ClearAllNotifications()
+    {
+        try { await Notifications.DeleteRangeAsync(_userEmail, olderThanUtc: null, readOnly: false); }
+        catch (Exception ex) { Logger.LogWarning(ex, "Clear-all failed for {Email}", _userEmail); }
+        _notifications.Clear();
+        _unreadCount = 0;
+    }
+
     // Maps notification kind → icon. Unknown kinds get a generic bell so
     // producers can add new kinds without a UI change (the icon is just a
     // hint anyway; the title carries the actual message).
     private static string NotificationIcon(string kind) => kind switch
     {
-        NotificationKinds.ReportShared       => Icons.Material.Filled.Share,
-        NotificationKinds.ScheduleRan        => Icons.Material.Filled.Schedule,
-        NotificationKinds.ScheduleFailed     => Icons.Material.Filled.ErrorOutline,
-        NotificationKinds.AdminAnnouncement  => Icons.Material.Filled.Campaign,
-        _                                    => Icons.Material.Filled.Notifications
+        NotificationKinds.ReportShared       => Icons.Material.Outlined.Share,
+        NotificationKinds.ScheduleRan        => Icons.Material.Outlined.Schedule,
+        NotificationKinds.ScheduleFailed     => Icons.Material.Outlined.ErrorOutline,
+        NotificationKinds.AdminAnnouncement  => Icons.Material.Outlined.Campaign,
+        _                                    => Icons.Material.Outlined.Notifications
     };
 
     private static string FormatRelativeTime(DateTime utc)

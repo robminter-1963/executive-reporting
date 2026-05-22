@@ -14,7 +14,7 @@
 @if (string.IsNullOrEmpty(Doc))
 {
     <MudTooltip Text="@Text" Placement="@Placement" Arrow>
-        <MudIcon Icon="@Icons.Material.Filled.HelpOutline"
+        <MudIcon Icon="@Icons.Material.Outlined.HelpOutline"
                  Size="@Size"
                  Style="@($"color: {IconColor}; cursor: help; vertical-align: middle;")" />
     </MudTooltip>
@@ -24,7 +24,7 @@ else
     <MudTooltip Text="@($"{Text}  (click for more)")" Placement="@Placement" Arrow>
         <MudLink Href="@HrefForDoc" Target="_blank" Underline="Underline.None"
                  Style="display: inline-flex; align-items: center;">
-            <MudIcon Icon="@Icons.Material.Filled.HelpOutline"
+            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline"
                      Size="@Size"
                      Style="@($"color: {IconColor}; cursor: help; vertical-align: middle;")" />
         </MudLink>

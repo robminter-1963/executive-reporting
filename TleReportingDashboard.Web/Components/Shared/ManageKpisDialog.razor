@@ -1,0 +1,271 @@
+@using TleReportingDashboard.Web.Models
+@using TleReportingDashboard.Web.Services
+@inject ICompanyKpiService KpiSvc
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ILogger<ManageKpisDialog> Logger
+
+@* Per-company KPI list manager. Houses the Add / Edit / Remove flows and
+   the per-company "Show KPI band" toggle. Returns true via DialogResult
+   when anything was committed so the caller can reload the band. *@
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Outlined.Insights" />
+            <MudText Typo="Typo.h6">Manage KPIs</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width: 640px;">
+
+            @* Band visibility toggle — flips RPT_companies.show_kpi_band.
+               Lets admins build KPIs while the band stays hidden, or
+               temporarily clear the band without losing definitions. *@
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2"
+                      Style="border: 1px solid #E2E8F0; border-radius: 8px; padding: 12px;">
+                <MudIcon Icon="@(_bandVisible ? Icons.Material.Outlined.Visibility : Icons.Material.Outlined.VisibilityOff)"
+                         Color="@(_bandVisible ? Color.Primary : Color.Default)" />
+                <MudStack Spacing="0" Style="flex: 1;">
+                    <MudText Typo="Typo.body2" Style="font-weight: 600;">Show KPI band on this dashboard</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        When off, the band is hidden everywhere on this company's dashboard. KPI definitions are kept.
+                    </MudText>
+                </MudStack>
+                <MudSwitch T="bool" Value="_bandVisible" Color="Color.Primary"
+                           ValueChanged="@(async (bool v) => await OnBandVisibilityChanged(v))" />
+            </MudStack>
+
+            <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">
+                    @_kpis.Count KPI@(_kpis.Count == 1 ? "" : "s")
+                </MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Outlined.Add"
+                           OnClick="OpenAddDialog">
+                    Add KPI
+                </MudButton>
+            </MudStack>
+
+            @if (_kpis.Count == 0)
+            {
+                <MudPaper Elevation="0"
+                          Class="pa-6 d-flex flex-column align-center"
+                          Style="border: 1px dashed #DADCE0; border-radius: 8px;">
+                    <MudIcon Icon="@Icons.Material.Outlined.QueryStats" Size="Size.Large" Color="Color.Default" />
+                    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                        No KPIs yet.
+                    </MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1"
+                             Style="max-width: 420px; text-align: center;">
+                        Click <strong>Add KPI</strong> to define your first one. The KPI band only renders when at least one is defined and the toggle above is on.
+                    </MudText>
+                </MudPaper>
+            }
+            else
+            {
+                @* Drag-to-reorder list. Drop on a row to insert above it;
+                   drop on the trailing zone to land at the end. Matches
+                   the existing drag-handle pattern used by sections and
+                   column-order rows. *@
+                <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 8px; padding: 4px;">
+                    @for (var i = 0; i < _kpis.Count; i++)
+                    {
+                        var idx = i;
+                        var k = _kpis[idx];
+                        <div draggable="true"
+                             @ondragstart="@(() => OnDragStart(idx))"
+                             @ondragover="OnDragOver"
+                             @ondragover:preventDefault="true"
+                             @ondrop="@(() => OnDrop(idx))"
+                             @ondrop:preventDefault="true"
+                             style="@($"display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-bottom: 1px solid #F1F5F9; cursor: grab; background: {(_dragOverIdx == idx ? "#F1F5F9" : "transparent")};")">
+                            <MudIcon Icon="@Icons.Material.Outlined.DragIndicator" Size="Size.Small"
+                                     Style="color: #94A3B8;" />
+                            <MudStack Spacing="0" Style="flex: 1; min-width: 0;">
+                                <MudText Typo="Typo.body2" Style="font-weight: 600;">
+                                    @(string.IsNullOrWhiteSpace(k.Label) ? k.FieldId : k.Label)
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                         Style="font-size: 0.7rem;">
+                                    @KpiAggregations.Display(k.Aggregation) of @k.FieldId
+                                    @if (!string.IsNullOrEmpty(k.Period))
+                                    {
+                                        <text> · @KpiPeriods.Display(k.Period)</text>
+                                    }
+                                    @if (k.ComparePrevious)
+                                    {
+                                        <text> · vs. previous</text>
+                                    }
+                                    <text> · width @(k.ColSpan)/12</text>
+                                </MudText>
+                            </MudStack>
+                            <MudTooltip Text="Edit">
+                                <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                               OnClick="@(() => OpenEditDialog(k))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Remove">
+                                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => ConfirmRemove(k))" />
+                            </MudTooltip>
+                        </div>
+                    }
+                </MudPaper>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   OnClick="@(() => MudDialog?.Close(DialogResult.Ok(_dirty)))">
+            Done
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter, EditorRequired] public Guid CompanyId { get; set; }
+    [Parameter, EditorRequired] public List<CompanyConnectionRecord> Connections { get; set; } = new();
+
+    private List<CompanyKpi> _kpis = new();
+    private bool _bandVisible = true;
+    private bool _dirty;  // returned to caller so the dashboard knows to reload
+
+    // Drag-and-drop state. Plain index swap — no fancy mid-drop indicator
+    // beyond a background tint on the hovered row.
+    private int? _dragFromIdx;
+    private int? _dragOverIdx;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _kpis = await KpiSvc.GetByCompanyAsync(CompanyId);
+        _bandVisible = await KpiSvc.IsBandVisibleAsync(CompanyId);
+    }
+
+    private async Task OnBandVisibilityChanged(bool v)
+    {
+        try
+        {
+            await KpiSvc.SetBandVisibleAsync(CompanyId, v);
+            _bandVisible = v;
+            _dirty = true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Toggling KPI band visibility failed for {CompanyId}", CompanyId);
+            Snackbar.Add("Couldn't update the KPI band visibility.", Severity.Warning);
+        }
+    }
+
+    private async Task OpenAddDialog()
+    {
+        var parameters = new DialogParameters<AddKpiDialog>
+        {
+            { x => x.CompanyId, CompanyId },
+            { x => x.Connections, Connections },
+            { x => x.Initial, null }
+        };
+        var options = new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false };
+        var dlg = await DialogService.ShowAsync<AddKpiDialog>("Add KPI", parameters, options);
+        var result = await dlg.Result;
+        if (result is null || result.Canceled || result.Data is not CompanyKpi kpi) return;
+        try
+        {
+            await KpiSvc.CreateAsync(kpi, kpi.CreatedByEmail);
+            _kpis = await KpiSvc.GetByCompanyAsync(CompanyId);
+            _dirty = true;
+            Snackbar.Add("KPI added.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Create KPI failed");
+            Snackbar.Add($"Couldn't add KPI: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenEditDialog(CompanyKpi existing)
+    {
+        var parameters = new DialogParameters<AddKpiDialog>
+        {
+            { x => x.CompanyId, CompanyId },
+            { x => x.Connections, Connections },
+            { x => x.Initial, existing }
+        };
+        var options = new DialogOptions { BackdropClick = false, CloseOnEscapeKey = false };
+        var dlg = await DialogService.ShowAsync<AddKpiDialog>("Edit KPI", parameters, options);
+        var result = await dlg.Result;
+        if (result is null || result.Canceled || result.Data is not CompanyKpi edited) return;
+        try
+        {
+            // Keep id + sort_order + created_at from the existing row.
+            edited.Id = existing.Id;
+            edited.SortOrder = existing.SortOrder;
+            edited.CreatedAt = existing.CreatedAt;
+            edited.CreatedByEmail = existing.CreatedByEmail;
+            await KpiSvc.UpdateAsync(edited);
+            _kpis = await KpiSvc.GetByCompanyAsync(CompanyId);
+            _dirty = true;
+            Snackbar.Add("KPI updated.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Update KPI failed");
+            Snackbar.Add($"Couldn't update KPI: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ConfirmRemove(CompanyKpi kpi)
+    {
+        var name = string.IsNullOrWhiteSpace(kpi.Label) ? kpi.FieldId : kpi.Label!;
+        var confirmed = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = "Remove KPI",
+            Message = $"Remove the \"{name}\" KPI? You can re-add it later.",
+            YesText = "Remove",
+            CancelText = "Cancel"
+        });
+        if (confirmed != true) return;
+        try
+        {
+            await KpiSvc.DeleteAsync(kpi.Id);
+            _kpis = await KpiSvc.GetByCompanyAsync(CompanyId);
+            _dirty = true;
+            Snackbar.Add("KPI removed.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Delete KPI failed");
+            Snackbar.Add($"Couldn't remove KPI: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ── Drag-and-drop reorder ──
+    private void OnDragStart(int idx)  { _dragFromIdx = idx; _dragOverIdx = idx; }
+    private void OnDragOver()          { /* placeholder so the @ondragover handler fires */ }
+    private async Task OnDrop(int idx)
+    {
+        if (_dragFromIdx is null) { _dragOverIdx = null; return; }
+        var from = _dragFromIdx.Value;
+        _dragFromIdx = null;
+        _dragOverIdx = null;
+        if (from == idx) return;
+
+        var moved = _kpis[from];
+        _kpis.RemoveAt(from);
+        _kpis.Insert(idx, moved);
+
+        try
+        {
+            await KpiSvc.ReorderAsync(CompanyId, _kpis.Select(k => k.Id).ToList());
+            _dirty = true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Reorder KPIs failed");
+            Snackbar.Add($"Couldn't save new order: {ex.Message}", Severity.Error);
+            // Reload to recover from a partial-write state.
+            _kpis = await KpiSvc.GetByCompanyAsync(CompanyId);
+        }
+    }
+}

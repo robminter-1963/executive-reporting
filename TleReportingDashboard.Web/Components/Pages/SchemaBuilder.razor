@@ -111,7 +111,7 @@
         </MudAlert>
         <div>
             <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                       StartIcon="@Icons.Material.Filled.ArrowBack"
+                       StartIcon="@Icons.Material.Outlined.ArrowBack"
                        OnClick="@(() => Navigation.NavigateTo("/admin"))">
                 Back to Admin
             </MudButton>
@@ -131,12 +131,12 @@
           Style="height: calc(100vh - 64px); overflow: hidden; padding: 0; margin-left: 15px;">
     <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
         <MudTooltip Text="Back to Admin">
-            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+            <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                            OnClick="@(() => Navigation.NavigateTo("/admin"))" />
         </MudTooltip>
         <MudText Typo="Typo.h5" Style="font-weight: 600;">Schema Config Builder</MudText>
         <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
-                 Icon="@Icons.Material.Filled.Shield"
+                 Icon="@Icons.Material.Outlined.Shield"
                  Style="font-size: 0.65rem; height: 22px;">
             ADMIN
         </MudChip>
@@ -187,14 +187,14 @@
             {
                 <MudTooltip Text="Copy fields, joins, lookups, and custom filters from another connection of the same type (same company)">
                     <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                               StartIcon="@Icons.Material.Filled.ContentCopy"
+                               StartIcon="@Icons.Material.Outlined.ContentCopy"
                                OnClick="OpenCloneDialog">
                         Clone from…
                     </MudButton>
                 </MudTooltip>
                 <MudTooltip Text="Bulk-rename a table reference across every Field, Join, Lookup, and Custom Filter. Preview before commit.">
                     <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                               StartIcon="@Icons.Material.Filled.FindReplace"
+                               StartIcon="@Icons.Material.Outlined.FindReplace"
                                OnClick="OpenRenameDialog">
                         Rename reference…
                     </MudButton>
@@ -210,21 +210,478 @@
            First tab on purpose: field, join, and report definitions all lean
            on the aliases catalog, so it's the natural starting point when
            setting up a new connection. *@
-        <MudTabPanel Text="Table Aliases" Icon="@Icons.Material.Filled.TableRows">
+        <MudTabPanel Text="Table Aliases" Icon="@Icons.Material.Outlined.TableRows">
             <AdminTableAliasesTab ConnectionId="_selectedConnectionId"
                                   OnEntriesChanged="LoadTableAliasesAsync"
                                   OnAliasRenamed="HandleAliasRenamed" />
         </MudTabPanel>
 
-        @* ── Tab 2: Fields ── *@
-        <MudTabPanel Text="Fields" Icon="@Icons.Material.Filled.ViewColumn">
+        @* ── Tab 2: Joins ── *@
+        <MudTabPanel Text="Joins" Icon="@Icons.Material.Outlined.Link">
+            <MudStack Spacing="2" Class="pa-2">
+                @* Suggested Joins panel — provider-discovered relationships
+                   for the currently-selected entity. Today this is Dataverse-
+                   only (Metadata API M:1 / 1:M); other providers don't show
+                   the panel at all. The "Add" button promotes a suggestion
+                   to a real JoinEntry with logical names + JOIN ON pre-
+                   filled, so admins don't have to know the publisher-prefixed
+                   FK column name to author a join. The panel renders even
+                   when no table is selected (with a hint to pick one) so
+                   the feature is discoverable from this tab. *@
+                @if (IsDataverseConnectionSelected())
+                {
+                    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                                @if (_selectedTable is not null)
+                                {
+                                    <span>Suggested Joins for @_selectedTable.TableName</span>
+                                    @if (!_loadingSuggestedJoins)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Inline="true"> (@_suggestedJoins.Count)</MudText>
+                                    }
+                                }
+                                else
+                                {
+                                    <span>Suggested Joins</span>
+                                }
+                            </MudText>
+                            @if (_loadingSuggestedJoins)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                            }
+                        </MudStack>
+                        @if (_selectedTable is null)
+                        {
+                            <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
+                                Pick an entity on the <strong>Tables</strong> tab to discover its
+                                Dataverse relationships (lookups in / lookups out). Each suggestion
+                                here can be added as a join with one click.
+                            </MudAlert>
+                        }
+                        else if (_loadingSuggestedJoins)
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">Discovering relationships…</MudText>
+                        }
+                        else if (_suggestedJoins.Any())
+                        {
+                            <MudDataGrid T="SuggestedJoin" Items="_suggestedJoins" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                                <Columns>
+                                    <TemplateColumn T="SuggestedJoin" title="Direction" HeaderStyle="width: 11%;" CellStyle="width: 11%;">
+                                        <CellTemplate>
+                                            <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small"
+                                                     Color="@(context.Item.Direction == "many-to-one" ? Color.Primary : Color.Secondary)">
+                                                @context.Item.Direction
+                                            </MudChip>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                    <TemplateColumn T="SuggestedJoin" title="From → To" HeaderStyle="width: 28%;" CellStyle="width: 28%;">
+                                        <CellTemplate>
+                                            <MudText Typo="Typo.body2">
+                                                @context.Item.SourceTable → @context.Item.TargetTable
+                                            </MudText>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                    <TemplateColumn T="SuggestedJoin" title="On" HeaderStyle="width: 36%;" CellStyle="width: 36%;">
+                                        <CellTemplate>
+                                            <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.75rem;">
+                                                @context.Item.SourceColumn = @context.Item.TargetColumn
+                                            </MudText>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                    <TemplateColumn T="SuggestedJoin" title="Relationship" HeaderStyle="width: 18%;" CellStyle="width: 18%;">
+                                        <CellTemplate>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.RelationshipName</MudText>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                    <TemplateColumn T="SuggestedJoin" title="" HeaderStyle="width: 90px; text-align: right;" CellStyle="width: 90px; text-align: right;">
+                                        <CellTemplate>
+                                            @{ var sjRow = context.Item; }
+                                            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary"
+                                                       StartIcon="@Icons.Material.Outlined.Add"
+                                                       OnClick="() => AddSuggestedJoin(sjRow)">
+                                                Add
+                                            </MudButton>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                </Columns>
+                            </MudDataGrid>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                No relationships discovered for @_selectedTable.TableName.
+                            </MudText>
+                        }
+                    </MudPaper>
+                }
+
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Join Definitions (@_joins.Count)
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Add" OnClick="() => OpenJoinDialog(null, true)">
+                            Add Join
+                        </MudButton>
+                    </MudStack>
+
+                    @if (_joins.Any())
+                    {
+                        <MudDataGrid T="JoinEntry" Items="_joins" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                            <Columns>
+                                <TemplateColumn T="JoinEntry" title="Join ID" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title="Type" HeaderStyle="width: 10%;" CellStyle="width: 10%;">
+                                    <CellTemplate>
+                                        @if (context.Item.UseRawSql)
+                                        {
+                                            <MudChip T="string" Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small">Raw SQL</MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.body2">@context.Item.JoinType</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                @* Source columns expose the parent table this join hangs off
+                                   so admins can scan precedence at a glance. Empty cells
+                                   (legacy joins with no source set) trigger the soft-warning
+                                   tooltip in JoinResolver at query time. *@
+                                <TemplateColumn T="JoinEntry" title="Source Table" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        @if (!string.IsNullOrWhiteSpace(context.Item.SourceTable))
+                                        {
+                                            <MudText Typo="Typo.body2">@context.Item.SourceTable</MudText>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-style: italic;">(unset)</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title="Source Alias" HeaderStyle="width: 8%;" CellStyle="width: 8%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.SourceAlias</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title="Target Table" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.TargetTable</MudText>
+                                        @if (!string.IsNullOrWhiteSpace(context.Item.Alias))
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">AS @context.Item.Alias</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                @* PR-5. Primary scope. Em-dash for generic
+                                   joins (eligible for any report) so the
+                                   table+alias column reads as a deliberate
+                                   "scoped to" rather than missing data. *@
+                                <TemplateColumn T="JoinEntry" title="Primary" HeaderStyle="width: 12%;" CellStyle="width: 12%;">
+                                    <CellTemplate>
+                                        @if (string.IsNullOrWhiteSpace(context.Item.PrimaryTable))
+                                        {
+                                            <MudTooltip Text="Generic — eligible for any report's primary table.">
+                                                <MudText Typo="Typo.body2" Color="Color.Secondary">—</MudText>
+                                            </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.body2">@context.Item.PrimaryTable</MudText>
+                                            @if (!string.IsNullOrWhiteSpace(context.Item.PrimaryAlias))
+                                            {
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">AS @context.Item.PrimaryAlias</MudText>
+                                            }
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title="SQL Preview">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px;"
+                                                 title="@context.Item.BuildSql()">
+                                            @context.Item.BuildSql()
+                                        </MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="JoinEntry" title=""
+                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        @{ var jRow = context.Item; }
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                                       Color="Color.Primary"
+                                                       OnClick="() => OpenJoinDialog(jRow, false)"
+                                                       title="Edit join" />
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                                       Color="Color.Error"
+                                                       OnClick="() => RemoveJoin(jRow)"
+                                                       title="Delete join" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            No joins defined yet. Click Add Join to create one.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab 3: Custom Filters ── *@
+        <MudTabPanel Text="Custom Filters" Icon="@Icons.Material.Outlined.FilterAlt">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Custom Filters (@_customFilters.Count)
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Add" OnClick="() => OpenCustomFilterDialog(null, true)">
+                            Add Filter
+                        </MudButton>
+                    </MudStack>
+
+                    @if (_customFilters.Any())
+                    {
+                        <MudDataGrid T="CustomFilterEntry" Items="_customFilters" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                            <Columns>
+                                <TemplateColumn T="CustomFilterEntry" title="ID" HeaderStyle="width: 12%;" CellStyle="width: 12%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title="Label" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.Label</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                @* GroupName surfaces in the Report Builder as the
+                                   bucket header these presets cluster under —
+                                   typically a Field Section like "Loan" / "Borrower".
+                                   Em-dash for blank so admins can spot uncategorized
+                                   filters at a glance. *@
+                                <TemplateColumn T="CustomFilterEntry" title="Field Section" HeaderStyle="width: 10%;" CellStyle="width: 10%;">
+                                    <CellTemplate>
+                                        @if (string.IsNullOrWhiteSpace(context.Item.GroupName))
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.body2">@context.Item.GroupName</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title="Description" HeaderStyle="width: 18%;" CellStyle="width: 18%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.Description</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title="CTE" HeaderStyle="width: 60px; text-align: center;" CellStyle="width: 60px; text-align: center;">
+                                    <CellTemplate>
+                                        @if (!string.IsNullOrWhiteSpace(context.Item.SqlPreamble))
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Outlined.Check" Size="Size.Small" Color="Color.Success" />
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title="SQL Condition">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px;"
+                                                 title="@context.Item.SqlCondition">
+                                            @context.Item.SqlCondition
+                                        </MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="CustomFilterEntry" title=""
+                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        @{ var cfRow = context.Item; }
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                                       Color="Color.Primary"
+                                                       OnClick="() => OpenCustomFilterDialog(cfRow, false)"
+                                                       title="Edit filter" />
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                                       Color="Color.Error"
+                                                       OnClick="() => _customFilters.Remove(cfRow)"
+                                                       title="Delete filter" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            No custom filters defined yet. Click Add Filter to create one.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab 4: Lookups ── *@
+        <MudTabPanel Text="Lookups" Icon="@Icons.Material.Outlined.TableView">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Named Lookups / CTEs (@_lookups.Count)
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Add" OnClick="() => OpenLookupDialog(null, true)">
+                            Add Lookup
+                        </MudButton>
+                    </MudStack>
+
+                    @if (_lookups.Any())
+                    {
+                        <MudDataGrid T="LookupEntry" Items="_lookups" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                            <Columns>
+                                <TemplateColumn T="LookupEntry" title="ID" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupEntry" title="Label" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.Label</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupEntry" title="CTE Preview">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 350px;"
+                                                 title="@context.Item.SqlPreamble">
+                                            @context.Item.SqlPreamble
+                                        </MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupEntry" title="JOIN" HeaderStyle="width: 80px;" CellStyle="width: 80px;">
+                                    <CellTemplate>
+                                        @if (!string.IsNullOrWhiteSpace(context.Item.SqlJoin))
+                                        {
+                                            <MudIcon Icon="@Icons.Material.Outlined.Check" Size="Size.Small" Color="Color.Success" />
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupEntry" title=""
+                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        @{ var luRow = context.Item; }
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                                       Color="Color.Primary"
+                                                       OnClick="@(() => OpenLookupDialog(luRow, false))"
+                                                       title="Edit lookup" />
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                                       Color="Color.Error"
+                                                       OnClick="@(() => _lookups.Remove(luRow))"
+                                                       title="Delete lookup" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            No lookups defined yet. Lookups are reusable CTE definitions that fields and custom filters can reference by ID.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab 5: Field Sections ── *@
+        <MudTabPanel Text="Field Sections" Icon="@Icons.Material.Outlined.Category">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Field Sections (@_domainList.Count)
+                        </MudText>
+                        <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
+                            <MudTextField @bind-Value="_newDomainName"
+                                          Label="New field section" Variant="Variant.Outlined"
+                                          Margin="Margin.Dense" Style="max-width: 240px;"
+                                          OnKeyDown="OnNewDomainKeyDown" />
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Outlined.Add" OnClick="AddDomain"
+                                       Disabled="@(string.IsNullOrWhiteSpace(_newDomainName))">
+                                Add
+                            </MudButton>
+                        </MudStack>
+                    </MudStack>
+
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                        Field Sections are the groups shown in the Field Picker (e.g. Loan, Borrower, Dates).
+                        A field section can't be deleted while fields still reference it.
+                    </MudText>
+
+                    @if (_domainList.Any())
+                    {
+                        <MudDataGrid T="string" Items="_domainList" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                            <Columns>
+                                <TemplateColumn T="string" title="Name" HeaderStyle="width: 40%;" CellStyle="width: 40%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="string" title="Fields using it" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
+                                    <CellTemplate>
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                 Color="@(CountFieldsUsingDomain(context.Item) > 0 ? Color.Primary : Color.Default)">
+                                            @CountFieldsUsingDomain(context.Item)
+                                        </MudChip>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="string" title=""
+                                                HeaderStyle="width: 1px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 1px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                            <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                                           Color="Color.Default" title="Rename"
+                                                           OnClick="() => RenameDomain(context.Item)" />
+                                            <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                                           Color="Color.Error" title="Delete"
+                                                           Disabled="@(CountFieldsUsingDomain(context.Item) > 0)"
+                                                           OnClick="() => DeleteDomain(context.Item)" />
+                                        </MudStack>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            No field sections defined yet. Add one above — fields created after will be able to pick it.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab 6: Fields ── *@
+        <MudTabPanel Text="Fields" Icon="@Icons.Material.Outlined.ViewColumn">
             <MudStack Spacing="2" Class="pa-2">
                 @* Table browser *@
                 <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
                     <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
                         <MudTextField @bind-Value="_tableFilter" Placeholder="@($"Filter tables (e.g. {TablePlaceholder()})...")"
                                       Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 300px;"
-                                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search"
                                       Immediate DebounceInterval="500" OnDebounceIntervalElapsed="LoadTables" />
                         <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
                                    OnClick="LoadTables" Disabled="_loadingTables">
@@ -319,7 +776,7 @@
                                         else
                                         {
                                             <MudMenu Label="Add" Variant="Variant.Outlined" Color="Color.Primary"
-                                                     Size="Size.Small" Dense EndIcon="@Icons.Material.Filled.ArrowDropDown">
+                                                     Size="Size.Small" Dense EndIcon="@Icons.Material.Outlined.ArrowDropDown">
                                                 @foreach (var mj in matchingJoins)
                                                 {
                                                     var joinRef = mj;
@@ -344,7 +801,7 @@
                             Configured Fields (@_fields.Count)
                         </MudText>
                         <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.Add" OnClick="() => OpenFieldDialog(null, true)">
+                                   StartIcon="@Icons.Material.Outlined.Add" OnClick="() => OpenFieldDialog(null, true)">
                             Add Field
                         </MudButton>
                     </MudStack>
@@ -381,7 +838,7 @@
                                         @if (!string.IsNullOrWhiteSpace(context.Item.SqlExpression))
                                         {
                                             <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                                                <MudIcon Icon="@Icons.Material.Filled.Functions" Size="Size.Small" Color="Color.Primary" />
+                                                <MudIcon Icon="@Icons.Material.Outlined.Functions" Size="Size.Small" Color="Color.Primary" />
                                                 <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;"
                                                          title="@context.Item.SqlExpression">
                                                     @context.Item.SqlExpression
@@ -416,7 +873,7 @@
                                 <TemplateColumn T="FieldEntry" title="Sort" HeaderStyle="min-width: 60px;">
                                     <CellTemplate>
                                         @{ var fe = context.Item; }
-                                        <MudIconButton Icon="@Icons.Material.Filled.SortByAlpha" Size="Size.Small"
+                                        <MudIconButton Icon="@Icons.Material.Outlined.SortByAlpha" Size="Size.Small"
                                                        Color="@(fe.ValueSortOrder?.Count > 0 ? Color.Primary : Color.Default)"
                                                        OnClick="() => OpenSortDialog(fe)"
                                                        Disabled="@(!fe.CodeSetId.HasValue && (fe.ValueSortOrder is null || fe.ValueSortOrder.Count == 0))"
@@ -428,11 +885,11 @@
                                                 CellStyle="width: 1px; white-space: nowrap; text-align: right;">
                                     <CellTemplate>
                                         @{ var fRow = context.Item; }
-                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                                        Color="Color.Primary"
                                                        OnClick="() => OpenFieldDialog(fRow, false)"
                                                        title="Edit field" />
-                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                                        Color="Color.Error" OnClick="() => RemoveField(fRow)"
                                                        title="Delete field" />
                                     </CellTemplate>
@@ -450,465 +907,8 @@
             </MudStack>
         </MudTabPanel>
 
-        @* ── Tab 2: Joins ── *@
-        <MudTabPanel Text="Joins" Icon="@Icons.Material.Filled.Link">
-            <MudStack Spacing="2" Class="pa-2">
-                @* Suggested Joins panel — provider-discovered relationships
-                   for the currently-selected entity. Today this is Dataverse-
-                   only (Metadata API M:1 / 1:M); other providers don't show
-                   the panel at all. The "Add" button promotes a suggestion
-                   to a real JoinEntry with logical names + JOIN ON pre-
-                   filled, so admins don't have to know the publisher-prefixed
-                   FK column name to author a join. The panel renders even
-                   when no table is selected (with a hint to pick one) so
-                   the feature is discoverable from this tab. *@
-                @if (IsDataverseConnectionSelected())
-                {
-                    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
-                        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
-                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
-                                @if (_selectedTable is not null)
-                                {
-                                    <span>Suggested Joins for @_selectedTable.TableName</span>
-                                    @if (!_loadingSuggestedJoins)
-                                    {
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Inline="true"> (@_suggestedJoins.Count)</MudText>
-                                    }
-                                }
-                                else
-                                {
-                                    <span>Suggested Joins</span>
-                                }
-                            </MudText>
-                            @if (_loadingSuggestedJoins)
-                            {
-                                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
-                            }
-                        </MudStack>
-                        @if (_selectedTable is null)
-                        {
-                            <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined">
-                                Pick an entity on the <strong>Tables</strong> tab to discover its
-                                Dataverse relationships (lookups in / lookups out). Each suggestion
-                                here can be added as a join with one click.
-                            </MudAlert>
-                        }
-                        else if (_loadingSuggestedJoins)
-                        {
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">Discovering relationships…</MudText>
-                        }
-                        else if (_suggestedJoins.Any())
-                        {
-                            <MudDataGrid T="SuggestedJoin" Items="_suggestedJoins" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
-                                <Columns>
-                                    <TemplateColumn T="SuggestedJoin" title="Direction" HeaderStyle="width: 11%;" CellStyle="width: 11%;">
-                                        <CellTemplate>
-                                            <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small"
-                                                     Color="@(context.Item.Direction == "many-to-one" ? Color.Primary : Color.Secondary)">
-                                                @context.Item.Direction
-                                            </MudChip>
-                                        </CellTemplate>
-                                    </TemplateColumn>
-                                    <TemplateColumn T="SuggestedJoin" title="From → To" HeaderStyle="width: 28%;" CellStyle="width: 28%;">
-                                        <CellTemplate>
-                                            <MudText Typo="Typo.body2">
-                                                @context.Item.SourceTable → @context.Item.TargetTable
-                                            </MudText>
-                                        </CellTemplate>
-                                    </TemplateColumn>
-                                    <TemplateColumn T="SuggestedJoin" title="On" HeaderStyle="width: 36%;" CellStyle="width: 36%;">
-                                        <CellTemplate>
-                                            <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.75rem;">
-                                                @context.Item.SourceColumn = @context.Item.TargetColumn
-                                            </MudText>
-                                        </CellTemplate>
-                                    </TemplateColumn>
-                                    <TemplateColumn T="SuggestedJoin" title="Relationship" HeaderStyle="width: 18%;" CellStyle="width: 18%;">
-                                        <CellTemplate>
-                                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.RelationshipName</MudText>
-                                        </CellTemplate>
-                                    </TemplateColumn>
-                                    <TemplateColumn T="SuggestedJoin" title="" HeaderStyle="width: 90px; text-align: right;" CellStyle="width: 90px; text-align: right;">
-                                        <CellTemplate>
-                                            @{ var sjRow = context.Item; }
-                                            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary"
-                                                       StartIcon="@Icons.Material.Filled.Add"
-                                                       OnClick="() => AddSuggestedJoin(sjRow)">
-                                                Add
-                                            </MudButton>
-                                        </CellTemplate>
-                                    </TemplateColumn>
-                                </Columns>
-                            </MudDataGrid>
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                No relationships discovered for @_selectedTable.TableName.
-                            </MudText>
-                        }
-                    </MudPaper>
-                }
-
-                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
-                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
-                            Join Definitions (@_joins.Count)
-                        </MudText>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.Add" OnClick="() => OpenJoinDialog(null, true)">
-                            Add Join
-                        </MudButton>
-                    </MudStack>
-
-                    @if (_joins.Any())
-                    {
-                        <MudDataGrid T="JoinEntry" Items="_joins" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
-                            <Columns>
-                                <TemplateColumn T="JoinEntry" title="Join ID" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="JoinEntry" title="Type" HeaderStyle="width: 10%;" CellStyle="width: 10%;">
-                                    <CellTemplate>
-                                        @if (context.Item.UseRawSql)
-                                        {
-                                            <MudChip T="string" Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small">Raw SQL</MudChip>
-                                        }
-                                        else
-                                        {
-                                            <MudText Typo="Typo.body2">@context.Item.JoinType</MudText>
-                                        }
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                @* Source columns expose the parent table this join hangs off
-                                   so admins can scan precedence at a glance. Empty cells
-                                   (legacy joins with no source set) trigger the soft-warning
-                                   tooltip in JoinResolver at query time. *@
-                                <TemplateColumn T="JoinEntry" title="Source Table" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
-                                    <CellTemplate>
-                                        @if (!string.IsNullOrWhiteSpace(context.Item.SourceTable))
-                                        {
-                                            <MudText Typo="Typo.body2">@context.Item.SourceTable</MudText>
-                                        }
-                                        else
-                                        {
-                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-style: italic;">(unset)</MudText>
-                                        }
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="JoinEntry" title="Source Alias" HeaderStyle="width: 8%;" CellStyle="width: 8%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.body2">@context.Item.SourceAlias</MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="JoinEntry" title="Target Table" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.body2">@context.Item.TargetTable</MudText>
-                                        @if (!string.IsNullOrWhiteSpace(context.Item.Alias))
-                                        {
-                                            <MudText Typo="Typo.caption" Color="Color.Secondary">AS @context.Item.Alias</MudText>
-                                        }
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                @* PR-5. Primary scope. Em-dash for generic
-                                   joins (eligible for any report) so the
-                                   table+alias column reads as a deliberate
-                                   "scoped to" rather than missing data. *@
-                                <TemplateColumn T="JoinEntry" title="Primary" HeaderStyle="width: 12%;" CellStyle="width: 12%;">
-                                    <CellTemplate>
-                                        @if (string.IsNullOrWhiteSpace(context.Item.PrimaryTable))
-                                        {
-                                            <MudTooltip Text="Generic — eligible for any report's primary table.">
-                                                <MudText Typo="Typo.body2" Color="Color.Secondary">—</MudText>
-                                            </MudTooltip>
-                                        }
-                                        else
-                                        {
-                                            <MudText Typo="Typo.body2">@context.Item.PrimaryTable</MudText>
-                                            @if (!string.IsNullOrWhiteSpace(context.Item.PrimaryAlias))
-                                            {
-                                                <MudText Typo="Typo.caption" Color="Color.Secondary">AS @context.Item.PrimaryAlias</MudText>
-                                            }
-                                        }
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="JoinEntry" title="SQL Preview">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px;"
-                                                 title="@context.Item.BuildSql()">
-                                            @context.Item.BuildSql()
-                                        </MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="JoinEntry" title=""
-                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
-                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
-                                    <CellTemplate>
-                                        @{ var jRow = context.Item; }
-                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
-                                                       Color="Color.Primary"
-                                                       OnClick="() => OpenJoinDialog(jRow, false)"
-                                                       title="Edit join" />
-                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
-                                                       Color="Color.Error"
-                                                       OnClick="() => RemoveJoin(jRow)"
-                                                       title="Delete join" />
-                                    </CellTemplate>
-                                </TemplateColumn>
-                            </Columns>
-                        </MudDataGrid>
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">
-                            No joins defined yet. Click Add Join to create one.
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudStack>
-        </MudTabPanel>
-
-        @* ── Tab 3: Lookups ── *@
-        <MudTabPanel Text="Lookups" Icon="@Icons.Material.Filled.TableView">
-            <MudStack Spacing="2" Class="pa-2">
-                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
-                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
-                            Named Lookups / CTEs (@_lookups.Count)
-                        </MudText>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.Add" OnClick="() => OpenLookupDialog(null, true)">
-                            Add Lookup
-                        </MudButton>
-                    </MudStack>
-
-                    @if (_lookups.Any())
-                    {
-                        <MudDataGrid T="LookupEntry" Items="_lookups" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
-                            <Columns>
-                                <TemplateColumn T="LookupEntry" title="ID" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="LookupEntry" title="Label" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.body2">@context.Item.Label</MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="LookupEntry" title="CTE Preview">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 350px;"
-                                                 title="@context.Item.SqlPreamble">
-                                            @context.Item.SqlPreamble
-                                        </MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="LookupEntry" title="JOIN" HeaderStyle="width: 80px;" CellStyle="width: 80px;">
-                                    <CellTemplate>
-                                        @if (!string.IsNullOrWhiteSpace(context.Item.SqlJoin))
-                                        {
-                                            <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success" />
-                                        }
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="LookupEntry" title=""
-                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
-                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
-                                    <CellTemplate>
-                                        @{ var luRow = context.Item; }
-                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
-                                                       Color="Color.Primary"
-                                                       OnClick="@(() => OpenLookupDialog(luRow, false))"
-                                                       title="Edit lookup" />
-                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
-                                                       Color="Color.Error"
-                                                       OnClick="@(() => _lookups.Remove(luRow))"
-                                                       title="Delete lookup" />
-                                    </CellTemplate>
-                                </TemplateColumn>
-                            </Columns>
-                        </MudDataGrid>
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">
-                            No lookups defined yet. Lookups are reusable CTE definitions that fields and custom filters can reference by ID.
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudStack>
-        </MudTabPanel>
-
-        @* ── Tab 4: Custom Filters ── *@
-        <MudTabPanel Text="Custom Filters" Icon="@Icons.Material.Filled.FilterAlt">
-            <MudStack Spacing="2" Class="pa-2">
-                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
-                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
-                            Custom Filters (@_customFilters.Count)
-                        </MudText>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.Add" OnClick="() => OpenCustomFilterDialog(null, true)">
-                            Add Filter
-                        </MudButton>
-                    </MudStack>
-
-                    @if (_customFilters.Any())
-                    {
-                        <MudDataGrid T="CustomFilterEntry" Items="_customFilters" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
-                            <Columns>
-                                <TemplateColumn T="CustomFilterEntry" title="ID" HeaderStyle="width: 12%;" CellStyle="width: 12%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="CustomFilterEntry" title="Label" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.body2">@context.Item.Label</MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                @* GroupName surfaces in the Report Builder as the
-                                   bucket header these presets cluster under —
-                                   typically a Field Section like "Loan" / "Borrower".
-                                   Em-dash for blank so admins can spot uncategorized
-                                   filters at a glance. *@
-                                <TemplateColumn T="CustomFilterEntry" title="Field Section" HeaderStyle="width: 10%;" CellStyle="width: 10%;">
-                                    <CellTemplate>
-                                        @if (string.IsNullOrWhiteSpace(context.Item.GroupName))
-                                        {
-                                            <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
-                                        }
-                                        else
-                                        {
-                                            <MudText Typo="Typo.body2">@context.Item.GroupName</MudText>
-                                        }
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="CustomFilterEntry" title="Description" HeaderStyle="width: 18%;" CellStyle="width: 18%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.Description</MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="CustomFilterEntry" title="CTE" HeaderStyle="width: 60px; text-align: center;" CellStyle="width: 60px; text-align: center;">
-                                    <CellTemplate>
-                                        @if (!string.IsNullOrWhiteSpace(context.Item.SqlPreamble))
-                                        {
-                                            <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success" />
-                                        }
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="CustomFilterEntry" title="SQL Condition">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px;"
-                                                 title="@context.Item.SqlCondition">
-                                            @context.Item.SqlCondition
-                                        </MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="CustomFilterEntry" title=""
-                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
-                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
-                                    <CellTemplate>
-                                        @{ var cfRow = context.Item; }
-                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
-                                                       Color="Color.Primary"
-                                                       OnClick="() => OpenCustomFilterDialog(cfRow, false)"
-                                                       title="Edit filter" />
-                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
-                                                       Color="Color.Error"
-                                                       OnClick="() => _customFilters.Remove(cfRow)"
-                                                       title="Delete filter" />
-                                    </CellTemplate>
-                                </TemplateColumn>
-                            </Columns>
-                        </MudDataGrid>
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">
-                            No custom filters defined yet. Click Add Filter to create one.
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudStack>
-        </MudTabPanel>
-
-        @* ── Tab: Field Sections ── *@
-        <MudTabPanel Text="Field Sections" Icon="@Icons.Material.Filled.Category">
-            <MudStack Spacing="2" Class="pa-2">
-                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
-                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
-                            Field Sections (@_domainList.Count)
-                        </MudText>
-                        <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
-                            <MudTextField @bind-Value="_newDomainName"
-                                          Label="New field section" Variant="Variant.Outlined"
-                                          Margin="Margin.Dense" Style="max-width: 240px;"
-                                          OnKeyDown="OnNewDomainKeyDown" />
-                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.Add" OnClick="AddDomain"
-                                       Disabled="@(string.IsNullOrWhiteSpace(_newDomainName))">
-                                Add
-                            </MudButton>
-                        </MudStack>
-                    </MudStack>
-
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
-                        Field Sections are the groups shown in the Field Picker (e.g. Loan, Borrower, Dates).
-                        A field section can't be deleted while fields still reference it.
-                    </MudText>
-
-                    @if (_domainList.Any())
-                    {
-                        <MudDataGrid T="string" Items="_domainList" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
-                            <Columns>
-                                <TemplateColumn T="string" title="Name" HeaderStyle="width: 40%;" CellStyle="width: 40%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item</MudText>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="string" title="Fields using it" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
-                                    <CellTemplate>
-                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
-                                                 Color="@(CountFieldsUsingDomain(context.Item) > 0 ? Color.Primary : Color.Default)">
-                                            @CountFieldsUsingDomain(context.Item)
-                                        </MudChip>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="string" title=""
-                                                HeaderStyle="width: 1px; white-space: nowrap; text-align: right;"
-                                                CellStyle="width: 1px; white-space: nowrap; text-align: right;">
-                                    <CellTemplate>
-                                        <MudStack Row Spacing="0" Style="display: inline-flex !important;">
-                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
-                                                           Color="Color.Default" title="Rename"
-                                                           OnClick="() => RenameDomain(context.Item)" />
-                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
-                                                           Color="Color.Error" title="Delete"
-                                                           Disabled="@(CountFieldsUsingDomain(context.Item) > 0)"
-                                                           OnClick="() => DeleteDomain(context.Item)" />
-                                        </MudStack>
-                                    </CellTemplate>
-                                </TemplateColumn>
-                            </Columns>
-                        </MudDataGrid>
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            No field sections defined yet. Add one above — fields created after will be able to pick it.
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudStack>
-        </MudTabPanel>
-
-        @* ── Tab 4: Settings ── *@
-        <MudTabPanel Text="Settings" Icon="@Icons.Material.Filled.Settings">
+        @* ── Tab 7: Settings ── *@
+        <MudTabPanel Text="Settings" Icon="@Icons.Material.Outlined.Settings">
             <MudStack Spacing="2" Class="pa-2">
                 <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
                     <MudStack Spacing="2">
@@ -926,23 +926,23 @@
             </MudStack>
         </MudTabPanel>
 
-        @* ── Tab 4: Preview & Export ── *@
-        <MudTabPanel Text="Export" Icon="@Icons.Material.Filled.Download">
+        @* ── Tab 8: Preview & Export ── *@
+        <MudTabPanel Text="Export" Icon="@Icons.Material.Outlined.Download">
             <MudStack Spacing="2" Class="pa-2">
                 <MudStack Row Spacing="2" Wrap="Wrap.Wrap">
                     <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.Download" OnClick="DownloadJson"
+                               StartIcon="@Icons.Material.Outlined.Download" OnClick="DownloadJson"
                                Disabled="string.IsNullOrEmpty(_jsonPreview)">
                         Download schema_config.json
                     </MudButton>
                     <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                               StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="CopyToClipboard"
+                               StartIcon="@Icons.Material.Outlined.ContentCopy" OnClick="CopyToClipboard"
                                Disabled="string.IsNullOrEmpty(_jsonPreview)">
                         Copy to Clipboard
                     </MudButton>
                     <MudDivider Vertical FlexItem />
                     <MudButton Variant="Variant.Filled" Color="Color.Warning"
-                               StartIcon="@Icons.Material.Filled.Save" OnClick="Save"
+                               StartIcon="@Icons.Material.Outlined.Save" OnClick="Save"
                                Disabled="string.IsNullOrEmpty(_jsonPreview)">
                         Save
                     </MudButton>

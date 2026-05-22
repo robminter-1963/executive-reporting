@@ -15,7 +15,7 @@
 <MudDialog>
     <TitleContent>
         <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-            <MudIcon Icon="@Icons.Material.Filled.Share" />
+            <MudIcon Icon="@Icons.Material.Outlined.Share" />
             <MudText Typo="Typo.h6">Share Report</MudText>
         </MudStack>
     </TitleContent>
@@ -76,7 +76,7 @@
                                         @(share.Permission == "editor" ? "Can edit" : "View only")
                                     </MudText>
                                 </MudStack>
-                                <MudIconButton Icon="@Icons.Material.Filled.PersonRemove"
+                                <MudIconButton Icon="@Icons.Material.Outlined.PersonRemove"
                                                Size="Size.Small" Color="Color.Error"
                                                OnClick="() => RevokeShare(share)"
                                                title="Revoke access" />

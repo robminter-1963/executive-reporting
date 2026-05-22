@@ -30,7 +30,8 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
         CancellationToken ct = default,
         string? tableType = null,
         string? primaryColumn = null,
-        string? additionalKeyColumns = null)
+        string? additionalKeyColumns = null,
+        string? description = null)
     {
         if (!PrimaryTableRef.TableRegex().IsMatch(tableName))
             throw new ArgumentException("Table name contains invalid characters.", nameof(tableName));
@@ -44,6 +45,9 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
         var normalizedTableType = string.IsNullOrWhiteSpace(tableType) ? null : tableType.Trim();
         var normalizedPrimaryColumn = NormalizeIdentifier(primaryColumn, "primaryColumn");
         var normalizedAdditionalKeys = NormalizeKeyColumnList(additionalKeyColumns);
+        var normalizedDescription = string.IsNullOrWhiteSpace(description)
+            ? null
+            : description.Trim()[..Math.Min(description.Trim().Length, 500)];
 
         if (isDefaultPrimary) isPrimary = true;
 
@@ -60,6 +64,7 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             existing.TableType = normalizedTableType;
             existing.PrimaryColumn = normalizedPrimaryColumn;
             existing.AdditionalKeyColumns = normalizedAdditionalKeys;
+            existing.Description = normalizedDescription;
             return Task.FromResult(existing);
         }
 
@@ -90,7 +95,8 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             CreatedByEmail = createdByEmail,
             TableType = normalizedTableType,
             PrimaryColumn = normalizedPrimaryColumn,
-            AdditionalKeyColumns = normalizedAdditionalKeys
+            AdditionalKeyColumns = normalizedAdditionalKeys,
+            Description = normalizedDescription
         };
         _rows[record.Id] = record;
         return Task.FromResult(record);
@@ -102,7 +108,8 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
         CancellationToken ct = default,
         string? tableType = null,
         string? primaryColumn = null,
-        string? additionalKeyColumns = null)
+        string? additionalKeyColumns = null,
+        string? description = null)
     {
         if (!PrimaryTableRef.TableRegex().IsMatch(tableName))
             throw new ArgumentException("Table name contains invalid characters.", nameof(tableName));
@@ -113,6 +120,9 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
         var normalizedTableType = string.IsNullOrWhiteSpace(tableType) ? null : tableType.Trim();
         var normalizedPrimaryColumn = NormalizeIdentifier(primaryColumn, "primaryColumn");
         var normalizedAdditionalKeys = NormalizeKeyColumnList(additionalKeyColumns);
+        var normalizedDescription = string.IsNullOrWhiteSpace(description)
+            ? null
+            : description.Trim()[..Math.Min(description.Trim().Length, 500)];
 
         if (isDefaultPrimary) isPrimary = true;
 
@@ -140,6 +150,7 @@ public sealed class InMemoryCustomPrimaryTableService : ICustomPrimaryTableServi
             existing.TableType = normalizedTableType;
             existing.PrimaryColumn = normalizedPrimaryColumn;
             existing.AdditionalKeyColumns = normalizedAdditionalKeys;
+            existing.Description = normalizedDescription;
         }
         return Task.CompletedTask;
     }

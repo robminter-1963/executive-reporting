@@ -13,7 +13,7 @@
 <MudDialog>
     <TitleContent>
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-            <MudIcon Icon="@Icons.Material.Filled.Palette" />
+            <MudIcon Icon="@Icons.Material.Outlined.Palette" />
             <MudText Typo="Typo.h6">Pick a color</MudText>
             @if (CurrentHex is not null)
             {
@@ -31,7 +31,7 @@
                           Placeholder="Search by name (e.g. blue, mint, fire)..."
                           Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
                           Adornment="Adornment.Start"
-                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          AdornmentIcon="@Icons.Material.Outlined.Search"
                           DebounceInterval="100"
                           Clearable />
             @* Scrollable list. Tile-grid layout puts ~3 colors per row

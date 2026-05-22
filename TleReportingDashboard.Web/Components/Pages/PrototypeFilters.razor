@@ -33,11 +33,11 @@
 <MudMainContent Style="padding: 0; margin-left: 15px; height: calc(100vh - 64px); overflow-y: auto;">
     <div style="max-width: 1200px; margin: 0 auto;">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
-            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+            <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                            OnClick="@(() => Navigation.NavigateTo("/admin"))" />
             <MudText Typo="Typo.h5" Style="font-weight: 600;">Filter UX Prototype</MudText>
             <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled"
-                     Icon="@Icons.Material.Filled.Science"
+                     Icon="@Icons.Material.Outlined.Science"
                      Style="font-size: 0.65rem; height: 22px;">
                 PROTOTYPE · not saved
             </MudChip>
@@ -138,7 +138,7 @@
 
                         <MudSpacer />
 
-                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                        Color="Color.Default"
                                        OnClick="@(() => _rows.RemoveAt(idx))" />
                     </MudStack>
@@ -147,7 +147,7 @@
 
             <div>
                 <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                           StartIcon="@Icons.Material.Filled.Add"
+                           StartIcon="@Icons.Material.Outlined.Add"
                            OnClick="AddRow">
                     Add filter
                 </MudButton>
@@ -158,7 +158,7 @@
         <MudPaper Elevation="0" Class="pa-3 mb-4"
                   Style="border: 1px solid #1A73E8; border-radius: 4px; background: #F0F6FF;">
             <MudStack Row AlignItems="AlignItems.Center" Class="mb-2">
-                <MudIcon Icon="@Icons.Material.Filled.Code" Size="Size.Small" Color="Color.Primary" />
+                <MudIcon Icon="@Icons.Material.Outlined.Code" Size="Size.Small" Color="Color.Primary" />
                 <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
                     SQL preview (what would be emitted)
                 </MudText>
@@ -174,7 +174,7 @@
         <MudPaper Elevation="0" Class="pa-3 mb-4"
                   Style="border: 1px solid #E8EAED; border-radius: 4px;">
             <MudStack Row AlignItems="AlignItems.Center" Class="mb-2">
-                <MudIcon Icon="@Icons.Material.Filled.DataObject" Size="Size.Small" Color="Color.Secondary" />
+                <MudIcon Icon="@Icons.Material.Outlined.DataObject" Size="Size.Small" Color="Color.Secondary" />
                 <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
                     Would be persisted as
                 </MudText>

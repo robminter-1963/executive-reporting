@@ -9,7 +9,7 @@
         <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
             <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Schedules</MudText>
             <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                       StartIcon="@Icons.Material.Filled.Add" OnClick="OpenNewScheduleDialog">
+                       StartIcon="@Icons.Material.Outlined.Add" OnClick="OpenNewScheduleDialog">
                 New Schedule
             </MudButton>
         </MudStack>
@@ -50,11 +50,11 @@
                                        at a glance as manager-centric. *@
                                     var (icon, label) = schedule.TeamFanout switch
                                     {
-                                        TeamFanout.Manager => (Icons.Material.Filled.SupervisorAccount,
+                                        TeamFanout.Manager => (Icons.Material.Outlined.SupervisorAccount,
                                             $"Individual — team {tid} (manager only — full team roll-up; all-access managers get unfiltered)"),
-                                        TeamFanout.Both => (Icons.Material.Filled.SupervisorAccount,
+                                        TeamFanout.Both => (Icons.Material.Outlined.SupervisorAccount,
                                             $"Individual — team {tid} (manager + each member — manager gets the roll-up, members get their own slice)"),
-                                        _ => (Icons.Material.Filled.People,
+                                        _ => (Icons.Material.Outlined.People,
                                             $"Individual — team {tid} (one personalized copy per member)")
                                     };
                                     <MudText Typo="Typo.caption" Color="Color.Primary">
@@ -67,7 +67,7 @@
                                 {
                                     <MudText Typo="Typo.caption" Color="Color.Primary"
                                              Style="overflow-wrap: anywhere;">
-                                        <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small" Style="vertical-align: middle;" />
+                                        <MudIcon Icon="@Icons.Material.Outlined.Email" Size="Size.Small" Style="vertical-align: middle;" />
                                         Distribution — @schedule.DistEmail
                                     </MudText>
                                 }
@@ -152,23 +152,23 @@
 
                             @* Action buttons *@
                             <MudStack Row Spacing="0">
-                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                                OnClick="() => OpenEditScheduleDialog(schedule)"
                                                title="Edit schedule" />
                                 @if (schedule.IsActive)
                                 {
-                                    <MudIconButton Icon="@Icons.Material.Filled.Pause" Size="Size.Small"
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Pause" Size="Size.Small"
                                                    OnClick="() => TogglePause(schedule)"
                                                    title="Pause schedule" />
                                 }
                                 else
                                 {
-                                    <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                    <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
                                                    Color="Color.Success"
                                                    OnClick="() => TogglePause(schedule)"
                                                    title="Resume schedule" />
                                 }
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                                Color="Color.Error"
                                                OnClick="() => ConfirmDelete(schedule)"
                                                title="Delete schedule" />

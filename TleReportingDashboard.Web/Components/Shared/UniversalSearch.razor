@@ -17,7 +17,7 @@
     <div class="us-overlay" @onclick="CloseAsync">
         <div class="us-palette" @onclick:stopPropagation="true">
             <div class="us-input-row">
-                <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" Style="color: #5F6368;" />
+                <MudIcon Icon="@Icons.Material.Outlined.Search" Size="Size.Small" Style="color: #5F6368;" />
                 <input id="universal-search-input"
                        class="us-input"
                        placeholder="Search reports… (Esc to close, ↑/↓ to navigate, Enter to open)"
@@ -48,7 +48,7 @@
                         <div class="@($"us-row{( idx == _activeIndex ? " us-row-active" : "")}")"
                              @onclick="() => OpenAsync(r.Id)"
                              @onmouseenter="() => _activeIndex = idx">
-                            <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" Style="color: #5F6368;" />
+                            <MudIcon Icon="@Icons.Material.Outlined.Description" Size="Size.Small" Style="color: #5F6368;" />
                             <div class="us-row-text">
                                 <div class="us-row-title">@label</div>
                                 @if (!string.IsNullOrWhiteSpace(sub))

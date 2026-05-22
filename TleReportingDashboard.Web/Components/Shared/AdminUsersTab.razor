@@ -16,7 +16,7 @@
         </MudText>
         <MudSpacer />
         <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                   StartIcon="@Icons.Material.Filled.PersonAdd"
+                   StartIcon="@Icons.Material.Outlined.PersonAdd"
                    OnClick="OpenCreateDialog">
             Add user
         </MudButton>
@@ -73,7 +73,7 @@
                     {
                         <MudTooltip Text="This user hasn't signed in yet — access is pre-provisioned and will activate on first sign-in.">
                             <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
-                                     Icon="@Icons.Material.Filled.HourglassEmpty">
+                                     Icon="@Icons.Material.Outlined.HourglassEmpty">
                                 Pending sign-in
                             </MudChip>
                         </MudTooltip>
@@ -98,7 +98,7 @@
                             : "This role has admin-section access — sees every company automatically";
                         <MudTooltip Text="@tip">
                             <MudButton Variant="Variant.Outlined" Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.Apartment"
+                                       StartIcon="@Icons.Material.Outlined.Apartment"
                                        OnClick="@(() => OpenAccessDialog(context))">
                                 — all —
                             </MudButton>
@@ -109,7 +109,7 @@
                         var count = _accessCountByEmail.GetValueOrDefault(context.Email);
                         <MudTooltip Text="Grant or revoke per-company access">
                             <MudButton Variant="Variant.Outlined" Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.Apartment"
+                                       StartIcon="@Icons.Material.Outlined.Apartment"
                                        Color="@(count == 0 ? Color.Warning : Color.Default)"
                                        OnClick="@(() => OpenAccessDialog(context))">
                                 @count @(count == 1 ? "company" : "companies")
@@ -119,11 +119,11 @@
                 </MudTd>
                 <MudTd Style="text-align: right;">
                     <MudTooltip Text="Edit user">
-                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                        OnClick="@(() => OpenEditDialog(context))" />
                     </MudTooltip>
                     <MudTooltip Text="Delete user">
-                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" Color="Color.Error"
                                        OnClick="@(() => DeleteUser(context))" />
                     </MudTooltip>
                 </MudTd>

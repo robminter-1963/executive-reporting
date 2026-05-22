@@ -147,6 +147,16 @@ public static partial class JoinResolver
                         $"report's primary table reaches it (source(s): {srcDesc}). " +
                         "The query will run, but check the join's Source/Target metadata.");
                 }
+                // Pull in the join's source-chain prerequisites first. Without
+                // this step, a fallback like `ev354 ON ev354.x = dl.x` adds
+                // ev354 to the FROM but never introduces `dl`, producing SQL
+                // that references an unintroduced alias. The walker follows
+                // the source chain back until it bottoms out at the primary
+                // or runs out of joins (in which case we throw a clear
+                // unresolvable error below).
+                AddPrerequisiteJoins(fallback, visited, joinsByTarget,
+                    result, includedIds, warnedJoinIds, warnings,
+                    primaryTable, primaryAlias);
                 if (includedIds.Add(fallback.Id)) result.Add(fallback);
                 continue;
             }
@@ -162,6 +172,145 @@ public static partial class JoinResolver
         }
 
         return result;
+    }
+
+    // Folds additional join IDs into an existing resolved list, preserving
+    // order and pulling in each join's prerequisite chain. Used by SqlEmitter
+    // to inject custom-filter JoinId references — a custom filter can declare
+    // "I need schema join 'x'" and the resolver makes sure that join's source
+    // chain is in scope before its alias is referenced.
+    public static List<JoinDefinition> AddJoins(
+        List<JoinDefinition> existing,
+        IEnumerable<string> additionalJoinIds,
+        IReadOnlyList<JoinDefinition> schemaJoins,
+        string primaryTable,
+        string? primaryAlias,
+        Action<string>? warnings = null)
+    {
+        if (additionalJoinIds is null) return existing;
+
+        var schemaById = schemaJoins.ToDictionary(j => j.Id, StringComparer.OrdinalIgnoreCase);
+        var includedIds = new HashSet<string>(existing.Select(j => j.Id), StringComparer.OrdinalIgnoreCase);
+        var warnedJoinIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Rebuild the joinsByTarget index for the prerequisite walker.
+        var joinsByTarget = new Dictionary<string, List<JoinDefinition>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var join in schemaJoins)
+        {
+            foreach (var targetKey in EffectiveTargetKeys(join))
+            {
+                if (!joinsByTarget.TryGetValue(targetKey, out var list))
+                    joinsByTarget[targetKey] = list = new List<JoinDefinition>();
+                if (!list.Contains(join)) list.Add(join);
+            }
+        }
+
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { primaryTable };
+        if (!string.IsNullOrWhiteSpace(primaryAlias)) visited.Add(primaryAlias);
+        // Treat every alias the already-resolved joins introduce as "in scope"
+        // so the prerequisite walker doesn't redundantly add joins that the
+        // field-driven resolution already covered.
+        foreach (var join in existing)
+        foreach (var alias in EffectiveTargetKeys(join))
+            visited.Add(alias);
+
+        foreach (var jid in additionalJoinIds)
+        {
+            if (string.IsNullOrWhiteSpace(jid)) continue;
+            if (includedIds.Contains(jid)) continue;
+            if (!schemaById.TryGetValue(jid, out var join))
+            {
+                warnings?.Invoke($"Custom filter references unknown JoinId '{jid}'.");
+                continue;
+            }
+            AddPrerequisiteJoins(join, visited, joinsByTarget,
+                existing, includedIds, warnedJoinIds, warnings,
+                primaryTable, primaryAlias);
+            if (includedIds.Add(join.Id)) existing.Add(join);
+        }
+        return existing;
+    }
+
+    // Recursive prerequisite walker. Given a join chosen via the fallback
+    // path, walks each of its source aliases back: when a source isn't
+    // already in scope (not the primary, not BFS-visited, not yet included),
+    // finds a join that targets it and adds THAT first. Order matters —
+    // a parent join must appear in the FROM/JOIN sequence before any child
+    // join references its alias.
+    //
+    // Cycle guard: `visiting` set tracks joins currently on the recursion
+    // stack so a malformed schema (A→B sources B, B→A sources A) doesn't
+    // recurse forever. Hit a cycle and we stop following that branch.
+    private static void AddPrerequisiteJoins(
+        JoinDefinition target,
+        HashSet<string> visited,
+        Dictionary<string, List<JoinDefinition>> joinsByTarget,
+        List<JoinDefinition> result,
+        HashSet<string> includedIds,
+        HashSet<string> warnedJoinIds,
+        Action<string>? warnings,
+        string primaryTable,
+        string? primaryAlias,
+        HashSet<string>? visiting = null)
+    {
+        visiting ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!visiting.Add(target.Id)) return; // cycle: bail on this branch
+
+        try
+        {
+            foreach (var src in EffectiveSources(target))
+            {
+                if (string.Equals(src, primaryTable, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrWhiteSpace(primaryAlias)
+                    && string.Equals(src, primaryAlias, StringComparison.OrdinalIgnoreCase)) continue;
+                if (visited.Contains(src)) continue;        // BFS reached it
+                if (IsAliasIntroducedByIncludedJoins(src, result)) continue;
+
+                // Find a join that introduces `src`. First-wins on multiple
+                // candidates; the precedence pass earlier in ResolveJoins
+                // already ranked them.
+                if (!joinsByTarget.TryGetValue(src, out var srcCandidates) || srcCandidates.Count == 0)
+                {
+                    if (warnedJoinIds.Add(target.Id))
+                    {
+                        warnings?.Invoke(
+                            $"Join '{target.Id}' references source alias '{src}' but no join in the " +
+                            "schema introduces it. The emitted SQL will reference an undefined alias.");
+                    }
+                    continue;
+                }
+
+                var srcJoin = srcCandidates[0];
+                if (includedIds.Contains(srcJoin.Id)) continue;
+
+                // Recurse — `src` may itself need prerequisites.
+                AddPrerequisiteJoins(srcJoin, visited, joinsByTarget,
+                    result, includedIds, warnedJoinIds, warnings,
+                    primaryTable, primaryAlias, visiting);
+
+                if (includedIds.Add(srcJoin.Id)) result.Add(srcJoin);
+            }
+        }
+        finally
+        {
+            visiting.Remove(target.Id);
+        }
+    }
+
+    // True when one of the joins already in `result` introduces `alias` as
+    // one of its target keys. Avoids re-adding a join we already pulled in
+    // for a different required-table branch.
+    private static bool IsAliasIntroducedByIncludedJoins(
+        string alias, IReadOnlyList<JoinDefinition> result)
+    {
+        foreach (var j in result)
+        {
+            foreach (var k in EffectiveTargetKeys(j))
+            {
+                if (string.Equals(k, alias, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
     }
 
     // The set of keys this join answers to as a "target". Both the alias

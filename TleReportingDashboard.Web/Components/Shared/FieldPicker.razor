@@ -4,7 +4,7 @@
         <MudPaper Elevation="0" Class="pa-2"
                   Style="background: #FEF7E0; border: 1px solid #F9AB00; border-radius: 4px;">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                <MudIcon Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                <MudIcon Icon="@Icons.Material.Outlined.Visibility" Size="Size.Small"
                          Style="color: #F9AB00; font-size: 16px;" />
                 <MudText Typo="Typo.caption" Style="color: #5F6368; line-height: 1.2;">
                     Use the eye icon to show or hide columns.
@@ -15,7 +15,7 @@
 
     <MudTextField @bind-Value="_searchText" Placeholder="Search fields..."
                   Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
-                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search"
                   DebounceInterval="200" Style="font-size: 0.8rem;" />
 
     @* 158px = 48px MudAppBar + ~110px for the search field, padding, and (when shown) banner. *@
@@ -67,13 +67,13 @@
                                 @if (TemplateLocked)
                                 {
                                     var hidden = HiddenFieldIds.Contains(field.Id, StringComparer.OrdinalIgnoreCase);
-                                    <MudIcon Icon="@(hidden ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                    <MudIcon Icon="@(hidden ? Icons.Material.Outlined.VisibilityOff : Icons.Material.Outlined.Visibility)"
                                              Size="Size.Small"
                                              Style="@(hidden ? "color: #9AA0A6; font-size: 16px;" : "color: #1A73E8; font-size: 16px;")" />
                                 }
                                 else
                                 {
-                                    <MudIcon Icon="@(isSelected ? Icons.Material.Filled.CheckBox : Icons.Material.Filled.CheckBoxOutlineBlank)"
+                                    <MudIcon Icon="@(isSelected ? Icons.Material.Outlined.CheckBox : Icons.Material.Outlined.CheckBoxOutlineBlank)"
                                              Size="Size.Small"
                                              Style="@(isSelected ? "color: #1A73E8; font-size: 16px;" : "color: #DADCE0; font-size: 16px;")" />
                                 }
@@ -94,7 +94,7 @@
                                 @* Role lock *@
                                 @if (isDimmed)
                                 {
-                                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small"
+                                    <MudIcon Icon="@Icons.Material.Outlined.Lock" Size="Size.Small"
                                              Style="color: #9AA0A6; font-size: 14px;" />
                                 }
 

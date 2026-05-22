@@ -29,18 +29,18 @@
     <MudStack Spacing="3">
         <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                                OnClick="@(() => Navigation.NavigateTo("/reports"))"
                                title="Back to Reports" />
                 <MudText Typo="Typo.h5" Style="font-weight: 600;">Grid Templates</MudText>
                 <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
-                         Icon="@Icons.Material.Filled.Shield"
+                         Icon="@Icons.Material.Outlined.Shield"
                          Style="font-size: 0.65rem; height: 22px;">
                     ADMIN
                 </MudChip>
             </MudStack>
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                       StartIcon="@Icons.Material.Filled.Add" OnClick="CreateTemplate">
+                       StartIcon="@Icons.Material.Outlined.Add" OnClick="CreateTemplate">
                 New Template
             </MudButton>
         </MudStack>
@@ -64,7 +64,7 @@
             <MudTabs @bind-ActivePanelIndex="_activeTabIndex"
                      Elevation="0" Rounded ApplyEffectsToContainer Class="pa-0">
                 <MudTabPanel Text="@($"All ({_templates.Count})")"
-                             Icon="@Icons.Material.Filled.ViewList">
+                             Icon="@Icons.Material.Outlined.ViewList">
                     @TemplateTable(_templates, showCompanyColumn: true)
                 </MudTabPanel>
                 @foreach (var co in _companies)
@@ -76,7 +76,7 @@
                        in "All" if they need to verify it's empty. *@
                     if (companyTemplates.Count == 0) continue;
                     <MudTabPanel Text="@($"{co.Name} ({companyTemplates.Count})")"
-                                 Icon="@Icons.Material.Filled.Business">
+                                 Icon="@Icons.Material.Outlined.Business">
                         @TemplateTable(companyTemplates, showCompanyColumn: false)
                     </MudTabPanel>
                 }
@@ -86,7 +86,7 @@
         {
             <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
                       Style="border: 1px dashed #DADCE0; min-height: 200px;">
-                <MudIcon Icon="@Icons.Material.Filled.GridView" Size="Size.Large" Color="Color.Default" />
+                <MudIcon Icon="@Icons.Material.Outlined.GridView" Size="Size.Large" Color="Color.Default" />
                 <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
                     No grid templates yet. Create one to reuse across reports.
                 </MudText>
@@ -246,7 +246,7 @@
                 <MudTd DataLabel="Shared">
                     @if (context.IsShared)
                     {
-                        <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Color="Color.Success" />
+                        <MudIcon Icon="@Icons.Material.Outlined.Public" Size="Size.Small" Color="Color.Success" />
                     }
                 </MudTd>
                 <MudTd DataLabel="Owner">
@@ -257,14 +257,14 @@
                 </MudTd>
                 <MudTd DataLabel="Actions" Style="text-align: right;">
                     <MudStack Row Spacing="0" Style="display: inline-flex !important;">
-                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                        Color="Color.Primary"
                                        OnClick="() => EditTemplate(context)"
                                        Disabled="@(context.OwnerId != _userId)" title="Edit" />
-                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                        <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small"
                                        Color="Color.Default"
                                        OnClick="() => CloneTemplate(context)" title="Clone" />
-                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                        Color="Color.Error"
                                        OnClick="() => DeleteTemplate(context)"
                                        Disabled="@(context.OwnerId != _userId)" title="Delete" />

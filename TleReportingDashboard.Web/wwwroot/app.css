@@ -60,11 +60,51 @@ h1:focus { outline: none; }
     padding-right: 0 !important;
 }
 
-/* MudTable row hover. The previous Google-blue tint (#D2E3FC) clashed with
-   the indigo accent; this slate-tinted hover stays neutral so the accent
-   only shows on actually-interactive elements. */
+/* MudTable refinement — hairline horizontal rules only, no vertical lines,
+   subtle hover, generous row height. Scoped to .mud-table so the rules
+   don't touch hand-rolled tables (grouped-detail-table, dash-summary-table)
+   which set their own styles. The ReportGrid's .resizable-grid sits inside
+   .mud-table too but its inline width/padding overrides take precedence
+   for the cell sizing; we only re-skin the chrome here. */
+.mud-table th {
+    background-color: #FAFAFA !important;
+    color: #475569 !important;
+    font-weight: 600 !important;
+    border-top: none !important;
+    border-bottom: 1px solid #E2E8F0 !important;
+    border-left: none !important;
+    border-right: none !important;
+    padding: 12px 16px !important;
+}
+.mud-table tbody td {
+    border-top: none !important;
+    border-bottom: 1px solid #F1F5F9 !important;
+    border-left: none !important;
+    border-right: none !important;
+    padding: 10px 16px !important;
+}
+.mud-table tbody tr:last-child > td {
+    border-bottom: none !important;
+}
 .mud-table tbody tr:hover > td {
     background-color: #F8FAFC !important;
+}
+/* Striped variant — replace the default heavy gray with a hint-of-slate */
+.mud-table.mud-table-striped tbody tr:nth-of-type(odd) > td {
+    background-color: #FCFCFD !important;
+}
+.mud-table.mud-table-striped tbody tr:nth-of-type(odd):hover > td {
+    background-color: #F8FAFC !important;
+}
+
+/* Breathing room between a MudTabs tab strip and whatever the first
+   element of the active panel is. Without this, action buttons and
+   filter rows inside a tab panel sit flush against the tab indicator
+   underline — visually cramped. Affects every tab panel app-wide
+   (Report Library, Schema Builder, Admin, Master Dashboard). 12px is
+   enough to read as a gap without breaking dense data tabs. */
+.mud-tabs .mud-tab-panel {
+    padding-top: 12px;
 }
 
 /* Blazor error boundary — softened to match the refined palette. Amber-50 bg

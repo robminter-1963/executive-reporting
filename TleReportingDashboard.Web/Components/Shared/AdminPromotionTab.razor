@@ -22,7 +22,7 @@
     <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 16px;">
         <MudTabs Elevation="0" Rounded ApplyEffectsToContainer>
             @* ── Export tab ────────────────────────────────────── *@
-            <MudTabPanel Text="Export package" Icon="@Icons.Material.Filled.FileDownload">
+            <MudTabPanel Text="Export package" Icon="@Icons.Material.Outlined.FileDownload">
                 <MudStack Spacing="3" Class="pt-3">
                     <MudText Typo="Typo.body2" Color="Color.Secondary">
                         Pick which connection schemas to bundle. The package is a
@@ -68,7 +68,7 @@
 
                         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
                             <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                                       StartIcon="@Icons.Material.Filled.FileDownload"
+                                       StartIcon="@Icons.Material.Outlined.FileDownload"
                                        Disabled="@(!_exportRows.Any(r => r.Selected) || _exporting)"
                                        OnClick="OnExport">
                                 @(_exporting ? "Exporting..." : "Export selected")
@@ -82,7 +82,7 @@
             </MudTabPanel>
 
             @* ── Import tab ────────────────────────────────────── *@
-            <MudTabPanel Text="Import package" Icon="@Icons.Material.Filled.FileUpload">
+            <MudTabPanel Text="Import package" Icon="@Icons.Material.Outlined.FileUpload">
                 <MudStack Spacing="3" Class="pt-3">
                     <MudText Typo="Typo.body2" Color="Color.Secondary">
                         Upload a package exported from an upstream environment.
@@ -95,7 +95,7 @@
                            style="display: inline-flex; gap: 8px; align-items: center; padding: 8px 16px;
                                   border: 1px solid #1976D2; border-radius: 4px; color: #1976D2;
                                   cursor: pointer; width: max-content; font-weight: 500;">
-                        <MudIcon Icon="@Icons.Material.Filled.UploadFile" Size="Size.Small" />
+                        <MudIcon Icon="@Icons.Material.Outlined.UploadFile" Size="Size.Small" />
                         Choose package file...
                     </label>
 
@@ -166,7 +166,7 @@
 
                             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
                                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                                           StartIcon="@Icons.Material.Filled.PlayArrow"
+                                           StartIcon="@Icons.Material.Outlined.PlayArrow"
                                            Disabled="@(!_importRows.Any(r => r.TargetConnectionId.HasValue) || _importing)"
                                            OnClick="OnImport">
                                     @(_importing ? "Importing..." : "Apply mapped entries")

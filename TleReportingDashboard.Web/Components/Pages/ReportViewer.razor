@@ -31,7 +31,7 @@
         @* ── Top bar ── *@
         <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                                OnClick="NavigateBackAsync"
                                title="Back" />
                 <MudText Typo="Typo.h6" Style="font-weight: 600;">@(_reportName ?? "Report")</MudText>
@@ -59,7 +59,7 @@
                     </MudText>
                 }
                 <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
-                           StartIcon="@Icons.Material.Filled.Refresh" OnClick="RunReport"
+                           StartIcon="@Icons.Material.Outlined.Refresh" OnClick="RunReport"
                            Disabled="_isLoading">
                     Refresh
                 </MudButton>
@@ -75,7 +75,7 @@
                     <MudTooltip Text="Show the SQL that produced this view">
                         <MudButton Variant="Variant.Outlined" Size="Size.Small"
                                    Color="Color.Default"
-                                   StartIcon="@Icons.Material.Filled.Code"
+                                   StartIcon="@Icons.Material.Outlined.Code"
                                    OnClick="ShowReportQuery"
                                    Disabled="@(_queryData?.Sql is null)">
                             Show SQL
@@ -93,11 +93,19 @@
            warning so a 15-second sort change isn't a silent freeze. *@
         <QueryProgress Active="@_isLoading" />
 
-        @if (_queryData is not null && _queryData.Rows.Any())
+        @* Skeleton table while the initial query is running — fills the
+           viewport with a table-shaped placeholder so the user can read
+           the eventual page shape (and the QueryProgress timer) instead
+           of staring at empty space under a progress bar. *@
+        @if (_isLoading && _queryData is null)
+        {
+            <SkeletonTable Rows="10" Columns="6" />
+        }
+        else if (_queryData is not null && _queryData.Rows.Any())
         {
             @* ── Tabs: Table / Chart / Dashboard ── *@
             <MudTabs @bind-ActivePanelIndex="_activeTab" Elevation="0" Rounded ApplyEffectsToContainer>
-                <MudTabPanel Text="Table" Icon="@Icons.Material.Filled.TableChart">
+                <MudTabPanel Text="Table" Icon="@Icons.Material.Outlined.TableChart">
                     @* Live sort indicator — reflects whatever's currently
                        applied via column-header clicks. Same pattern as the
                        editor so the viewer stays consistent. *@
@@ -118,7 +126,7 @@
                                 var label = GetFieldLabel(step.Field);
                                 var isDesc = string.Equals(step.Direction, "desc", StringComparison.OrdinalIgnoreCase);
                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
-                                         Icon="@(isDesc ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)">
+                                         Icon="@(isDesc ? Icons.Material.Outlined.ArrowDownward : Icons.Material.Outlined.ArrowUpward)">
                                     @priority. @label
                                 </MudChip>
                             }
@@ -136,7 +144,7 @@
                                 DisableUserSort="true"
                                 ReadOnly="true" />
                 </MudTabPanel>
-                <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
+                <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Outlined.Dashboard">
                     <DashboardView Data="_queryData" InitialConfig="_dashboardConfig"
                                    TableSortField="@_tableSortField"
                                    TableSortDirection="@_tableSortDirection"
@@ -152,13 +160,9 @@
         }
         else if (!_isLoading && _queryData is not null)
         {
-            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
-                      Style="border: 1px dashed #DADCE0; min-height: 300px;">
-                <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" Color="Color.Default" />
-                <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
-                    No results found for this report.
-                </MudText>
-            </MudPaper>
+            <EmptyState Icon="@Icons.Material.Outlined.SearchOff"
+                        Heading="No results"
+                        Body="This report ran without errors but didn't return any rows. Try widening the filters or re-running after the source data has updated." />
         }
         else if (!_isLoading && _error is not null)
         {

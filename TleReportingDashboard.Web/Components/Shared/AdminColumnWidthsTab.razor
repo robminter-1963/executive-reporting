@@ -63,20 +63,20 @@
 
             <MudStack Row Justify="Justify.SpaceBetween" Class="mt-3">
                 <MudButton Variant="Variant.Text" Color="Color.Default"
-                           StartIcon="@Icons.Material.Filled.RestartAlt"
+                           StartIcon="@Icons.Material.Outlined.RestartAlt"
                            Disabled="@_saving"
                            OnClick="ResetAsync">
                     Reset to defaults
                 </MudButton>
                 <MudStack Row Spacing="2">
                     <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                               StartIcon="@Icons.Material.Filled.Refresh"
+                               StartIcon="@Icons.Material.Outlined.Refresh"
                                Disabled="@_saving"
                                OnClick="ReloadAsync">
                         Discard changes
                     </MudButton>
                     <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.Save"
+                               StartIcon="@Icons.Material.Outlined.Save"
                                Disabled="@_saving"
                                OnClick="SaveAsync">
                         Save

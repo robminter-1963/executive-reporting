@@ -70,11 +70,11 @@
                    Style="position: sticky; top: 0; z-index: 100; background: var(--mud-palette-background); padding: 8px 0; margin: 0; border-bottom: 1px solid var(--mud-palette-lines-default);">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
                 <MudTooltip Text="@(_drawerOpen ? "Hide column list" : "Show column list")">
-                    <MudIconButton Icon="@(_drawerOpen ? Icons.Material.Filled.MenuOpen : Icons.Material.Filled.Menu)"
+                    <MudIconButton Icon="@(_drawerOpen ? Icons.Material.Outlined.MenuOpen : Icons.Material.Outlined.Menu)"
                                    OnClick="() => _drawerOpen = !_drawerOpen" />
                 </MudTooltip>
                 <MudTooltip Text="Back to Report Library">
-                    <MudIconButton Icon="@Icons.Material.Filled.Home" OnClick="NavigateBackToLibrary" />
+                    <MudIconButton Icon="@Icons.Material.Outlined.Home" OnClick="NavigateBackToLibrary" />
                 </MudTooltip>
                 @if (_editingName)
                 {
@@ -82,7 +82,7 @@
                                   Style="max-width: 300px; font-size: 1.1rem;"
                                   Placeholder="Report Name" Immediate
                                   OnKeyDown="OnNameKeyDown"
-                                  Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Check"
+                                  Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Outlined.Check"
                                   OnAdornmentClick="() => _editingName = false" />
                 }
                 else
@@ -92,7 +92,7 @@
                         @(_loadedReportName ?? "New Report")
                     </MudText>
                     <MudTooltip Text="Rename report">
-                        <MudIconButton Icon="@Icons.Material.Filled.EditNote" Size="Size.Small" Color="Color.Default"
+                        <MudIconButton Icon="@Icons.Material.Outlined.EditNote" Size="Size.Small" Color="Color.Default"
                                        OnClick="() => _editingName = true" />
                     </MudTooltip>
                 }
@@ -107,7 +107,7 @@
                                   Style="max-width: 220px; font-size: 0.85rem;"
                                   Placeholder="Internal name (admin-only)"
                                   Adornment="Adornment.Start"
-                                  AdornmentIcon="@Icons.Material.Filled.Tag" />
+                                  AdornmentIcon="@Icons.Material.Outlined.Tag" />
                 </MudTooltip>
                 @* Category — free-text but pre-fills with previously-used
                    values via MudAutocomplete. Drives the Library's filter
@@ -122,7 +122,7 @@
                                      CoerceText="false" CoerceValue="true"
                                      ResetValueOnEmptyText
                                      Adornment="Adornment.Start"
-                                     AdornmentIcon="@Icons.Material.Filled.Category" />
+                                     AdornmentIcon="@Icons.Material.Outlined.Category" />
                 </MudTooltip>
                 @* Library Section — admin-curated buckets that drive the
                    Report Library's "All Reports" tab grouping. Different
@@ -139,7 +139,7 @@
                                Placeholder="Library Section"
                                Clearable="true"
                                Adornment="Adornment.Start"
-                               AdornmentIcon="@Icons.Material.Filled.Folder">
+                               AdornmentIcon="@Icons.Material.Outlined.Folder">
                         <MudSelectItem T="Guid?" Value="@((Guid?)null)">— None —</MudSelectItem>
                         @foreach (var s in _availableLibrarySections.OrderBy(s => s.SortOrder).ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
                         {
@@ -204,7 +204,7 @@
                         {
                             <MudSelectItem T="string" Value="@opt.Value">
                                 <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                                    <MudIcon Icon="@(opt.IsDefault ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                    <MudIcon Icon="@(opt.IsDefault ? Icons.Material.Outlined.Star : Icons.Material.Outlined.StarBorder)"
                                              Size="Size.Small"
                                              Color="@(opt.IsDefault ? Color.Primary : Color.Default)" />
                                     <span>@opt.Label@(opt.IsDefault ? " (default)" : "")</span>
@@ -234,14 +234,14 @@
                 @* ── Primary actions ── *@
                 <MudTooltip Text="@(!_selectedFieldIds.Any() ? "Pick at least one column to enable" : "Fetch fresh data using the current columns and filters")">
                     <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.PlayArrow"
+                               StartIcon="@Icons.Material.Outlined.PlayArrow"
                                OnClick="HandleRunQuery" Disabled="@(!_selectedFieldIds.Any() || _isLoading)">
                         Run Report
                     </MudButton>
                 </MudTooltip>
                 <MudTooltip Text="@GetSaveTooltip()">
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.Save"
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                               StartIcon="@Icons.Material.Outlined.Save"
                                OnClick="HandleSave" Disabled="@(!CanSave())">
                         Save
                     </MudButton>
@@ -251,7 +251,7 @@
 
                 @* ── Download (kept visible — frequent post-run action) ── *@
                 <MudMenu Variant="Variant.Outlined" Color="Color.Default" Dense
-                         Icon="@Icons.Material.Filled.Download"
+                         Icon="@Icons.Material.Outlined.Download"
                          Disabled="@(_queryData is null || !_queryData.Rows.Any())"
                          title="Download the current results">
                     <MudMenuItem OnClick="ExportExcel">Excel (.xlsx)</MudMenuItem>
@@ -262,31 +262,31 @@
                    admin-only tools. Keeps the main bar readable on narrow
                    screens where ~13 controls used to wrap and clip. *@
                 <MudTooltip Text="More actions">
-                    <MudMenu Icon="@Icons.Material.Filled.MoreVert" Dense
+                    <MudMenu Icon="@Icons.Material.Outlined.MoreVert" Dense
                              AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
                         @if (_linkedTemplateId.HasValue)
                         {
                             <MudMenuItem Disabled>
                                 <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                                    <MudIcon Icon="@Icons.Material.Filled.GridView" Size="Size.Small" Color="Color.Info" />
+                                    <MudIcon Icon="@Icons.Material.Outlined.GridView" Size="Size.Small" Color="Color.Info" />
                                     <MudText Typo="Typo.body2">Linked: @_linkedTemplateName</MudText>
                                 </MudStack>
                             </MudMenuItem>
                             <MudMenuItem OnClick="UnlinkTemplate"
-                                         Icon="@Icons.Material.Filled.LinkOff" IconColor="Color.Warning">
+                                         Icon="@Icons.Material.Outlined.LinkOff" IconColor="Color.Warning">
                                 Unlink template
                             </MudMenuItem>
                         }
                         else
                         {
                             <MudMenuItem OnClick="ApplyTemplate"
-                                         Icon="@Icons.Material.Filled.GridView">
+                                         Icon="@Icons.Material.Outlined.GridView">
                                 Apply template…
                             </MudMenuItem>
                         }
                         <MudMenuItem OnClick="HandleShare"
                                      Disabled="@(_loadedReportId is null)"
-                                     Icon="@Icons.Material.Filled.Share">
+                                     Icon="@Icons.Material.Outlined.Share">
                             @(_loadedReportId is null ? "Share (save report first)" : "Share…")
                         </MudMenuItem>
                         <MudDivider />
@@ -294,7 +294,7 @@
                         {
                             <MudMenuItem OnClick="HandleSaveAsTemplate"
                                          Disabled="@(!_selectedFieldIds.Any())"
-                                         Icon="@Icons.Material.Filled.ContentCopy">
+                                         Icon="@Icons.Material.Outlined.ContentCopy">
                                 Save as template
                             </MudMenuItem>
                         }
@@ -311,11 +311,11 @@
                         {
                             <MudMenuItem OnClick="ShowQuery"
                                          Disabled="@(!_selectedFieldIds.Any())"
-                                         Icon="@Icons.Material.Filled.Code">
+                                         Icon="@Icons.Material.Outlined.Code">
                                 Show generated SQL
                             </MudMenuItem>
                             <MudMenuItem OnClick="ShowReportJson"
-                                         Icon="@Icons.Material.Filled.DataObject">
+                                         Icon="@Icons.Material.Outlined.DataObject">
                                 View report JSON
                             </MudMenuItem>
                         }
@@ -324,7 +324,7 @@
                 @if (_isAdmin)
                 {
                     <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
-                             Icon="@Icons.Material.Filled.Shield"
+                             Icon="@Icons.Material.Outlined.Shield"
                              Style="font-size: 0.65rem; height: 22px;">
                         ADMIN
                     </MudChip>
@@ -343,7 +343,7 @@
         @if (IsSelectedPrimaryOffCatalog())
         {
             <MudAlert Severity="Severity.Warning" Dense Variant="Variant.Outlined"
-                      Icon="@Icons.Material.Filled.ReportProblem">
+                      Icon="@Icons.Material.Outlined.ReportProblem">
                 <strong>@_currentConfig.PrimaryTable</strong> isn't in this connection's Table Aliases catalog.
                 Reports rooted here may or may not work — any field from a different table will fail unless
                 a join is defined. Pick a catalog entry from the dropdown, or register this one in
@@ -411,7 +411,7 @@
                 <MudExpansionPanel>
                     <TitleContent>
                         <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                            <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" Color="Color.Primary" />
+                            <MudIcon Icon="@Icons.Material.Outlined.Tune" Size="Size.Small" Color="Color.Primary" />
                             <MudText Typo="Typo.body2" Style="font-weight: 500;">
                                 Advanced Filters
                             </MudText>
@@ -461,7 +461,7 @@
                regular fields. Clicking a chip in the bar opens its edit
                dialog (re-routed below); the X on a chip removes it. *@
             <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
-                <MudButton StartIcon="@Icons.Material.Filled.Calculate" Variant="Variant.Text"
+                <MudButton StartIcon="@Icons.Material.Outlined.Calculate" Variant="Variant.Text"
                            Color="Color.Tertiary" Dense Size="Size.Small"
                            OnClick="@(() => OpenTableCalcDialog(null))">
                     + Calc Column
@@ -476,7 +476,7 @@
                         var ccLocal = cc;
                         <MudTooltip Text="@($"Edit \"{ccLocal.Label}\" — {(string.IsNullOrWhiteSpace(ccLocal.SqlExpression) ? $"Formula: {ccLocal.Formula}" : $"SQL: {ccLocal.SqlExpression}")}")">
                             <MudChip T="string" Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
-                                     Icon="@Icons.Material.Filled.Edit"
+                                     Icon="@Icons.Material.Outlined.Edit"
                                      OnClick="@(() => OpenTableCalcDialog(ccLocal.Key))"
                                      OnClose="@(() => RemoveTableCalcColumn(ccLocal.Key))">
                                 @ccLocal.Label
@@ -513,7 +513,7 @@
                     }
                     @if (excluded.Any())
                     {
-                        <MudMenu Icon="@Icons.Material.Filled.AddCircleOutline" Variant="Variant.Text"
+                        <MudMenu Icon="@Icons.Material.Outlined.AddCircleOutline" Variant="Variant.Text"
                                  Color="Color.Info" Dense Size="Size.Small" Label="+ Field"
                                  AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
                             @foreach (var fid in excluded)
@@ -531,7 +531,7 @@
         @if (_queryData is not null && _queryData.IsTruncated)
         {
             <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined"
-                      Icon="@Icons.Material.Filled.FilterAlt">
+                      Icon="@Icons.Material.Outlined.FilterAlt">
                 Showing the first @_queryData.Rows.Count.ToString("N0") of @_queryData.TotalCount.ToString("N0") results.
                 Add filters above to narrow to the rows you need.
             </MudAlert>
@@ -547,7 +547,7 @@
         @if (!string.IsNullOrEmpty(_lastQueryError))
         {
             <MudAlert Severity="Severity.Error" Dense Variant="Variant.Outlined"
-                      Icon="@Icons.Material.Filled.ErrorOutline" Class="mb-2"
+                      Icon="@Icons.Material.Outlined.ErrorOutline" Class="mb-2"
                       ShowCloseIcon CloseIconClicked="() => _lastQueryError = null">
                 <MudText Typo="Typo.body2" Style="font-weight: 600;">Last run failed</MudText>
                 <MudText Typo="Typo.caption" Style="white-space: pre-wrap; word-break: break-word;">
@@ -569,7 +569,7 @@
                     OnKpiAdded="HandleKpiAdded" OnKpiRemoved="HandleKpiRemoved" />
 
             <MudTabs @bind-ActivePanelIndex="_activeTabIndex" Elevation="0" Rounded ApplyEffectsToContainer>
-                <MudTabPanel Text="Table" Icon="@Icons.Material.Filled.TableChart">
+                <MudTabPanel Text="Table" Icon="@Icons.Material.Outlined.TableChart">
                     @* Aggregate-hidden hint — the Table view hides any field
                        whose SqlExpression is an aggregate (they only make
                        sense when grouped). Without this banner users think
@@ -577,7 +577,7 @@
                     @if (AggregateFieldIds.Count > 0)
                     {
                         <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined" Class="mb-2"
-                                  Icon="@Icons.Material.Filled.Functions">
+                                  Icon="@Icons.Material.Outlined.Functions">
                             @AggregateFieldIds.Count aggregated @(AggregateFieldIds.Count == 1 ? "column is" : "columns are") hidden in the Table view.
                             <MudButton Variant="Variant.Text" Color="Color.Info" Size="Size.Small"
                                        Class="ml-2" OnClick="() => _activeTabIndex = 2">
@@ -604,7 +604,7 @@
                                 var label = GetFieldLabel(step.Field);
                                 var isDesc = string.Equals(step.Direction, "desc", StringComparison.OrdinalIgnoreCase);
                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
-                                         Icon="@(isDesc ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)">
+                                         Icon="@(isDesc ? Icons.Material.Outlined.ArrowDownward : Icons.Material.Outlined.ArrowUpward)">
                                     @priority. @label
                                 </MudChip>
                             }
@@ -612,7 +612,7 @@
                             {
                                 <MudTooltip Text="Restore the sort saved with this report">
                                     <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Warning"
-                                               StartIcon="@Icons.Material.Filled.Undo"
+                                               StartIcon="@Icons.Material.Outlined.Undo"
                                                OnClick="RevertSort">
                                         Revert
                                     </MudButton>
@@ -821,7 +821,7 @@
                                 ColumnLabelOverrides="_templateColumnLabels"
                                 FillViewport="true" />
                 </MudTabPanel>
-                <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
+                <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Outlined.Dashboard">
                     <DashboardView @ref="_dashboardView" Data="_queryData"
                                    InitialConfig="_dashboardConfig"
                                    TableSortField="@_currentConfig.DefaultSortField"
@@ -841,13 +841,13 @@
             @* Columns chosen, but query hasn't run yet *@
             <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
                       Style="border: 1px dashed #DADCE0; min-height: 300px;">
-                <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Large" Color="Color.Primary" Style="font-size: 64px;" />
+                <MudIcon Icon="@Icons.Material.Outlined.TableChart" Size="Size.Large" Color="Color.Primary" Style="font-size: 64px;" />
                 <MudText Typo="Typo.h6" Class="mt-3">Ready to go</MudText>
                 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1" Style="max-width: 420px; text-align: center;">
                     Your columns and filters are set. Click <strong>Run Report</strong> to pull the data.
                 </MudText>
                 <MudButton Class="mt-4" Variant="Variant.Filled" Color="Color.Primary"
-                           StartIcon="@Icons.Material.Filled.PlayArrow"
+                           StartIcon="@Icons.Material.Outlined.PlayArrow"
                            OnClick="HandleRunQuery" Disabled="@_isLoading">
                     Run Report
                 </MudButton>
@@ -858,7 +858,7 @@
             @* First-time onboarding card *@
             <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
                       Style="border: 1px dashed #DADCE0; min-height: 340px;">
-                <MudIcon Icon="@Icons.Material.Filled.Assessment" Size="Size.Large" Color="Color.Primary" Style="font-size: 64px;" />
+                <MudIcon Icon="@Icons.Material.Outlined.Assessment" Size="Size.Large" Color="Color.Primary" Style="font-size: 64px;" />
                 <MudText Typo="Typo.h6" Class="mt-3">Build your report in three steps</MudText>
                 <MudStack Spacing="1" Class="mt-3" Style="max-width: 520px;">
                     <MudStack Row AlignItems="AlignItems.Start" Spacing="2">
@@ -883,7 +883,7 @@
                 @if (!_drawerOpen)
                 {
                     <MudButton Class="mt-4" Variant="Variant.Filled" Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.ViewColumn"
+                               StartIcon="@Icons.Material.Outlined.ViewColumn"
                                OnClick="() => _drawerOpen = true">
                         Show column list
                     </MudButton>
@@ -1145,6 +1145,12 @@
     // wrapper; everything else lives in the component.
     private UnsavedChangesGuard? _guard;
     private bool _initialBaselineSet;
+    // Flipped at the END of OnInitializedAsync. The render-time baseline
+    // capture below waits on this — without it, the snapshot was taken
+    // after the FIRST render (which Blazor emits right after the first
+    // await in OnInitializedAsync) and missed the saved-report load that
+    // followed, leaving the page falsely dirty the moment it opened.
+    private bool _loadCompleted;
 
     private string ComputeDirtySnapshot()
     {
@@ -1303,6 +1309,13 @@
         catch (Exception ex)
         {
             Snackbar.Add($"Failed to initialize: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            // Mark load-complete in finally so a partial/failed load still
+            // baselines — otherwise an init error leaves the guard armed
+            // against ever-empty state and re-prompts on every nav.
+            _loadCompleted = true;
         }
     }
 
@@ -3711,7 +3724,11 @@
         // @ref isn't wired until after the first render, so the load-time
         // baseline is captured here rather than at the end of OnInitializedAsync.
         // The guard component registers its own nav handler internally.
-        if (!_initialBaselineSet && _guard is not null)
+        // Gate on _loadCompleted because Blazor renders once after the FIRST
+        // await in OnInitializedAsync — capturing here without that gate
+        // baselines empty pre-load state and the post-load snapshot then
+        // reads dirty even when the user changed nothing.
+        if (!_initialBaselineSet && _loadCompleted && _guard is not null)
         {
             _guard.MarkClean();
             _initialBaselineSet = true;

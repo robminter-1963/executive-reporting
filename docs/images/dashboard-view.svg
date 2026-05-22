@@ -1,0 +1,107 @@
+<svg width="800" height="480" xmlns="http://www.w3.org/2000/svg">
+  <!-- Config bar -->
+  <rect width="800" height="50" fill="#F8F9FA" stroke="#E8EAED" rx="4"/>
+  <text x="12" y="20" fill="#5F6368" font-size="9" font-family="sans-serif">Group By</text>
+  <rect x="12" y="24" width="110" height="22" rx="2" fill="white" stroke="#DADCE0"/>
+  <text x="18" y="39" fill="#202124" font-size="10" font-family="sans-serif">Status          ▾</text>
+
+  <text x="132" y="20" fill="#5F6368" font-size="9" font-family="sans-serif">Primary Measure</text>
+  <rect x="132" y="24" width="110" height="22" rx="2" fill="white" stroke="#DADCE0"/>
+  <text x="138" y="39" fill="#202124" font-size="10" font-family="sans-serif">Loan Amt     ▾</text>
+
+  <text x="252" y="20" fill="#5F6368" font-size="9" font-family="sans-serif">Aggregation</text>
+  <rect x="252" y="24" width="80" height="22" rx="2" fill="white" stroke="#DADCE0"/>
+  <text x="258" y="39" fill="#202124" font-size="10" font-family="sans-serif">Sum        ▾</text>
+
+  <rect x="342" y="24" width="80" height="22" rx="4" fill="none" stroke="#1A73E8"/>
+  <text x="352" y="39" fill="#1A73E8" font-size="10" font-family="sans-serif">+ Measure</text>
+
+  <text x="432" y="20" fill="#5F6368" font-size="9" font-family="sans-serif">Chart</text>
+  <rect x="432" y="24" width="70" height="22" rx="2" fill="white" stroke="#DADCE0"/>
+  <text x="438" y="39" fill="#202124" font-size="10" font-family="sans-serif">Bar         ▾</text>
+
+  <text x="520" y="37" fill="#1A73E8" font-size="10" font-family="sans-serif">☑ % of Total</text>
+  <text x="620" y="37" fill="#1A73E8" font-size="10" font-family="sans-serif">☑ Summary Cards</text>
+
+  <!-- KPI Cards -->
+  <rect x="0" y="58" width="130" height="50" rx="4" fill="white" stroke="#E8EAED"/>
+  <text x="10" y="76" fill="#5F6368" font-size="9" font-family="sans-serif">Total Volume</text>
+  <text x="10" y="96" fill="#202124" font-size="14" font-weight="600" font-family="sans-serif">$12,502,151</text>
+
+  <rect x="138" y="58" width="100" height="50" rx="4" fill="white" stroke="#E8EAED"/>
+  <text x="148" y="76" fill="#5F6368" font-size="9" font-family="sans-serif"># Loans</text>
+  <text x="148" y="96" fill="#202124" font-size="14" font-weight="600" font-family="sans-serif">38</text>
+
+  <rect x="246" y="58" width="100" height="50" rx="4" fill="white" stroke="#E8EAED"/>
+  <text x="256" y="76" fill="#5F6368" font-size="9" font-family="sans-serif"># Statuses</text>
+  <text x="256" y="96" fill="#202124" font-size="14" font-weight="600" font-family="sans-serif">6</text>
+
+  <rect x="354" y="58" width="130" height="50" rx="4" fill="white" stroke="#E8EAED"/>
+  <text x="364" y="76" fill="#5F6368" font-size="9" font-family="sans-serif">Avg per Status</text>
+  <text x="364" y="96" fill="#202124" font-size="14" font-weight="600" font-family="sans-serif">$2,083,692</text>
+
+  <!-- Chart area -->
+  <rect x="0" y="116" width="390" height="250" rx="4" fill="white" stroke="#E8EAED"/>
+  <text x="10" y="136" fill="#5F6368" font-size="9" font-family="sans-serif">Bar Chart</text>
+  <!-- Bars -->
+  <rect x="40" y="160" width="40" height="180" fill="#1A73E8" rx="2"/>
+  <rect x="95" y="200" width="40" height="140" fill="#1A73E8" rx="2"/>
+  <rect x="150" y="240" width="40" height="100" fill="#1A73E8" rx="2"/>
+  <rect x="205" y="260" width="40" height="80" fill="#1A73E8" rx="2"/>
+  <rect x="260" y="280" width="40" height="60" fill="#1A73E8" rx="2"/>
+  <rect x="315" y="310" width="40" height="30" fill="#1A73E8" rx="2"/>
+  <line x1="30" y1="340" x2="370" y2="340" stroke="#E8EAED"/>
+  <text x="42" y="355" fill="#5F6368" font-size="7" font-family="sans-serif">In Proc</text>
+  <text x="92" y="355" fill="#5F6368" font-size="7" font-family="sans-serif">Pre-Docs</text>
+  <text x="150" y="355" fill="#5F6368" font-size="7" font-family="sans-serif">Docs Out</text>
+  <text x="205" y="355" fill="#5F6368" font-size="7" font-family="sans-serif">Pre-Appr</text>
+  <text x="258" y="355" fill="#5F6368" font-size="7" font-family="sans-serif">Pend Can</text>
+  <text x="320" y="355" fill="#5F6368" font-size="7" font-family="sans-serif">Subord</text>
+
+  <!-- Summary table area -->
+  <rect x="398" y="116" width="402" height="250" rx="4" fill="white" stroke="#E8EAED"/>
+  <!-- Table header -->
+  <rect x="398" y="116" width="402" height="24" fill="#F8F9FA"/>
+  <text x="408" y="132" fill="#202124" font-size="9" font-weight="600" font-family="sans-serif">Status</text>
+  <text x="500" y="132" fill="#202124" font-size="9" font-weight="600" font-family="sans-serif">Count</text>
+  <text x="560" y="132" fill="#202124" font-size="9" font-weight="600" font-family="sans-serif">Volume</text>
+  <text x="680" y="132" fill="#202124" font-size="9" font-weight="600" font-family="sans-serif">% of Total</text>
+
+  <text x="408" y="156" fill="#5F6368" font-size="9" font-family="sans-serif">In Proc</text>
+  <text x="510" y="156" fill="#5F6368" font-size="9" font-family="sans-serif">21</text>
+  <text x="560" y="156" fill="#5F6368" font-size="9" font-family="sans-serif">$5,165,400</text>
+  <text x="700" y="156" fill="#5F6368" font-size="9" font-family="sans-serif">41.3%</text>
+
+  <rect x="398" y="162" width="402" height="18" fill="#F8F9FA"/>
+  <text x="408" y="176" fill="#5F6368" font-size="9" font-family="sans-serif">Pre-Docs</text>
+  <text x="510" y="176" fill="#5F6368" font-size="9" font-family="sans-serif">7</text>
+  <text x="560" y="176" fill="#5F6368" font-size="9" font-family="sans-serif">$2,947,000</text>
+  <text x="700" y="176" fill="#5F6368" font-size="9" font-family="sans-serif">23.6%</text>
+
+  <text x="408" y="196" fill="#5F6368" font-size="9" font-family="sans-serif">Docs Out</text>
+  <text x="510" y="196" fill="#5F6368" font-size="9" font-family="sans-serif">4</text>
+  <text x="560" y="196" fill="#5F6368" font-size="9" font-family="sans-serif">$1,620,000</text>
+  <text x="700" y="196" fill="#5F6368" font-size="9" font-family="sans-serif">13.0%</text>
+
+  <rect x="398" y="202" width="402" height="18" fill="#F8F9FA"/>
+  <text x="408" y="216" fill="#5F6368" font-size="9" font-family="sans-serif">Pre-Approval</text>
+  <text x="510" y="216" fill="#5F6368" font-size="9" font-family="sans-serif">2</text>
+  <text x="560" y="216" fill="#5F6368" font-size="9" font-family="sans-serif">$560,000</text>
+  <text x="700" y="216" fill="#5F6368" font-size="9" font-family="sans-serif">4.5%</text>
+
+  <!-- Totals footer -->
+  <rect x="398" y="320" width="402" height="22" fill="#F1F3F4"/>
+  <line x1="398" y1="320" x2="800" y2="320" stroke="#DADCE0" stroke-width="2"/>
+  <text x="408" y="336" fill="#202124" font-size="9" font-weight="600" font-family="sans-serif">Totals</text>
+  <text x="510" y="336" fill="#202124" font-size="9" font-weight="600" font-family="sans-serif">38</text>
+  <text x="560" y="336" fill="#202124" font-size="9" font-weight="600" font-family="sans-serif">$12,502,151</text>
+  <text x="700" y="336" fill="#202124" font-size="9" font-weight="600" font-family="sans-serif">100.0%</text>
+
+  <!-- Annotations -->
+  <rect x="0" y="380" width="800" height="100" rx="4" fill="#FFF8E1" stroke="#FFE082"/>
+  <text x="12" y="400" fill="#E65100" font-size="11" font-weight="600" font-family="sans-serif">Dashboard View Components:</text>
+  <text x="12" y="420" fill="#E65100" font-size="10" font-family="sans-serif">A. Config Bar — Group By, Measure, Aggregation, Chart type, toggles</text>
+  <text x="12" y="436" fill="#E65100" font-size="10" font-family="sans-serif">B. KPI Summary Cards — Total, Count, Groups, Average</text>
+  <text x="12" y="452" fill="#E65100" font-size="10" font-family="sans-serif">C. Chart — Bar, Pie, or Line (optional)</text>
+  <text x="12" y="468" fill="#E65100" font-size="10" font-family="sans-serif">D. Summary Table — Grouped data with Totals footer. Click a row to drill into details.</text>
+</svg>

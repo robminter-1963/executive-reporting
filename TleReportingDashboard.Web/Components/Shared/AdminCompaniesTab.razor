@@ -31,7 +31,7 @@
                               Placeholder="https://example.com"
                               Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 240px;" />
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           StartIcon="@Icons.Material.Filled.AddBusiness"
+                           StartIcon="@Icons.Material.Outlined.AddBusiness"
                            Disabled="!CanAdd()" OnClick="AddCompany">
                     Add
                 </MudButton>
@@ -85,10 +85,10 @@
                     <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
                     <MudTd>
                         <MudTooltip Text="Save">
-                            <MudIconButton Icon="@Icons.Material.Filled.Save" Color="Color.Primary" Size="Size.Small" OnClick="SaveEdit" />
+                            <MudIconButton Icon="@Icons.Material.Outlined.Save" Color="Color.Primary" Size="Size.Small" OnClick="SaveEdit" />
                         </MudTooltip>
                         <MudTooltip Text="Cancel">
-                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="CancelEdit" />
+                            <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small" OnClick="CancelEdit" />
                         </MudTooltip>
                     </MudTd>
                 }
@@ -96,12 +96,12 @@
                 {
                     <MudTd Style="text-align: center; white-space: nowrap;">
                         <MudTooltip Text="Move up">
-                            <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
+                            <MudIconButton Icon="@Icons.Material.Outlined.ArrowUpward" Size="Size.Small"
                                            Disabled="@(_companies.IndexOf(context) == 0)"
                                            OnClick="@(() => MoveUp(context))" />
                         </MudTooltip>
                         <MudTooltip Text="Move down">
-                            <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
+                            <MudIconButton Icon="@Icons.Material.Outlined.ArrowDownward" Size="Size.Small"
                                            Disabled="@(_companies.IndexOf(context) == _companies.Count - 1)"
                                            OnClick="@(() => MoveDown(context))" />
                         </MudTooltip>
@@ -138,7 +138,7 @@
                         {
                             <MudTooltip Text="Tile suppressed on the all-companies picker. The company is still fully usable elsewhere.">
                                 <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
-                                         Icon="@Icons.Material.Filled.VisibilityOff">
+                                         Icon="@Icons.Material.Outlined.VisibilityOff">
                                     Hidden
                                 </MudChip>
                             </MudTooltip>
@@ -151,15 +151,15 @@
                     <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
                     <MudTd>
                         <MudTooltip Text="Edit">
-                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => StartEdit(context))" />
+                            <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small" OnClick="@(() => StartEdit(context))" />
                         </MudTooltip>
                         <MudTooltip Text="@(context.IsActive ? "Deactivate" : "Activate")">
-                            <MudIconButton Icon="@(context.IsActive ? Icons.Material.Filled.Block : Icons.Material.Filled.CheckCircle)"
+                            <MudIconButton Icon="@(context.IsActive ? Icons.Material.Outlined.Block : Icons.Material.Outlined.CheckCircle)"
                                            Color="@(context.IsActive ? Color.Warning : Color.Success)" Size="Size.Small"
                                            OnClick="@(() => ToggleActive(context))" />
                         </MudTooltip>
                         <MudTooltip Text="@(context.IsHidden ? "Show on picker" : "Hide from picker")">
-                            <MudIconButton Icon="@(context.IsHidden ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)"
+                            <MudIconButton Icon="@(context.IsHidden ? Icons.Material.Outlined.Visibility : Icons.Material.Outlined.VisibilityOff)"
                                            Color="Color.Default" Size="Size.Small"
                                            OnClick="@(() => ToggleHidden(context))" />
                         </MudTooltip>
@@ -316,7 +316,7 @@
             }
             else
             {
-                <MudIcon Icon="@Icons.Material.Filled.Image" Color="Color.Default" Size="Size.Large" />
+                <MudIcon Icon="@Icons.Material.Outlined.Image" Color="Color.Default" Size="Size.Large" />
             }
             <MudStack Row Spacing="0" Class="mt-0">
                 @* Using <InputFile> directly instead of <MudFileUpload>
@@ -334,7 +334,7 @@
                                   color: #5F6368;"
                            onmouseover="this.style.background='#F1F3F4'"
                            onmouseout="this.style.background='transparent'">
-                        <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Small" />
+                        <MudIcon Icon="@Icons.Material.Outlined.CloudUpload" Size="Size.Small" />
                     </label>
                 </MudTooltip>
                 <InputFile id="@uploadId"
@@ -345,7 +345,7 @@
                 @if (c.Logo is { Length: > 0 })
                 {
                     <MudTooltip Text="Remove logo">
-                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                        <MudIconButton Icon="@Icons.Material.Outlined.DeleteOutline"
                                        Size="Size.Small" Color="Color.Default"
                                        OnClick="@(() => OnLogoClear(c.Id, c.Name))" />
                     </MudTooltip>

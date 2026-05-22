@@ -8,19 +8,19 @@
 @if (IconOnly)
 {
     <MudTooltip Text="Export" Placement="Placement.Bottom">
-        <MudMenu Icon="@Icons.Material.Filled.Download"
+        <MudMenu Icon="@Icons.Material.Outlined.Download"
                  Size="Size.Small" Dense
                  AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
                  Disabled="@Disabled">
             <MudMenuItem OnClick="() => OnExportExcel.InvokeAsync()">
                 <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                    <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" />
+                    <MudIcon Icon="@Icons.Material.Outlined.TableChart" Size="Size.Small" />
                     <MudText Typo="Typo.body2">Excel (.xlsx)</MudText>
                 </MudStack>
             </MudMenuItem>
             <MudMenuItem OnClick="() => OnExportCsv.InvokeAsync()">
                 <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                    <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" />
+                    <MudIcon Icon="@Icons.Material.Outlined.Description" Size="Size.Small" />
                     <MudText Typo="Typo.body2">CSV</MudText>
                 </MudStack>
             </MudMenuItem>
@@ -28,7 +28,7 @@
             {
                 <MudMenuItem OnClick="() => OnExportPdf.InvokeAsync()">
                     <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                        <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Size="Size.Small" />
+                        <MudIcon Icon="@Icons.Material.Outlined.PictureAsPdf" Size="Size.Small" />
                         <MudText Typo="Typo.body2">PDF</MudText>
                     </MudStack>
                 </MudMenuItem>
@@ -38,19 +38,19 @@
 }
 else
 {
-    <MudMenu Icon="@Icons.Material.Filled.Download" Variant="Variant.Outlined"
+    <MudMenu Icon="@Icons.Material.Outlined.Download" Variant="Variant.Outlined"
              Color="Color.Default" Size="Size.Small" Label="Export"
              AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
              Disabled="@Disabled">
         <MudMenuItem OnClick="() => OnExportExcel.InvokeAsync()">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" />
+                <MudIcon Icon="@Icons.Material.Outlined.TableChart" Size="Size.Small" />
                 <MudText Typo="Typo.body2">Excel (.xlsx)</MudText>
             </MudStack>
         </MudMenuItem>
         <MudMenuItem OnClick="() => OnExportCsv.InvokeAsync()">
             <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Small" />
+                <MudIcon Icon="@Icons.Material.Outlined.Description" Size="Size.Small" />
                 <MudText Typo="Typo.body2">CSV</MudText>
             </MudStack>
         </MudMenuItem>
@@ -58,7 +58,7 @@ else
         {
             <MudMenuItem OnClick="() => OnExportPdf.InvokeAsync()">
                 <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
-                    <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Size="Size.Small" />
+                    <MudIcon Icon="@Icons.Material.Outlined.PictureAsPdf" Size="Size.Small" />
                     <MudText Typo="Typo.body2">PDF</MudText>
                 </MudStack>
             </MudMenuItem>

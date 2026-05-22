@@ -64,7 +64,7 @@
                     }
                 </MudSelect>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           StartIcon="@Icons.Material.Filled.Add"
+                           StartIcon="@Icons.Material.Outlined.Add"
                            OnClick="OpenNewScheduleDialog"
                            Disabled="@(_newReportId is null)">
                     Add schedule
@@ -84,7 +84,7 @@
     <MudStack Row Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
         <MudTextField @bind-Value="_search" Placeholder="Search subject or report…"
                       Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
-                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search"
                       DebounceInterval="200" Style="max-width: 360px; flex: 1;" />
         <MudSelect T="string" @bind-Value="_statusFilter" Label="Status"
                    Variant="Variant.Outlined" Margin="Margin.Dense" Dense
@@ -166,7 +166,7 @@
                     else if (context.Kind == ScheduleKind.Distribution && !string.IsNullOrWhiteSpace(context.DistEmail))
                     {
                         <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
-                            <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small" Color="Color.Primary" />
+                            <MudIcon Icon="@Icons.Material.Outlined.Email" Size="Size.Small" Color="Color.Primary" />
                             <MudText Typo="Typo.caption" Style="overflow-wrap: anywhere;">
                                 @context.DistEmail
                             </MudText>
@@ -206,10 +206,10 @@
                 </MudTd>
                 <MudTd DataLabel="Actions" Style="text-align: right;">
                     <MudStack Row Spacing="0" Style="display: inline-flex !important;">
-                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                        title="Edit schedule"
                                        OnClick="@(() => OpenEditScheduleDialog(context))" />
-                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                        Color="Color.Error" title="Delete schedule"
                                        OnClick="@(() => ConfirmDelete(context))" />
                     </MudStack>
@@ -447,19 +447,19 @@
         DescribeIndividualTarget(TeamFanout fanout, int teamId) => fanout switch
     {
         TeamFanout.Manager => (
-            Icons.Material.Filled.SupervisorAccount,
+            Icons.Material.Outlined.SupervisorAccount,
             Color.Tertiary,
             $"Team {teamId} · manager only",
             "One email to the team's manager — full team roll-up. All-access managers get the unfiltered report."),
 
         TeamFanout.Both => (
-            Icons.Material.Filled.SupervisorAccount,
+            Icons.Material.Outlined.SupervisorAccount,
             Color.Tertiary,
             $"Team {teamId} · manager + all members",
             "Manager gets the team's roll-up; each member gets their own slice (one email per member)."),
 
         _ /* Members */ => (
-            Icons.Material.Filled.People,
+            Icons.Material.Outlined.People,
             Color.Primary,
             $"Team {teamId} · all members",
             "One personalized email per member, scope-filtered to that member's own rows.")

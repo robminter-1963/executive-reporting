@@ -8,6 +8,10 @@
 @inject IExportService ExportService
 @inject IUserPreferenceService PreferenceService
 @inject IFavoriteService FavoriteSvc
+@inject INotificationService Notifications
+@inject ICompanyKpiService KpiSvc
+@inject ICompanyConnectionAdminService ConnectionSvc
+@inject TleReportingDashboard.Web.Services.QueryPipeline.IQueryPipeline KpiPipeline
 @inject LandingGreetingState GreetingState
 @inject IUserManagementService UserManagement
 @inject IQueryScopeResolver ScopeResolver
@@ -32,18 +36,26 @@
 
 @if (!_initialized)
 {
-    <MudMainContent Style="padding: 16px;">
-        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center;
-                    min-height: 60vh; gap: 16px;">
+    @* Skeleton mimics the eventual page shape so layout doesn't rebuild
+       when init completes; the loading.gif sits centered on top of it as
+       the brand-friendly "we're working" cue. pointer-events: none on the
+       overlay lets the skeleton breathe underneath without intercepting
+       clicks (there's nothing to click yet anyway, but it keeps the
+       layering honest). *@
+    <MudMainContent Style="padding: 0; margin-left: 15px; position: relative;">
+        <SkeletonDashboard TabCount="4" TileCount="6" />
+        <div style="position: fixed; inset: 0; display: flex; flex-direction: column;
+                    align-items: center; justify-content: center; gap: 8px;
+                    pointer-events: none; z-index: 10;">
             <img src="loading.gif" alt="Loading…"
-                 style="max-width: 240px; height: auto;" />
+                 style="max-width: 180px; height: auto;" />
             <MudText Typo="Typo.body2" Color="Color.Secondary">Loading your dashboard…</MudText>
         </div>
     </MudMainContent>
     return;
 }
 
-<MudMainContent Style="padding: 0; margin-left: 15px; overflow-x: hidden; overflow-y: auto; height: calc(100vh - 64px);">
+<MudMainContent Style="padding: 12px 0 0 0; margin-left: 15px; overflow-x: hidden; overflow-y: auto; height: calc(100vh - 64px);">
     <MudStack Spacing="3">
         @* ── Header ── *@
         <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
@@ -55,7 +67,7 @@
                    last-visited company so they actually see the list. *@
                 @if (_accessibleCompanyCount > 1)
                 {
-                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                    <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                                    OnClick="@(() => Navigation.NavigateTo("/?all=1"))"
                                    title="All companies" />
                 }
@@ -97,7 +109,7 @@
                                    Style="margin: 0;">
                         <ActivatorContent>
                             <MudTooltip Text="@(_logoDataUri is not null ? "Change logo" : "Upload logo")" Placement="Placement.Bottom">
-                                <MudIconButton Icon="@Icons.Material.Filled.Image" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.Image" Size="Size.Small"
                                                Color="@(_logoDataUri is not null ? Color.Primary : Color.Default)" />
                             </MudTooltip>
                         </ActivatorContent>
@@ -105,7 +117,7 @@
                     @if (_logoDataUri is not null)
                     {
                         <MudTooltip Text="Remove logo" Placement="Placement.Bottom">
-                            <MudIconButton Icon="@Icons.Material.Filled.HideImage" Size="Size.Small" Color="Color.Error"
+                            <MudIconButton Icon="@Icons.Material.Outlined.HideImage" Size="Size.Small" Color="Color.Error"
                                            OnClick="RemoveLogo" />
                         </MudTooltip>
                     }
@@ -127,7 +139,7 @@
                 @if (_userRoleForCompany != UserRoles.Viewer || _hasAnyShares)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.LibraryBooks"
+                               StartIcon="@Icons.Material.Outlined.LibraryBooks"
                                OnClick="@(() => Navigation.NavigateTo("/reports"))">
                         @(_userRoleForCompany == UserRoles.Viewer ? "Shared Reports" : "Report Library")
                     </MudButton>
@@ -140,7 +152,7 @@
                 @if (_canManageTabs && !_editMode && _tabs.Any())
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.Visibility"
+                               StartIcon="@Icons.Material.Outlined.Visibility"
                                OnClick="OpenManageTabsDialogAsync">
                         Manage Tabs@(_hiddenTabIds.Count > 0 ? $" ({_hiddenTabIds.Count} hidden)" : "")
                     </MudButton>
@@ -153,28 +165,33 @@
                 {
                     @if (_editMode)
                     {
-                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.Add" OnClick="OpenAddDialog">
+                        <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Add" OnClick="OpenAddDialog">
                             Add Report
                         </MudButton>
                         <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.Tab" OnClick="AddTab">
+                                   StartIcon="@Icons.Material.Outlined.Tab" OnClick="AddTab">
                             Add Tab
                         </MudButton>
                         <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.ViewModule" OnClick="AddSection"
+                                   StartIcon="@Icons.Material.Outlined.ViewModule" OnClick="AddSection"
                                    Disabled="@(ActiveTab is null || _sections.Count >= IMasterDashboardService.MaxSectionsPerTab)"
                                    title="@(_sections.Count >= IMasterDashboardService.MaxSectionsPerTab ? $"Maximum {IMasterDashboardService.MaxSectionsPerTab} sections per tab" : "Add a new section to this tab")">
                             Add Section
                         </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Insights" OnClick="OpenManageKpisDialog"
+                                   title="Add, remove, or reorder the company's KPI cards. The KPI band shows above the tab strip.">
+                            Manage KPIs
+                        </MudButton>
                         <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.Save" OnClick="SaveLayout">
+                                   StartIcon="@Icons.Material.Outlined.Save" OnClick="SaveLayout">
                             Save Layout
                         </MudButton>
                     }
                     <MudButton Variant="@(_editMode ? Variant.Filled : Variant.Outlined)"
                                Color="@(_editMode ? Color.Warning : Color.Default)" Size="Size.Small"
-                               StartIcon="@(_editMode ? Icons.Material.Filled.Check : Icons.Material.Filled.Edit)"
+                               StartIcon="@(_editMode ? Icons.Material.Outlined.Check : Icons.Material.Outlined.Edit)"
                                OnClick="ToggleEditMode">
                         @(_editMode ? "Done Editing" : "Edit Layout")
                     </MudButton>
@@ -196,6 +213,7 @@
             <LandingGreeting DisplayName="@_userName"
                              LastSeenUtc="@_lastSeenUtc"
                              UpdatedSinceCount="@_updatedSinceLastVisit"
+                             UnreadNotificationCount="@_unreadNotificationCount"
                              OnDismissed="HandleGreetingDismissed" />
         }
 
@@ -215,7 +233,7 @@
             <MudPaper Elevation="0" Style="border: 1px solid var(--border-default, #DADCE0); border-radius: 8px; padding: 8px 12px; background: var(--surface-card, #FFFFFF);">
                 <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Style="flex-wrap: wrap;">
                     <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex: 0 0 auto;">
-                        <MudIcon Icon="@Icons.Material.Filled.Star" Size="Size.Small" Color="Color.Warning" />
+                        <MudIcon Icon="@Icons.Material.Outlined.Star" Size="Size.Small" Color="Color.Warning" />
                         <MudText Typo="Typo.caption" Style="font-weight: 600; color: var(--text-secondary, #5F6368); text-transform: uppercase; letter-spacing: 0.5px;">Pinned</MudText>
                     </MudStack>
                     @foreach (var fav in _favoriteReports)
@@ -233,13 +251,40 @@
                                  Href="@($"/viewer/{f.Id}/detail")"
                                  Target="_blank"
                                  OnClose="@(() => UnfavoriteFromStripAsync(f.Id))"
-                                 CloseIcon="@Icons.Material.Filled.Close"
+                                 CloseIcon="@Icons.Material.Outlined.Close"
                                  title="@label">
                             @label
                         </MudChip>
                     }
                 </MudStack>
             </MudPaper>
+        }
+
+        @* ── KPI band ──
+           Per-company strip of summary cards that sits above the tab
+           strip. Hidden when the company toggle is off OR there are no
+           KPIs defined — nothing renders in those cases, no empty
+           placeholder. Cards use the 12-column tile grid model so admins
+           reuse the muscle memory they already have for resizing tiles. *@
+        @if (_kpiBandVisible && _kpis.Count > 0)
+        {
+            <div class="kpi-band"
+                 style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px;">
+                @foreach (var k in _kpis)
+                {
+                    var kpi = k;
+                    var span = Math.Clamp(kpi.ColSpan, 2, 12);
+                    _kpiResults.TryGetValue(kpi.Id, out var kr);
+                    @* Right-click → ShowQueryDialog. Mirrors the tile
+                       right-click behavior. Admin-only so a viewer can't
+                       see the SQL via the context menu either. *@
+                    <div style="@($"grid-column: span {span} / span {span};")"
+                         @oncontextmenu="@(() => { if (_userRoleForCompany == UserRoles.Admin) _ = ShowKpiQuery(kpi); })"
+                         @oncontextmenu:preventDefault="@(_userRoleForCompany == UserRoles.Admin)">
+                        <KpiCard Kpi="kpi" Result="kr" />
+                    </div>
+                }
+            </div>
         }
 
         @* ── Tabs ── *@
@@ -291,21 +336,21 @@
                                               style="cursor: grab; display: inline-flex;"
                                               @onclick:stopPropagation="true"
                                               title="Drag to reorder tabs">
-                                            <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small" Style="color: #5F6368;" />
+                                            <MudIcon Icon="@Icons.Material.Outlined.DragIndicator" Size="Size.Small" Style="color: #5F6368;" />
                                         </span>
                                     }
                                     <span>@t.Label</span>
                                     @if (_editMode)
                                     {
                                         <MudTooltip Text="Rename tab">
-                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                            <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                                            Color="Color.Default" Style="padding: 2px;"
                                                            OnClick="@(() => RenameTab(t))" />
                                         </MudTooltip>
                                         @if (_tabs.Count > 1)
                                         {
                                             <MudTooltip Text="Remove tab">
-                                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                                                Color="Color.Error" Style="padding: 2px;"
                                                                OnClick="@(() => RemoveTab(t))" />
                                             </MudTooltip>
@@ -407,7 +452,7 @@
                                                           style="cursor: grab; display: inline-flex;"
                                                           @onclick:stopPropagation="true"
                                                           title="Drag to reorder sections">
-                                                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small" Style="color: #5F6368;" />
+                                                        <MudIcon Icon="@Icons.Material.Outlined.DragIndicator" Size="Size.Small" Style="color: #5F6368;" />
                                                     </span>
                                                 }
                                                 @{
@@ -435,26 +480,26 @@
                                             <div style="display: flex; align-items: center; gap: 6px; padding: 4px 6px; margin-top: 4px;">
                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">Section options:</MudText>
                                                 <MudTooltip Text="Align section title left">
-                                                    <MudIconButton Icon="@Icons.Material.Filled.FormatAlignLeft" Size="Size.Small"
+                                                    <MudIconButton Icon="@Icons.Material.Outlined.FormatAlignLeft" Size="Size.Small"
                                                                    Color="@(aSecAlign == "left" ? Color.Primary : Color.Default)"
                                                                    OnClick="@(() => SetSectionAlign(activeSec, "left"))" />
                                                 </MudTooltip>
                                                 <MudTooltip Text="Align section title center">
-                                                    <MudIconButton Icon="@Icons.Material.Filled.FormatAlignCenter" Size="Size.Small"
+                                                    <MudIconButton Icon="@Icons.Material.Outlined.FormatAlignCenter" Size="Size.Small"
                                                                    Color="@(aSecAlign == "center" ? Color.Primary : Color.Default)"
                                                                    OnClick="@(() => SetSectionAlign(activeSec, "center"))" />
                                                 </MudTooltip>
                                                 <MudTooltip Text="Align section title right">
-                                                    <MudIconButton Icon="@Icons.Material.Filled.FormatAlignRight" Size="Size.Small"
+                                                    <MudIconButton Icon="@Icons.Material.Outlined.FormatAlignRight" Size="Size.Small"
                                                                    Color="@(aSecAlign == "right" ? Color.Primary : Color.Default)"
                                                                    OnClick="@(() => SetSectionAlign(activeSec, "right"))" />
                                                 </MudTooltip>
                                                 <MudTooltip Text="Rename section">
-                                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                    <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                                                    OnClick="@(() => RenameSection(activeSec))" />
                                                 </MudTooltip>
                                                 <MudTooltip Text="Delete section (tiles move to '(no section)')">
-                                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                    <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                                                    Color="Color.Error"
                                                                    OnClick="@(() => RemoveSection(activeSec))" />
                                                 </MudTooltip>
@@ -527,7 +572,7 @@
                                                     <div style="display: flex; align-items: center; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, #E8EAED); background: var(--dashboard-header-bg, #FFFFFF); color: var(--dashboard-header-text, #202124);">
                                                         @if (_editMode)
                                                         {
-                                                            <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small"
+                                                            <MudIcon Icon="@Icons.Material.Outlined.DragIndicator" Size="Size.Small"
                                                                      Style="color: #5F6368; font-size: 18px;" />
                                                         }
                                                         <span style="@($"flex: 1; min-width: 0; font-weight: var(--dashboard-header-weight, 700); font-style: var(--dashboard-header-style, normal); text-decoration: var(--dashboard-header-deco, none); font-family: var(--dashboard-header-font, inherit); font-size: var(--dashboard-header-size, 0.95rem); text-align: {tileAlign}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;")"
@@ -536,17 +581,17 @@
                                                         {
                                                             <MudText Typo="Typo.caption" Color="Color.Secondary" Style="white-space: nowrap;">(@(tl.ColSpan * 60)w x @(tl.Height)h)</MudText>
                                                             <MudTooltip Text="Align left" Placement="Placement.Bottom">
-                                                                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignLeft" Size="Size.Small"
+                                                                <MudIconButton Icon="@Icons.Material.Outlined.FormatAlignLeft" Size="Size.Small"
                                                                                Color="@(tileAlign == "left" ? Color.Primary : Color.Default)"
                                                                                OnClick="@(() => SetTileAlign(tl, "left"))" />
                                                             </MudTooltip>
                                                             <MudTooltip Text="Align center" Placement="Placement.Bottom">
-                                                                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignCenter" Size="Size.Small"
+                                                                <MudIconButton Icon="@Icons.Material.Outlined.FormatAlignCenter" Size="Size.Small"
                                                                                Color="@(tileAlign == "center" ? Color.Primary : Color.Default)"
                                                                                OnClick="@(() => SetTileAlign(tl, "center"))" />
                                                             </MudTooltip>
                                                             <MudTooltip Text="Align right" Placement="Placement.Bottom">
-                                                                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignRight" Size="Size.Small"
+                                                                <MudIconButton Icon="@Icons.Material.Outlined.FormatAlignRight" Size="Size.Small"
                                                                                Color="@(tileAlign == "right" ? Color.Primary : Color.Default)"
                                                                                OnClick="@(() => SetTileAlign(tl, "right"))" />
                                                             </MudTooltip>
@@ -557,12 +602,12 @@
                                                             @if (_sections.Count > 0)
                                                             {
                                                                 <MudTooltip Text="Move tile to a section" Placement="Placement.Bottom">
-                                                                    <MudMenu Icon="@Icons.Material.Filled.ViewModule" Size="Size.Small"
+                                                                    <MudMenu Icon="@Icons.Material.Outlined.ViewModule" Size="Size.Small"
                                                                              Dense AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
                                                                         <MudMenuItem OnClick="@(() => MoveTileToSection(tl, null))">
                                                                             @if (tl.SectionId is null)
                                                                             {
-                                                                                <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Style="margin-right: 4px;" />
+                                                                                <MudIcon Icon="@Icons.Material.Outlined.Check" Size="Size.Small" Style="margin-right: 4px;" />
                                                                             }
                                                                             (no section)
                                                                         </MudMenuItem>
@@ -572,7 +617,7 @@
                                                                             <MudMenuItem OnClick="@(() => MoveTileToSection(tl, sLocal.Id))">
                                                                                 @if (tl.SectionId == sLocal.Id)
                                                                                 {
-                                                                                    <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Style="margin-right: 4px;" />
+                                                                                    <MudIcon Icon="@Icons.Material.Outlined.Check" Size="Size.Small" Style="margin-right: 4px;" />
                                                                                 }
                                                                                 @sLocal.Label
                                                                             </MudMenuItem>
@@ -589,7 +634,7 @@
                                                              && tdHeader.Data is not null && tdHeader.Data.Rows.Count > 0)
                                                         {
                                                             <MudTooltip Text="@(_chartVisibleTiles.Contains(tl.Id) ? "Hide Chart" : "Show Chart")" Placement="Placement.Bottom">
-                                                                <MudIconButton Icon="@(_chartVisibleTiles.Contains(tl.Id) ? Icons.Material.Filled.BarChart : Icons.Material.Outlined.BarChart)"
+                                                                <MudIconButton Icon="@(_chartVisibleTiles.Contains(tl.Id) ? Icons.Material.Outlined.BarChart : Icons.Material.Outlined.BarChart)"
                                                                                Size="Size.Small"
                                                                                Color="@(_chartVisibleTiles.Contains(tl.Id) ? Color.Primary : Color.Default)"
                                                                                OnClick="@(() => ToggleChart(tl.Id))" />
@@ -614,7 +659,7 @@
                                                         @if (_editMode)
                                                         {
                                                             <MudTooltip Text="Remove tile">
-                                                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                                <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                                                                Color="Color.Error"
                                                                                OnClick="() => RemoveTile(tl)" />
                                                             </MudTooltip>
@@ -683,13 +728,13 @@
                             }
                             else if (!_loading)
                             {
-                                <EmptyState Icon="@Icons.Material.Filled.DashboardCustomize"
+                                <EmptyState Icon="@Icons.Material.Outlined.DashboardCustomize"
                                             MinHeightPx="200"
                                             ContainerClass="mt-2"
                                             Heading="No tiles on this tab yet"
                                             Body="@(_editMode ? "Add reports as tiles to start building this dashboard." : "Switch to edit mode to add reports as tiles, or pick a different tab.")"
                                             CtaLabel="@(_editMode ? "Add report" : null)"
-                                            CtaIcon="@Icons.Material.Filled.Add"
+                                            CtaIcon="@Icons.Material.Outlined.Add"
                                             OnCtaClick="OpenAddDialog" />
                             }
                         </ChildContent>
@@ -706,16 +751,16 @@
                is managed for them, not by them. *@
             @if (_canManageTabs)
             {
-                <EmptyState Icon="@Icons.Material.Filled.VisibilityOff"
+                <EmptyState Icon="@Icons.Material.Outlined.VisibilityOff"
                             Heading="All tabs are hidden in your view"
                             Body="@($"Every dashboard tab for this company ({_hiddenTabIds.Count} total) is currently hidden. Use Manage Tabs to restore visibility.")"
                             CtaLabel="Manage Tabs"
-                            CtaIcon="@Icons.Material.Filled.Visibility"
+                            CtaIcon="@Icons.Material.Outlined.Visibility"
                             OnCtaClick="OpenManageTabsDialogAsync" />
             }
             else
             {
-                <EmptyState Icon="@Icons.Material.Filled.VisibilityOff"
+                <EmptyState Icon="@Icons.Material.Outlined.VisibilityOff"
                             Heading="No tabs are visible to you"
                             Body="An admin has hidden every dashboard tab in your view. Contact your administrator if you need access restored." />
             }
@@ -729,20 +774,20 @@
                they can't author dashboards themselves. *@
             @if (_userRoleForCompany == UserRoles.Admin)
             {
-                <EmptyState Icon="@Icons.Material.Filled.DashboardCustomize"
+                <EmptyState Icon="@Icons.Material.Outlined.DashboardCustomize"
                             Heading="Build your first dashboard tab"
                             Body="Tabs group related reports for a daily view. Add one to start pinning reports as tiles."
                             CtaLabel="Create First Tab"
-                            CtaIcon="@Icons.Material.Filled.Tab"
+                            CtaIcon="@Icons.Material.Outlined.Tab"
                             OnCtaClick="AddTab" />
             }
             else
             {
-                <EmptyState Icon="@Icons.Material.Filled.DashboardCustomize"
+                <EmptyState Icon="@Icons.Material.Outlined.DashboardCustomize"
                             Heading="Nothing on this dashboard yet"
                             Body="An admin sets up the layout for this company. In the meantime you can run reports directly from the Library."
                             CtaLabel="Open Report Library"
-                            CtaIcon="@Icons.Material.Filled.LibraryBooks"
+                            CtaIcon="@Icons.Material.Outlined.LibraryBooks"
                             OnCtaClick="@(() => Navigation.NavigateTo("/reports"))" />
             }
         }
@@ -906,6 +951,9 @@
     // for the page lifetime (we don't auto-refresh — the greeting is a
     // landing impression, not a live feed).
     private int _updatedSinceLastVisit;
+    // Bell-icon unread count, fetched once at greeting time so the toast
+    // chip can mirror the count the user would see on the bell.
+    private int _unreadNotificationCount;
     // Local "the greeting is currently mounted on this page" flag.
     // True only when this MasterDashboard claimed the once-per-circuit
     // slot in OnInitializedAsync. Flipped off by the dismiss callback
@@ -971,6 +1019,20 @@
     // shows tile content, but scoped one level deeper.
     private int _activeSectionId;
     private Dictionary<Guid, TileLoadResult> _tileData = new();
+
+    // ── KPI band state ──
+    // _kpis holds the company's KPI definitions in render order; _kpiResults
+    // holds the computed values keyed by KPI id (populated alongside tile
+    // loading). _kpiBandVisible mirrors RPT_companies.show_kpi_band — the
+    // band's markup checks both this flag AND _kpis.Count > 0, so a freshly-
+    // toggled-on company with zero KPIs still renders nothing.
+    private List<CompanyKpi> _kpis = new();
+    private Dictionary<Guid, KpiResult> _kpiResults = new();
+    // Captured SQL + params per KPI so the right-click "Show SQL" dialog
+    // has something to display. Cleared and repopulated on every recompute.
+    private Dictionary<Guid, KpiQueryInfo> _kpiQuery = new();
+    private bool _kpiBandVisible;
+    private List<CompanyConnectionRecord> _kpiConnections = new();
     // Wall-clock UTC of each tile's most-recent successful load. Drives
     // the "updated 5m ago" footer caption — populated alongside the
     // _tileData write so the two stay in sync. Cleared when the tile
@@ -1331,6 +1393,18 @@
             // the next visit reads from the now-updated row.
             _lastSeenUtc = prefs.LastMasterDashboardSeen;
             _updatedSinceLastVisit = await CountReportsUpdatedSinceAsync(_lastSeenUtc);
+            // Unread bell count for the greeting chip. Best-effort —
+            // a notifications-table miss or DB blip just leaves the chip
+            // hidden rather than failing the rest of the landing.
+            try
+            {
+                if (!string.IsNullOrEmpty(_userEmail))
+                    _unreadNotificationCount = await Notifications.GetUnreadCountAsync(_userEmail);
+            }
+            catch (Exception nex)
+            {
+                Logger.LogDebug(nex, "Unread notification count fetch failed on MasterDashboard");
+            }
             // Fire-and-forget the touch — the bump only matters for the
             // NEXT visit, so we don't block this render on the round-
             // trip. Errors log silently; missing the bump means the next
@@ -1447,6 +1521,10 @@
         _loading = true;
         try
         {
+            // KPI band is per-company, not per-tab — load alongside tabs so
+            // the band renders on the first paint instead of popping in
+            // after the active tab's tiles finish.
+            await LoadKpisAsync();
             _tabs = await MasterService.GetTabsAsync(_companyId);
             // Per-user hidden-tab filter. Loaded alongside the shared tabs so
             // the first render can already filter; admins flipping into edit
@@ -1612,6 +1690,264 @@
             _tileLoading.Remove(reportId);
         }
         StateHasChanged();
+    }
+
+    // ── KPI band loading + compute ──
+    // Loads the company's KPI definitions, visibility flag, and the
+    // connection catalog (used by the Manage KPIs dialog), then fans out
+    // one aggregation query per KPI. Errors are swallowed per-KPI so a
+    // single broken query (e.g. a renamed field) doesn't hide the rest
+    // of the band — the offending card just renders an em-dash.
+    private async Task LoadKpisAsync()
+    {
+        try
+        {
+            var bandTask = KpiSvc.IsBandVisibleAsync(_companyId);
+            var kpisTask = KpiSvc.GetByCompanyAsync(_companyId);
+            var connsTask = ConnectionSvc.GetByCompanyAsync(_companyId);
+            await Task.WhenAll(bandTask, kpisTask, connsTask);
+            _kpiBandVisible = bandTask.Result;
+            _kpis = kpisTask.Result;
+            _kpiConnections = connsTask.Result;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "KPI band metadata load failed for company {CompanyId}", _companyId);
+            _kpis = new();
+            _kpiBandVisible = false;
+            _kpiConnections = new();
+            return;
+        }
+        // Short-circuit when there's nothing to render — saves a fan-out
+        // of queries that would produce no visible output anyway.
+        if (!_kpiBandVisible || _kpis.Count == 0)
+        {
+            _kpiResults = new();
+            _kpiQuery = new();
+            StateHasChanged();
+            return;
+        }
+        await RecomputeKpiResultsAsync();
+        // Belt-and-suspenders: RecomputeKpiResultsAsync already calls
+        // StateHasChanged at the end, but doing it here too guarantees a
+        // post-load re-render on the path where the dialog closed and
+        // we re-entered LoadKpisAsync from OpenManageKpisDialog. Cheap.
+        StateHasChanged();
+    }
+
+    // Fans out one (or two) aggregation queries per KPI in parallel.
+    // Called from LoadKpisAsync on first load and from the Manage KPIs
+    // dialog's close handler so the band refreshes immediately when an
+    // admin edits, adds, or removes a card. Also captures the SQL +
+    // params for the right-click "Show SQL" dialog.
+    private async Task RecomputeKpiResultsAsync()
+    {
+        var pairs = await Task.WhenAll(_kpis.Select(async k =>
+        {
+            try
+            {
+                var (current, info) = await ComputeKpiAsync(k, previousPeriod: false);
+                decimal? previous = null;
+                if (k.ComparePrevious
+                    && !string.IsNullOrEmpty(k.Period)
+                    && !string.IsNullOrEmpty(k.DateFieldId))
+                {
+                    (previous, _) = await ComputeKpiAsync(k, previousPeriod: true);
+                }
+                decimal? delta = null;
+                if (current is decimal c && previous is decimal p && p != 0m)
+                {
+                    delta = (c - p) / p;
+                }
+                return (k.Id, new KpiResult(current, previous, delta, info?.Error), info);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "KPI compute failed for {Id}", k.Id);
+                return (k.Id, KpiResult.FromError(ex.Message),
+                    (KpiQueryInfo?)new KpiQueryInfo(
+                        "/* SQL couldn't be generated — see error message */",
+                        null,
+                        ex.Message));
+            }
+        }));
+        _kpiResults = pairs.ToDictionary(p => p.Id, p => p.Item2);
+        _kpiQuery = pairs.Where(p => p.Item3 is not null)
+                         .ToDictionary(p => p.Id, p => p.Item3!);
+        StateHasChanged();
+    }
+
+    // Runs a single SELECT <agg>(<field>) aggregation against the KPI's
+    // connection + primary table. previousPeriod = true shifts the date
+    // window to the immediately-preceding span of the same length so the
+    // delta chip has a baseline to compare against. Returns (value, info)
+    // — info carries the SQL/params for the Show SQL dialog. If the
+    // execute path throws, info contains the build-only SQL + error.
+    private async Task<(decimal? Value, KpiQueryInfo Info)> ComputeKpiAsync(CompanyKpi kpi, bool previousPeriod)
+    {
+        var request = new QueryRequest
+        {
+            ConnectionId = kpi.ConnectionId,
+            PrimaryTable = kpi.PrimaryTable,
+            FieldIds = new List<string> { kpi.FieldId },
+            Aggregations = new Dictionary<string, string>
+            {
+                [kpi.FieldId] = KpiAggregations.ToSqlOp(kpi.Aggregation)
+            },
+            // PageSize=1 because an aggregation with no GROUP BY columns
+            // collapses to one row. We never need more than that.
+            PageSize = 1,
+            DisableDefaultSort = true,
+            // Layer the KPI's authored predicates on top of the date window.
+            // SqlEmitter combines Filters + CustomFilterIds + date filter
+            // with AND, so the aggregation runs over the narrowed slice.
+            Filters = kpi.Filters is { Count: > 0 }
+                ? new Dictionary<string, object?>(kpi.Filters)
+                : new Dictionary<string, object?>(),
+            CustomFilterIds = kpi.CustomFilterIds is { Count: > 0 }
+                ? new List<string>(kpi.CustomFilterIds)
+                : null
+        };
+
+        if (!string.IsNullOrEmpty(kpi.Period) && !string.IsNullOrEmpty(kpi.DateFieldId))
+        {
+            DateTime from, to;
+            if (string.Equals(kpi.Period, KpiPeriods.Custom, StringComparison.OrdinalIgnoreCase))
+            {
+                // Custom-range KPIs carry explicit DateFrom/DateTo. Skip
+                // entirely when either is missing — the dialog requires
+                // both, but defend against bad data on the read path.
+                if (kpi.DateFrom is null || kpi.DateTo is null)
+                {
+                    // No date filter applied; fall through.
+                    request.DateFieldId = null;
+                    goto AfterDate;
+                }
+                from = kpi.DateFrom.Value;
+                to = kpi.DateTo.Value;
+                if (previousPeriod)
+                {
+                    var len = to - from;
+                    to = from;
+                    from = from - len;
+                }
+            }
+            else
+            {
+                var now = DateTime.UtcNow;
+                (from, to) = previousPeriod
+                    ? KpiPeriods.ResolvePrevious(kpi.Period!, now)
+                    : KpiPeriods.Resolve(kpi.Period!, now);
+            }
+            request.DateFieldId = kpi.DateFieldId;
+            request.DateFrom = from;
+            request.DateTo = to;
+            // DateFilterTranslator short-circuits when DateOperatorId is
+            // blank — we need to set it explicitly to "custom_range" so the
+            // BuildCustomRange path emits "<col> >= @DateFrom AND <col> <= @DateTo".
+            // KPIs resolve their own (from, to) bounds; we never use the
+            // schema's named relative operators (mtd/qtd/etc. are local to
+            // the KPI feature, not the SchemaConfig's RelativeDateOperators).
+            request.DateOperatorId = "custom_range";
+        }
+        AfterDate:;
+
+        try
+        {
+            // IQueryPipeline (SqlEmitter) is the path that actually honors
+            // request.Aggregations and the date-filter inputs. The legacy
+            // IQueryService.ExecuteQueryAsync path was producing raw SELECTs
+            // with no SUM/GROUP BY and no date predicate, because it uses
+            // QueryBuilder which doesn't read request.Aggregations.
+            // Admin-level KPIs run with no role-based redaction.
+            var roles = new[] { UserRoles.Admin };
+            var response = await KpiPipeline.ExecuteAsync(request, roles);
+            var info = new KpiQueryInfo(response?.Sql ?? string.Empty,
+                                        response?.Parameters, null);
+            if (response?.Rows is null || response.Rows.Count == 0)
+                return (null, info);
+
+            var first = response.Rows[0];
+            // The aggregation result column is keyed by the field id;
+            // older emitters may key by uppercase, so fall back to a
+            // case-insensitive lookup if the literal key misses.
+            object? raw = null;
+            if (!first.TryGetValue(kpi.FieldId, out raw) || raw is null)
+            {
+                var match = first.Keys.FirstOrDefault(k =>
+                    string.Equals(k, kpi.FieldId, StringComparison.OrdinalIgnoreCase));
+                if (match is not null) raw = first[match];
+            }
+            if (raw is null) return (null, info);
+
+            try { return (Convert.ToDecimal(raw), info); }
+            catch { return (null, info); }
+        }
+        catch (TleReportingDashboard.Web.Services.QueryPipeline.QueryExecutionException qex)
+        {
+            // SQL was built but the DB rejected it. Pull the SQL + bound
+            // parameters off the exception so the Show SQL dialog has the
+            // exact text that failed (most useful debug surface — admin
+            // sees the actual emitted SQL with the actual filter values).
+            return (null, new KpiQueryInfo(qex.Sql, qex.Parameters, qex.Message));
+        }
+        catch (Exception ex)
+        {
+            // Build-time failure (schema lookup, join resolution, unknown
+            // field id, etc.) — no SQL was emitted. Surface a placeholder
+            // so the dialog still opens and the user sees the error.
+            return (null, new KpiQueryInfo(
+                "/* SQL couldn't be generated — see error message */",
+                null,
+                ex.Message));
+        }
+    }
+
+    // Right-click handler for KPI cards. Opens the same ShowQueryDialog
+    // the tile right-click uses so admins debug both surfaces the same way.
+    private async Task ShowKpiQuery(CompanyKpi kpi)
+    {
+        if (!_kpiQuery.TryGetValue(kpi.Id, out var info))
+        {
+            Snackbar.Add("This KPI hasn't loaded yet — wait for it to finish.", Severity.Info);
+            return;
+        }
+        var label = string.IsNullOrWhiteSpace(kpi.Label) ? kpi.FieldId : kpi.Label!;
+        var dialogParams = new DialogParameters
+        {
+            { "Sql", info.Sql },
+            { "Parameters", info.Parameters },
+            { "ScopingNote", (string?)null },
+            { "ScopingForceNoMatch", false },
+            { "ErrorMessage", info.Error }
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true
+        };
+        await DialogService.ShowAsync<ShowQueryDialog>($"SQL — {label}", dialogParams, options);
+    }
+
+    // Opens the Manage KPIs dialog. If anything was changed (KPI added,
+    // removed, reordered, edited, or band visibility toggled), refetch
+    // and recompute so the band reflects the new state immediately.
+    private async Task OpenManageKpisDialog()
+    {
+        var parameters = new DialogParameters<ManageKpisDialog>
+        {
+            { x => x.CompanyId, _companyId },
+            { x => x.Connections, _kpiConnections }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dlg = await DialogService.ShowAsync<ManageKpisDialog>("Manage KPIs", parameters, options);
+        var result = await dlg.Result;
+        var dirty = result?.Data is bool b && b;
+        if (dirty)
+        {
+            await LoadKpisAsync();
+        }
     }
 
     private async Task<(TileLoadResult? Result, FailedTileQuery? Failure)> LoadReportDashboard(Guid reportId)
@@ -2522,6 +2858,7 @@
     private async Task ExportTileDetailExcel(MasterDashboardTile tile)
     {
         if (!_tileData.TryGetValue(tile.ReportId, out var td)) return;
+        if (!await ConfirmExportIfEmptyAsync(td)) return;
         var data = BuildTileExportData(td);
         var name = tile.ReportName ?? "Report";
         var bytes = ExportService.ExportToExcel(data, name);
@@ -2531,6 +2868,7 @@
     private async Task ExportTileDetailCsv(MasterDashboardTile tile)
     {
         if (!_tileData.TryGetValue(tile.ReportId, out var td)) return;
+        if (!await ConfirmExportIfEmptyAsync(td)) return;
         var data = BuildTileExportData(td);
         var bytes = ExportService.ExportToCsv(data);
         await JS.DownloadAsync(BuildTileExportFileName(tile, "csv"), bytes);
@@ -2539,10 +2877,28 @@
     private async Task ExportTileDetailPdf(MasterDashboardTile tile)
     {
         if (!_tileData.TryGetValue(tile.ReportId, out var td)) return;
+        if (!await ConfirmExportIfEmptyAsync(td)) return;
         var data = BuildTileExportData(td);
         var name = tile.ReportName ?? "Report";
         var bytes = ExportService.ExportToPdf(data, name);
         await JS.DownloadAsync(BuildTileExportFileName(tile, "pdf"), bytes);
+    }
+
+    // Confirm with the user before exporting an empty result set.
+    // Returning false aborts the export. The headers-only file still
+    // has a legitimate use (template scaffold), so this is a prompt,
+    // not a block.
+    private async Task<bool> ConfirmExportIfEmptyAsync(TileLoadResult td)
+    {
+        if (td.Data.Rows.Count > 0) return true;
+        var result = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = "Nothing to export",
+            Message = "This report doesn't have any records right now. Do you still want to download the file?",
+            YesText = "Download anyway",
+            CancelText = "Cancel"
+        });
+        return result == true;
     }
 
     // Drops any columns the dashboard config marked hidden so the

@@ -17,7 +17,7 @@
 <MudDialog>
     <TitleContent>
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-            <MudIcon Icon="@Icons.Material.Filled.Apartment" />
+            <MudIcon Icon="@Icons.Material.Outlined.Apartment" />
             <MudStack Spacing="0">
                 <MudText Typo="Typo.h6" Style="font-weight: 600;">Company access</MudText>
                 <MudText Typo="Typo.caption" Color="Color.Secondary">@Email</MudText>
@@ -64,7 +64,7 @@
                                     }
                                 </MudSelect>
                                 <MudTooltip Text="Revoke access to this company">
-                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                                    Color="Color.Error"
                                                    OnClick="@(() => RevokeAccess(grant))" />
                                 </MudTooltip>
@@ -76,7 +76,7 @@
                                override and which inherits. Debounced commit so
                                typing doesn't fire a write on every keystroke. *@
                             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                                <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small"
+                                <MudIcon Icon="@Icons.Material.Outlined.Email" Size="Size.Small"
                                          Color="@(string.IsNullOrEmpty(grant.CompanyEmail) ? Color.Default : Color.Primary)" />
                                 <MudText Typo="Typo.body2" Style="min-width: 160px;">Company email</MudText>
                                 <MudTextField T="string" Value="@grant.CompanyEmail"
@@ -96,7 +96,7 @@
                                 @foreach (var cn in conns)
                                 {
                                     <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                                        <MudIcon Icon="@(cn.IsActive ? Icons.Material.Filled.Link : Icons.Material.Filled.LinkOff)"
+                                        <MudIcon Icon="@(cn.IsActive ? Icons.Material.Outlined.Link : Icons.Material.Outlined.LinkOff)"
                                                  Size="Size.Small"
                                                  Color="@(cn.IsActive ? Color.Primary : Color.Default)" />
                                         <MudText Typo="Typo.body2" Style="min-width: 160px;">@cn.ConnectionName</MudText>
@@ -155,7 +155,7 @@
                                   Variant="Variant.Outlined" Margin="Margin.Dense"
                                   Style="min-width: 240px;" />
                     <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.Add"
+                               StartIcon="@Icons.Material.Outlined.Add"
                                Disabled="@(_grantCompanyId is null)"
                                OnClick="GrantAccess">
                         Grant

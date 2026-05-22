@@ -12,7 +12,7 @@
 <div class="@($"landing-greeting {( _visible ? "visible" : "hidden")}")">
     <MudPaper Elevation="6" Class="pa-3"
               Style="border: 1px solid var(--border-default, #E2E8F0); border-radius: 10px; background: var(--surface-card, #FFFFFF); position: relative; min-width: 280px;">
-        <MudIconButton Icon="@Icons.Material.Filled.Close"
+        <MudIconButton Icon="@Icons.Material.Outlined.Close"
                        Size="Size.Small"
                        Style="position: absolute; top: 4px; right: 4px;"
                        title="Dismiss"
@@ -27,8 +27,19 @@
             @if (UpdatedSinceCount > 0)
             {
                 <MudChip T="string" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                         Icon="@Icons.Material.Filled.Bolt" Class="mt-1">
+                         Icon="@Icons.Material.Outlined.Bolt" Class="mt-1">
                     @UpdatedSinceCount @(UpdatedSinceCount == 1 ? "report updated" : "reports updated")
+                </MudChip>
+            }
+            @* Unread notifications nudge — rendered as a second chip below
+               the "reports updated" line so the toast surfaces both signals
+               in one glance. The user can read the count here and then open
+               the bell to triage. *@
+            @if (UnreadNotificationCount > 0)
+            {
+                <MudChip T="string" Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                         Icon="@Icons.Material.Outlined.NotificationsActive" Class="mt-1">
+                    @UnreadNotificationCount @(UnreadNotificationCount == 1 ? "unread notification" : "unread notifications")
                 </MudChip>
             }
         </MudStack>
@@ -66,6 +77,9 @@
     [Parameter] public string DisplayName { get; set; } = string.Empty;
     [Parameter] public DateTime? LastSeenUtc { get; set; }
     [Parameter] public int UpdatedSinceCount { get; set; }
+    // Unread items in the bell-icon inbox. Surfaced as a separate chip
+    // so users know at-a-glance how many things are waiting for them.
+    [Parameter] public int UnreadNotificationCount { get; set; }
     [Parameter] public EventCallback OnDismissed { get; set; }
     [Parameter] public int AutoDismissSeconds { get; set; } = 4;
 

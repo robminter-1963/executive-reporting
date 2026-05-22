@@ -8,7 +8,7 @@
                 <MudStack Spacing="0">
                     <MudStack Row AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">@kpi.Label</MudText>
-                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                        <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                        OnClick="() => OnKpiRemoved.InvokeAsync(kpi.Id)"
                                        title="Remove KPI" />
                     </MudStack>
@@ -17,7 +17,7 @@
             </MudPaper>
         }
 
-        <MudMenu Icon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Color="Color.Default"
+        <MudMenu Icon="@Icons.Material.Outlined.Add" Variant="Variant.Outlined" Color="Color.Default"
                  Dense Size="Size.Small" Label="Add KPI"
                  Style="border: 1px dashed #DADCE0; border-radius: 4px; align-self: center;">
             @foreach (var kpi in AvailableKpis.Where(k => !ActiveKpiIds.Contains(k.Id)))

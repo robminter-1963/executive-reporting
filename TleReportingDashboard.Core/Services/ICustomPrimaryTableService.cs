@@ -22,7 +22,10 @@ public interface ICustomPrimaryTableService
         // changes; new call sites pass these through from the dialog.
         string? tableType = null,
         string? primaryColumn = null,
-        string? additionalKeyColumns = null);
+        string? additionalKeyColumns = null,
+        // Optional free-text description shown in the admin tab and editable
+        // from the add/edit dialog. Null/blank persists as NULL.
+        string? description = null);
 
     // Replaces the table name / alias / flags on an existing entry. The
     // service clears any prior default on the same connection when the
@@ -35,7 +38,8 @@ public interface ICustomPrimaryTableService
         CancellationToken ct = default,
         string? tableType = null,
         string? primaryColumn = null,
-        string? additionalKeyColumns = null);
+        string? additionalKeyColumns = null,
+        string? description = null);
 
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 
@@ -69,6 +73,11 @@ public sealed class CustomPrimaryTableRecord
     public DateTime CreatedAt { get; set; }
     public string? CreatedById { get; set; }
     public string? CreatedByEmail { get; set; }
+
+    // Optional free-text note explaining what this alias is for. Shown in
+    // the Admin → Table Aliases tab and editable from the add/edit dialog.
+    // Up to 500 chars. Null/blank = no description.
+    public string? Description { get; set; }
 
     // ── Entity classification (TT-1 / TT-2) ────────────────────────────
     // Optional. One of TableTypes.* values, or null when the admin hasn't

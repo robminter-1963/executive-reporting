@@ -1,0 +1,109 @@
+<svg width="800" height="500" xmlns="http://www.w3.org/2000/svg">
+  <!-- Header -->
+  <rect width="800" height="48" fill="#FFFFFF" stroke="#DADCE0"/>
+  <rect x="12" y="10" width="28" height="28" rx="4" fill="#1A73E8"/>
+  <text x="19" y="29" fill="white" font-size="12" font-weight="bold" font-family="sans-serif">T</text>
+  <text x="48" y="30" fill="#202124" font-size="13" font-weight="600" font-family="sans-serif">TLE Reporting</text>
+  <text x="155" y="30" fill="#9AA0A6" font-size="11" font-family="sans-serif">› Report Editor</text>
+
+  <!-- Toolbar -->
+  <rect y="48" width="800" height="44" fill="#F8F9FA" stroke="#E8EAED"/>
+  <rect x="12" y="55" width="24" height="24" rx="2" fill="none" stroke="#5F6368"/>
+  <text x="17" y="72" fill="#5F6368" font-size="14" font-family="sans-serif">☰</text>
+  <rect x="42" y="55" width="24" height="24" rx="2" fill="none" stroke="#5F6368"/>
+  <text x="47" y="72" fill="#5F6368" font-size="14" font-family="sans-serif">🏠</text>
+  <text x="74" y="72" fill="#202124" font-size="14" font-weight="600" font-family="sans-serif">Pipeline Report</text>
+  <rect x="440" y="56" width="90" height="28" rx="4" fill="#1A73E8"/>
+  <text x="453" y="74" fill="white" font-size="11" font-family="sans-serif">▶ Run Query</text>
+  <rect x="538" y="56" width="60" height="28" rx="4" fill="none" stroke="#1A73E8"/>
+  <text x="554" y="74" fill="#1A73E8" font-size="11" font-family="sans-serif">Save</text>
+  <rect x="606" y="56" width="90" height="28" rx="4" fill="none" stroke="#5F6368"/>
+  <text x="614" y="74" fill="#5F6368" font-size="11" font-family="sans-serif">Show Query</text>
+  <rect x="704" y="56" width="80" height="28" rx="4" fill="none" stroke="#5F6368"/>
+  <text x="717" y="74" fill="#5F6368" font-size="11" font-family="sans-serif">Template</text>
+
+  <!-- Sidebar -->
+  <rect x="0" y="92" width="200" height="408" fill="#F8F9FA" stroke="#E8EAED"/>
+  <text x="12" y="115" fill="#202124" font-size="12" font-weight="600" font-family="sans-serif">Field Picker</text>
+  <text x="12" y="138" fill="#1A73E8" font-size="11" font-family="sans-serif">▾ Loan</text>
+  <text x="24" y="156" fill="#5F6368" font-size="10" font-family="sans-serif">  Loan Number</text>
+  <text x="24" y="172" fill="#5F6368" font-size="10" font-family="sans-serif">  Loan Amount</text>
+  <text x="24" y="188" fill="#5F6368" font-size="10" font-family="sans-serif">  Loan Status</text>
+  <text x="24" y="204" fill="#5F6368" font-size="10" font-family="sans-serif">  Interest Rate</text>
+  <text x="12" y="228" fill="#1A73E8" font-size="11" font-family="sans-serif">▾ Borrower</text>
+  <text x="24" y="246" fill="#5F6368" font-size="10" font-family="sans-serif">  Borrower Name</text>
+  <text x="24" y="262" fill="#5F6368" font-size="10" font-family="sans-serif">  Credit Score</text>
+  <text x="12" y="286" fill="#1A73E8" font-size="11" font-family="sans-serif">▾ Property</text>
+  <text x="24" y="304" fill="#5F6368" font-size="10" font-family="sans-serif">  State</text>
+  <text x="24" y="320" fill="#5F6368" font-size="10" font-family="sans-serif">  Zip</text>
+
+  <!-- Label -->
+  <rect x="8" y="420" width="184" height="40" rx="4" fill="#E8F0FE" stroke="#1A73E8" stroke-dasharray="4"/>
+  <text x="20" y="444" fill="#1A73E8" font-size="10" font-family="sans-serif">← Click fields to add</text>
+
+  <!-- Main content -->
+  <rect x="200" y="92" width="600" height="408" fill="#FFFFFF"/>
+
+  <!-- Filter bar -->
+  <rect x="208" y="100" width="584" height="30" rx="4" fill="#F8F9FA" stroke="#E8EAED"/>
+  <text x="216" y="120" fill="#5F6368" font-size="10" font-family="sans-serif">Filters: Status ▾  | Date Range ▾  | State ▾</text>
+
+  <!-- Custom filters -->
+  <rect x="208" y="136" width="584" height="24" rx="4" fill="none"/>
+  <text x="216" y="152" fill="#5F6368" font-size="10" font-family="sans-serif">Custom Filters:</text>
+  <rect x="310" y="138" width="120" height="20" rx="10" fill="#1A73E8"/>
+  <text x="325" y="152" fill="white" font-size="9" font-family="sans-serif">Zero Days In Status</text>
+
+  <!-- Field chips -->
+  <rect x="208" y="166" width="584" height="28" rx="4" fill="none"/>
+  <rect x="212" y="168" width="80" height="20" rx="10" fill="none" stroke="#1A73E8"/>
+  <text x="222" y="182" fill="#1A73E8" font-size="9" font-family="sans-serif">Loan Number ×</text>
+  <rect x="298" y="168" width="80" height="20" rx="10" fill="none" stroke="#1A73E8"/>
+  <text x="308" y="182" fill="#1A73E8" font-size="9" font-family="sans-serif">Loan Amount ×</text>
+  <rect x="384" y="168" width="60" height="20" rx="10" fill="none" stroke="#1A73E8"/>
+  <text x="398" y="182" fill="#1A73E8" font-size="9" font-family="sans-serif">Status ×</text>
+  <rect x="450" y="168" width="50" height="20" rx="10" fill="none" stroke="#1A73E8"/>
+  <text x="462" y="182" fill="#1A73E8" font-size="9" font-family="sans-serif">State ×</text>
+
+  <!-- Tabs -->
+  <rect x="208" y="200" width="60" height="28" rx="4 4 0 0" fill="#1A73E8"/>
+  <text x="222" y="218" fill="white" font-size="10" font-family="sans-serif">Table</text>
+  <rect x="270" y="200" width="60" height="28" rx="4 4 0 0" fill="#F8F9FA" stroke="#E8EAED"/>
+  <text x="284" y="218" fill="#5F6368" font-size="10" font-family="sans-serif">Chart</text>
+  <rect x="332" y="200" width="80" height="28" rx="4 4 0 0" fill="#F8F9FA" stroke="#E8EAED"/>
+  <text x="340" y="218" fill="#5F6368" font-size="10" font-family="sans-serif">Dashboard</text>
+
+  <!-- Data grid -->
+  <rect x="208" y="228" width="584" height="24" fill="#F8F9FA" stroke="#E8EAED"/>
+  <text x="216" y="244" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif">Loan Number</text>
+  <text x="340" y="244" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif">Loan Amount</text>
+  <text x="470" y="244" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif">Status</text>
+  <text x="570" y="244" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif">State</text>
+  <text x="680" y="244" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif">Officer</text>
+
+  <line x1="208" y1="252" x2="792" y2="252" stroke="#E8EAED"/>
+  <text x="216" y="270" fill="#5F6368" font-size="10" font-family="sans-serif">2024-001234</text>
+  <text x="340" y="270" fill="#5F6368" font-size="10" font-family="sans-serif">$425,000</text>
+  <text x="470" y="270" fill="#5F6368" font-size="10" font-family="sans-serif">In Proc</text>
+  <text x="570" y="270" fill="#5F6368" font-size="10" font-family="sans-serif">CA</text>
+  <text x="680" y="270" fill="#5F6368" font-size="10" font-family="sans-serif">J. Smith</text>
+
+  <rect x="208" y="278" width="584" height="20" fill="#F8F9FA"/>
+  <text x="216" y="292" fill="#5F6368" font-size="10" font-family="sans-serif">2024-001235</text>
+  <text x="340" y="292" fill="#5F6368" font-size="10" font-family="sans-serif">$310,000</text>
+  <text x="470" y="292" fill="#5F6368" font-size="10" font-family="sans-serif">Pre-Docs</text>
+  <text x="570" y="292" fill="#5F6368" font-size="10" font-family="sans-serif">TX</text>
+  <text x="680" y="292" fill="#5F6368" font-size="10" font-family="sans-serif">M. Jones</text>
+
+  <text x="216" y="314" fill="#5F6368" font-size="10" font-family="sans-serif">2024-001236</text>
+  <text x="340" y="314" fill="#5F6368" font-size="10" font-family="sans-serif">$550,000</text>
+  <text x="470" y="314" fill="#5F6368" font-size="10" font-family="sans-serif">Docs Out</text>
+  <text x="570" y="314" fill="#5F6368" font-size="10" font-family="sans-serif">FL</text>
+  <text x="680" y="314" fill="#5F6368" font-size="10" font-family="sans-serif">A. Lee</text>
+
+  <!-- Annotations -->
+  <rect x="208" y="460" width="200" height="30" rx="4" fill="#FFF8E1" stroke="#FFE082"/>
+  <text x="216" y="480" fill="#E65100" font-size="10" font-family="sans-serif">A = Field Picker | B = Toolbar</text>
+  <rect x="420" y="460" width="200" height="30" rx="4" fill="#FFF8E1" stroke="#FFE082"/>
+  <text x="428" y="480" fill="#E65100" font-size="10" font-family="sans-serif">C = Filters | D = Data Grid</text>
+</svg>

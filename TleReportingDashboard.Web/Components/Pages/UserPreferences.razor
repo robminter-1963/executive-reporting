@@ -14,7 +14,7 @@
 <MudMainContent Style="padding: 0; max-width: 700px; margin-left: 15px;">
     <MudStack Spacing="3">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+            <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                            OnClick="GoBack"
                            title="Back" />
             <MudText Typo="Typo.h5" Style="font-weight: 600;">Preferences</MudText>
@@ -93,7 +93,7 @@
                     Cancel
                 </MudButton>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           StartIcon="@Icons.Material.Filled.Save"
+                           StartIcon="@Icons.Material.Outlined.Save"
                            OnClick="Save" Disabled="_saving">
                     @(_saving ? "Saving..." : "Save Preferences")
                 </MudButton>

@@ -61,7 +61,7 @@
                     }
                 </MudSelect>
 
-                <MudMenu Icon="@Icons.Material.Filled.AddCircleOutline" Variant="Variant.Text"
+                <MudMenu Icon="@Icons.Material.Outlined.AddCircleOutline" Variant="Variant.Text"
                          Color="Color.Primary" Dense Size="Size.Small" Label="+ Measure"
                          AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
                     @foreach (var col in AvailableExtraMeasures)
@@ -73,7 +73,7 @@
 
                 @* Each added dimension extends the GROUP BY: rows become one per
                    distinct combination of (primary group-by, extra dimensions). *@
-                <MudMenu Icon="@Icons.Material.Filled.AddCircleOutline" Variant="Variant.Text"
+                <MudMenu Icon="@Icons.Material.Outlined.AddCircleOutline" Variant="Variant.Text"
                          Color="Color.Secondary" Dense Size="Size.Small" Label="+ Dimension"
                          AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft">
                     @foreach (var col in AvailableExtraDimensions)
@@ -87,7 +87,7 @@
                    client-side per group. Examples: "[Abandoned] / [Calls] * 100",
                    "[Sum of LoanAmount] / [Count]". See CalculatedColumnEvaluator
                    for the supported syntax. *@
-                <MudButton StartIcon="@Icons.Material.Filled.Calculate" Variant="Variant.Text"
+                <MudButton StartIcon="@Icons.Material.Outlined.Calculate" Variant="Variant.Text"
                            Color="Color.Tertiary" Dense Size="Size.Small"
                            OnClick="@(() => OpenCalcDialog(null))">
                     + Calc
@@ -463,7 +463,7 @@
                                                                 @if (!ReadOnly)
                                                                 {
                                                                     <span @onclick:stopPropagation="true">
-                                                                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                                        <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                                                                        OnClick="() => RemoveExtraColumn(ecRef.Key)"
                                                                                        Style="margin-left: 2px;" />
                                                                     </span>
@@ -496,11 +496,11 @@
                                                                 @if (!ReadOnly)
                                                                 {
                                                                     <span @onclick:stopPropagation="true">
-                                                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                                                                        OnClick="@(() => OpenCalcDialog(ccRef.Key))"
                                                                                        Style="margin-left: 2px;"
                                                                                        title="Edit formula" />
-                                                                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                                        <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                                                                        OnClick="() => RemoveCalcColumn(ccRef.Key)"
                                                                                        Style="margin-left: 2px;" />
                                                                     </span>
@@ -538,7 +538,7 @@
                                                                 @if (!ReadOnly)
                                                                 {
                                                                     <span @onclick:stopPropagation="true">
-                                                                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                                        <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                                                                        OnClick="() => RemoveExtraDimension(dimFidRef)"
                                                                                        Style="margin-left: 2px;" />
                                                                     </span>
@@ -556,7 +556,7 @@
                                             <tr>
                                                 <td colspan="@_dashColumnOrder.Count" class="dash-empty-cell">
                                                     <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Class="pa-6" Spacing="1">
-                                                        <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Medium" Color="Color.Default" />
+                                                        <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Size="Size.Medium" Color="Color.Default" />
                                                         <MudText Typo="Typo.body1" Color="Color.Secondary">No Records Found</MudText>
                                                     </MudStack>
                                                 </td>
@@ -725,7 +725,7 @@
                                     : $"Detail: {GetGroupByLabel()} = {_selectedGroup}")
                             </MudText>
                             <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.ClearAll"
+                                       StartIcon="@Icons.Material.Outlined.ClearAll"
                                        OnClick="() => { _selectedGroup = string.Empty; }">
                                 Hide Details
                             </MudButton>
@@ -746,7 +746,7 @@
         {
             <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
                       Style="border: 1px dashed #DADCE0; min-height: 200px;">
-                <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Large" Color="Color.Default" />
+                <MudIcon Icon="@Icons.Material.Outlined.Dashboard" Size="Size.Large" Color="Color.Default" />
                 <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
                     Select a Group By field and Measure to build a dashboard view.
                 </MudText>
@@ -758,7 +758,7 @@
 {
     <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
               Style="border: 1px dashed #DADCE0; min-height: 200px;">
-        <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Large" Color="Color.Default" />
+        <MudIcon Icon="@Icons.Material.Outlined.Dashboard" Size="Size.Large" Color="Color.Default" />
         <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
             Run a query first, then switch to Dashboard view.
         </MudText>

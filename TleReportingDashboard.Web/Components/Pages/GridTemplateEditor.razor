@@ -69,13 +69,13 @@
     <div>
     <MudStack Spacing="3">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+            <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                            OnClick="@(() => Navigation.NavigateTo("/grid-templates"))" />
             <MudText Typo="Typo.h5" Style="font-weight: 600;">
                 @(_isNew ? "New Grid Template" : $"Edit: {_template.Name}")
             </MudText>
             <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
-                     Icon="@Icons.Material.Filled.Shield"
+                     Icon="@Icons.Material.Outlined.Shield"
                      Style="font-size: 0.65rem; height: 22px;">
                 ADMIN
             </MudChip>
@@ -132,7 +132,7 @@
                     </MudText>
                     <MudTextField @bind-Value="_fieldSearch" Placeholder="Search fields..." Variant="Variant.Outlined"
                                   Margin="Margin.Dense" Immediate DebounceInterval="300"
-                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search"
                                   Style="max-width: 250px;" />
                 </MudStack>
 
@@ -208,7 +208,7 @@
                                     @ondragover:preventDefault="true"
                                     @ondrop="@(() => OnOrderDrop(idx))">
                                     <td style="text-align: center;">
-                                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator"
+                                        <MudIcon Icon="@Icons.Material.Outlined.DragIndicator"
                                                  Size="Size.Small"
                                                  Style="color: #5F6368; cursor: grab; vertical-align: middle;" />
                                     </td>
@@ -239,7 +239,7 @@
                                                       Style="font-size: 0.8rem;" />
                                     </td>
                                     <td>
-                                        <MudIconButton Icon="@(_hiddenColumns.Contains(fld.Id) ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                        <MudIconButton Icon="@(_hiddenColumns.Contains(fld.Id) ? Icons.Material.Outlined.VisibilityOff : Icons.Material.Outlined.Visibility)"
                                                        Size="Size.Small"
                                                        Color="@(_hiddenColumns.Contains(fld.Id) ? Color.Default : Color.Primary)"
                                                        OnClick="() => ToggleVisibility(fld.Id)"
@@ -292,7 +292,7 @@
                 Cancel
             </MudButton>
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                       StartIcon="@Icons.Material.Filled.Save"
+                       StartIcon="@Icons.Material.Outlined.Save"
                        OnClick="Save" Disabled="@(string.IsNullOrWhiteSpace(_template.Name) || !_selectedFieldIds.Any())">
                 Save Template
             </MudButton>

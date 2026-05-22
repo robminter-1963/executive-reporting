@@ -11,15 +11,15 @@
         {
             <span @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"
                   style="@($"display: flex; justify-content: {GetJustify()};")">
-                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignLeft" Size="Size.Small"
+                <MudIconButton Icon="@Icons.Material.Outlined.FormatAlignLeft" Size="Size.Small"
                                Color="@(GetEffectiveAlign() == "left" ? Color.Primary : Color.Default)"
                                OnClick="@(() => ChangeAlign("left"))" Style="padding: 2px;"
                                title="Align left" />
-                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignCenter" Size="Size.Small"
+                <MudIconButton Icon="@Icons.Material.Outlined.FormatAlignCenter" Size="Size.Small"
                                Color="@(GetEffectiveAlign() == "center" ? Color.Primary : Color.Default)"
                                OnClick="@(() => ChangeAlign("center"))" Style="padding: 2px;"
                                title="Align center" />
-                <MudIconButton Icon="@Icons.Material.Filled.FormatAlignRight" Size="Size.Small"
+                <MudIconButton Icon="@Icons.Material.Outlined.FormatAlignRight" Size="Size.Small"
                                Color="@(GetEffectiveAlign() == "right" ? Color.Primary : Color.Default)"
                                OnClick="@(() => ChangeAlign("right"))" Style="padding: 2px;"
                                title="Align right" />

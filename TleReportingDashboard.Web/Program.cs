@@ -141,6 +141,7 @@ try
     builder.Services.AddSingleton<DataverseSchemaClient>();
     builder.Services.AddScoped<SchemaBuilderService>();
     builder.Services.AddScoped<ILibrarySectionService, LibrarySectionService>();
+    builder.Services.AddScoped<ICompanyKpiService, CompanyKpiService>();
     builder.Services.AddScoped<IAppSettingsService, AppSettingsService>();
     // Scoped to match IAppSettingsService's lifetime — same circuit, same
     // instance, so ReportGrid + DetailViewer + AdminColumnWidthsTab share

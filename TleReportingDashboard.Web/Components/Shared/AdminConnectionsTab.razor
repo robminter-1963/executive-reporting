@@ -33,7 +33,7 @@
             @if (_selectedCompanyId is not null && !_editing)
             {
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           StartIcon="@Icons.Material.Filled.Add" OnClick="StartNew">
+                           StartIcon="@Icons.Material.Outlined.Add" OnClick="StartNew">
                     Add Connection
                 </MudButton>
                 @* Bulk copy from another company. Each copy lands with a
@@ -43,7 +43,7 @@
                 @if (_companies.Count > 1)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Default"
-                               StartIcon="@Icons.Material.Filled.ContentCopy"
+                               StartIcon="@Icons.Material.Outlined.ContentCopy"
                                OnClick="OpenCopyFromCompanyDialog">
                         Copy from another company
                     </MudButton>
@@ -67,13 +67,13 @@
                     <MudSpacer />
                     <MudButton OnClick="CancelEdit">Cancel</MudButton>
                     <MudButton Variant="Variant.Outlined" Color="Color.Info"
-                               StartIcon="@Icons.Material.Filled.PlayArrow"
+                               StartIcon="@Icons.Material.Outlined.PlayArrow"
                                Disabled="_testing"
                                OnClick="TestCurrentForm">
                         @(_testing ? "Testing…" : "Test connection")
                     </MudButton>
                     <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.Save" OnClick="SaveEdit">
+                               StartIcon="@Icons.Material.Outlined.Save" OnClick="SaveEdit">
                         Save
                     </MudButton>
                 </MudStack>
@@ -315,22 +315,22 @@
                     </MudTd>
                     <MudTd>
                         <MudTooltip Text="Test connection">
-                            <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" Color="Color.Info"
+                            <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small" Color="Color.Info"
                                            OnClick="@(() => TestRow(context))" />
                         </MudTooltip>
                         <MudTooltip Text="Edit">
-                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                            <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                            OnClick="@(() => StartEdit(context))" />
                         </MudTooltip>
                         @if (!context.IsDefault)
                         {
                             <MudTooltip Text="Make default">
-                                <MudIconButton Icon="@Icons.Material.Filled.Star" Size="Size.Small" Color="Color.Warning"
+                                <MudIconButton Icon="@Icons.Material.Outlined.Star" Size="Size.Small" Color="Color.Warning"
                                                OnClick="@(() => MakeDefault(context))" />
                             </MudTooltip>
                         }
                         <MudTooltip Text="Delete">
-                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                            <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" Color="Color.Error"
                                            OnClick="@(() => Delete(context))" />
                         </MudTooltip>
                     </MudTd>

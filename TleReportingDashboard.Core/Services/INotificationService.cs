@@ -31,6 +31,22 @@ public interface INotificationService
     Task MarkReadAsync(Guid id, CancellationToken ct = default);
 
     Task MarkAllReadAsync(string userEmail, CancellationToken ct = default);
+
+    // Remove a single notification permanently. Used by the per-row
+    // X button on the bell dropdown.
+    Task DeleteAsync(Guid id, CancellationToken ct = default);
+
+    // Bulk delete with optional filters. Both filters can combine:
+    //   olderThanUtc = X    → only rows with created_at < X
+    //   readOnly = true     → only rows with is_read = 1
+    //   olderThanUtc = null + readOnly = false → wipes the whole inbox
+    // Returns the row count actually deleted so the caller can show
+    // a meaningful snackbar ("Cleared 12 notifications.").
+    Task<int> DeleteRangeAsync(
+        string userEmail,
+        DateTime? olderThanUtc = null,
+        bool readOnly = false,
+        CancellationToken ct = default);
 }
 
 public sealed record NotificationRecord(

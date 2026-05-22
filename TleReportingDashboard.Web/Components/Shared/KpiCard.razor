@@ -1,0 +1,165 @@
+@using MudBlazor
+@using TleReportingDashboard.Web.Models
+@using TleReportingDashboard.Web.Services
+@inject ISchemaService SchemaService
+
+@* A single KPI card. Pure presentation: takes the KPI definition and the
+   pre-computed value(s); MasterDashboard owns the data fetch so a tab's
+   worth of KPIs can be fanned out in one pass. Auto-formats the value
+   from the underlying field's DataType (currency / percent / integer /
+   decimal) so admins don't pick the format twice. *@
+
+<MudPaper Elevation="0"
+          Class="@($"kpi-card pa-3 {ContainerClass}".Trim())"
+          Style="@($"border: 1px solid var(--border-default, #E2E8F0); border-radius: var(--radius-md, 8px); background: var(--surface-card, #FFFFFF); height: 100%; display: flex; flex-direction: column; justify-content: space-between; min-height: 110px; {ContainerStyle}")">
+    <MudStack Spacing="0">
+        <MudText Typo="Typo.caption" Color="Color.Secondary"
+                 Style="letter-spacing: 0.4px; text-transform: uppercase; font-weight: 600;">
+            @ResolvedLabel
+        </MudText>
+        @if (Kpi.Period is not null)
+        {
+            <MudText Typo="Typo.caption" Color="Color.Secondary"
+                     Style="font-size: 0.65rem; margin-top: 2px;">
+                @KpiPeriods.Display(Kpi.Period)
+            </MudText>
+        }
+    </MudStack>
+
+    <MudStack Spacing="0" Class="mt-2">
+        @* The big number. 28px is the sweet spot — readable across desks but
+           tucks into a 3-col tile without overflowing on dense dashboards. *@
+        <MudText Typo="Typo.h5"
+                 Style="font-weight: 700; line-height: 1.1; letter-spacing: -0.01em;">
+            @FormattedValue
+        </MudText>
+        @if (DeltaChipVisible)
+        {
+            <div style="margin-top: 6px;">
+                <MudChip T="string" Size="Size.Small"
+                         Variant="Variant.Outlined"
+                         Color="@DeltaChipColor"
+                         Icon="@DeltaChipIcon"
+                         Style="font-size: 0.7rem; height: 22px;">
+                    @DeltaChipText
+                </MudChip>
+            </div>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public CompanyKpi Kpi { get; set; } = default!;
+    [Parameter] public KpiResult? Result { get; set; }
+    // Optional caller-supplied chrome — used by MasterDashboard to apply
+    // grid-span styles and edit-mode tweaks without forking the card.
+    [Parameter] public string? ContainerClass { get; set; }
+    [Parameter] public string? ContainerStyle { get; set; }
+
+    // Cached field config for format resolution. Looked up once on the
+    // first ParametersSet — we only need it for DataType + Format +
+    // Label, all of which are stable for the lifetime of a render.
+    private FieldConfig? _field;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Kpi is null || string.IsNullOrEmpty(Kpi.FieldId)) return;
+        // Re-fetch only when the field or connection changed so live
+        // edits flow through but quiet re-renders don't re-hit the cache.
+        if (_field is not null
+            && string.Equals(_field.Id, Kpi.FieldId, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        try
+        {
+            var configs = await SchemaService.GetFieldConfigsAsync(Kpi.ConnectionId);
+            _field = configs.FirstOrDefault(f =>
+                string.Equals(f.Id, Kpi.FieldId, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            // Swallow — the card just won't auto-format and will fall
+            // back to the raw decimal string.
+            _field = null;
+        }
+    }
+
+    // ── Label resolution ──
+    // Caller's override wins; field label is the fallback; raw id as
+    // last resort so something always renders even if the field config
+    // can't be loaded.
+    private string ResolvedLabel =>
+        !string.IsNullOrWhiteSpace(Kpi.Label)
+            ? Kpi.Label!
+            : _field?.Label
+              ?? Kpi.FieldId;
+
+    // ── Value formatting ──
+    // Pulled from the field's DataType + Format. COUNT aggregations
+    // override to integer formatting regardless of the source field's
+    // type — counting rows yields an integer, not a currency amount.
+    private string FormattedValue
+    {
+        get
+        {
+            if (Result?.Error is not null) return "—";
+            if (Result?.Current is not decimal v) return "—";
+
+            var isCount = string.Equals(Kpi.Aggregation, KpiAggregations.Count,
+                StringComparison.OrdinalIgnoreCase);
+            var type = isCount ? "integer" : (_field?.DataType ?? "decimal");
+            return FormatNumber(v, type, _field?.Format);
+        }
+    }
+
+    private static string FormatNumber(decimal value, string dataType, string? customFormat)
+    {
+        // Honor an explicit format mask on the field when provided — admins
+        // sometimes pin a specific shape (e.g. "N1" for one-decimal yields).
+        if (!string.IsNullOrWhiteSpace(customFormat))
+        {
+            try { return value.ToString(customFormat); } catch { /* fall through */ }
+        }
+        return dataType.ToLowerInvariant() switch
+        {
+            "currency"      => value.ToString("C0", System.Globalization.CultureInfo.CurrentCulture),
+            "percent"       => (value).ToString("P1"),
+            "integer"       => value.ToString("N0"),
+            "decimal" or "" => value.ToString("N1"),
+            _               => value.ToString("N1"),
+        };
+    }
+
+    // ── Delta chip ──
+    // Hidden unless the KPI is configured for compare-previous AND the
+    // delta was actually computed (Previous non-null + non-zero).
+    private bool DeltaChipVisible =>
+        Kpi.ComparePrevious && Result?.DeltaPercent is decimal;
+
+    private Color DeltaChipColor => Result?.DeltaPercent switch
+    {
+        > 0 => Color.Success,
+        < 0 => Color.Error,
+        _   => Color.Default
+    };
+
+    private string DeltaChipIcon => Result?.DeltaPercent switch
+    {
+        > 0 => Icons.Material.Outlined.ArrowUpward,
+        < 0 => Icons.Material.Outlined.ArrowDownward,
+        _   => Icons.Material.Outlined.Remove
+    };
+
+    private string DeltaChipText
+    {
+        get
+        {
+            var pct = Result?.DeltaPercent ?? 0m;
+            // Format as +/- N.N%; the sign is implicit on the chip color
+            // but admins still expect the literal sign in the label.
+            var sign = pct >= 0 ? "+" : "";
+            return $"{sign}{(pct * 100m):N1}%";
+        }
+    }
+}

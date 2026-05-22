@@ -31,7 +31,7 @@
                     <MudSelectItem T="string" Value="@ScopeRules.Team">Only for their team</MudSelectItem>
                 </MudSelect>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           StartIcon="@Icons.Material.Filled.Add"
+                           StartIcon="@Icons.Material.Outlined.Add"
                            Disabled="@(!CanAdd())" OnClick="AddRole">
                     Add role
                 </MudButton>
@@ -132,11 +132,11 @@
                     <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
                     <MudTd Style="text-align: right;">
                         <MudTooltip Text="Save">
-                            <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success"
+                            <MudIconButton Icon="@Icons.Material.Outlined.Check" Size="Size.Small" Color="Color.Success"
                                            OnClick="SaveEdit" />
                         </MudTooltip>
                         <MudTooltip Text="Cancel">
-                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                            <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                            OnClick="CancelEdit" />
                         </MudTooltip>
                     </MudTd>
@@ -152,7 +152,7 @@
                             <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
                                 <strong>@context.Name</strong>
                                 <MudTooltip Text="@shieldTip">
-                                    <MudIcon Icon="@Icons.Material.Filled.Shield" Size="Size.Small" Color="Color.Primary" />
+                                    <MudIcon Icon="@Icons.Material.Outlined.Shield" Size="Size.Small" Color="Color.Primary" />
                                 </MudTooltip>
                             </MudStack>
                         }
@@ -172,7 +172,7 @@
                         @if (IsAdministratorRole(context))
                         {
                             <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined"
-                                     Icon="@Icons.Material.Filled.AdminPanelSettings"
+                                     Icon="@Icons.Material.Outlined.AdminPanelSettings"
                                      Style="margin-left: 6px; height: 20px; font-size: 0.7rem;">
                                 All admin sections
                             </MudChip>
@@ -181,7 +181,7 @@
                         {
                             <MudTooltip Text="@($"Admin sections: {string.Join(", ", secs.Select(LabelForSection))}")">
                                 <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined"
-                                         Icon="@Icons.Material.Filled.LockPerson"
+                                         Icon="@Icons.Material.Outlined.LockPerson"
                                          Style="margin-left: 6px; height: 20px; font-size: 0.7rem;">
                                     @secs.Count admin section@(secs.Count == 1 ? "" : "s")
                                 </MudChip>
@@ -192,14 +192,14 @@
                         @if (context.ScopeRule == ScopeRules.Self)
                         {
                             <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled"
-                                     Icon="@Icons.Material.Filled.FilterAlt">
+                                     Icon="@Icons.Material.Outlined.FilterAlt">
                                 Only their own
                             </MudChip>
                         }
                         else if (context.ScopeRule == ScopeRules.Team)
                         {
                             <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled"
-                                     Icon="@Icons.Material.Filled.Groups">
+                                     Icon="@Icons.Material.Outlined.Groups">
                                 Only for their team
                             </MudChip>
                         }
@@ -223,7 +223,7 @@
                     <MudTd>@context.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudTd>
                     <MudTd Style="text-align: right;">
                         <MudTooltip Text="Edit role">
-                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                            <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                            OnClick="@(() => StartEdit(context))" />
                         </MudTooltip>
                         @* Delete is hidden for built-in roles. Service-layer
@@ -232,7 +232,7 @@
                         @if (!IsBuiltInRole(context))
                         {
                             <MudTooltip Text="Delete role">
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" Color="Color.Error"
                                                OnClick="@(() => DeleteRole(context))" />
                             </MudTooltip>
                         }

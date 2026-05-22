@@ -1,0 +1,77 @@
+@using MudBlazor
+
+@* Layout-matching loading placeholder for MasterDashboard. Replaces the
+   old centered loading.gif so the user sees the eventual page shape
+   immediately and doesn't get the rug-pull of a blank → fully-rendered
+   transition. The bars don't need to be exact — they just need to read
+   as "header up top, tabs below it, a grid of cards under that". *@
+
+<div style="padding: 0 16px;">
+
+    @* Header row: small logo box + a wide title bar + a couple of
+       trailing action buttons. Mirrors the top of MasterDashboard. *@
+    <div style="display: flex; align-items: center; gap: 16px; padding: 16px 0;">
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle"
+                     Animation="Animation.Pulse"
+                     Width="56px" Height="40px"
+                     Style="border-radius: 4px;" />
+        <MudSkeleton SkeletonType="SkeletonType.Text"
+                     Animation="Animation.Pulse"
+                     Width="280px" Height="28px"
+                     Style="border-radius: 4px;" />
+        <div style="flex: 1;"></div>
+        <MudSkeleton SkeletonType="SkeletonType.Circle"
+                     Animation="Animation.Pulse"
+                     Width="36px" Height="36px" />
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle"
+                     Animation="Animation.Pulse"
+                     Width="120px" Height="36px"
+                     Style="border-radius: 6px;" />
+    </div>
+
+    @* Tab strip — a few placeholder tab labels with a thin underline. *@
+    <div style="display: flex; gap: 24px; border-bottom: 1px solid #E2E8F0; padding: 0 0 12px 0;">
+        @for (var t = 0; t < TabCount; t++)
+        {
+            <MudSkeleton SkeletonType="SkeletonType.Text"
+                         Animation="Animation.Pulse"
+                         Width="@TabWidth(t)" Height="18px"
+                         Style="border-radius: 4px;" />
+        }
+    </div>
+
+    @* Tile grid — N cards laid out in a responsive grid. Each card has
+       a heading bar and a body block. Sized to roughly match the dashboard
+       tile aspect ratio. *@
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; margin-top: 16px;">
+        @for (var i = 0; i < TileCount; i++)
+        {
+            <MudPaper Elevation="0"
+                      Style="border: 1px solid #E2E8F0; border-radius: var(--radius-md, 8px); padding: 16px; min-height: 220px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <MudSkeleton SkeletonType="SkeletonType.Text"
+                                 Animation="Animation.Pulse"
+                                 Width="60%" Height="16px"
+                                 Style="border-radius: 4px;" />
+                    <MudSkeleton SkeletonType="SkeletonType.Circle"
+                                 Animation="Animation.Pulse"
+                                 Width="20px" Height="20px" />
+                </div>
+                <MudSkeleton SkeletonType="SkeletonType.Rectangle"
+                             Animation="Animation.Wave"
+                             Width="100%" Height="140px"
+                             Style="border-radius: 6px;" />
+            </MudPaper>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public int TabCount { get; set; } = 4;
+    [Parameter] public int TileCount { get; set; } = 6;
+
+    // Stagger tab widths so the strip doesn't look like a row of
+    // identical bars — real tab labels vary in length.
+    private static readonly int[] TabWidths = { 80, 110, 70, 130, 90, 100 };
+    private static string TabWidth(int i) => $"{TabWidths[i % TabWidths.Length]}px";
+}

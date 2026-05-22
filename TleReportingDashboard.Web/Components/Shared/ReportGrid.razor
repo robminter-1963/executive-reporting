@@ -96,10 +96,10 @@
             <MudText Typo="Typo.caption">
                 @(((_readOnlyPage - 1) * _pageSize + 1))–@(Math.Min(_readOnlyPage * _pageSize, (Data?.Rows.Count ?? 0))) of @(Data?.Rows.Count ?? 0)
             </MudText>
-            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small"
+            <MudIconButton Icon="@Icons.Material.Outlined.ChevronLeft" Size="Size.Small"
                            Disabled="@(_readOnlyPage <= 1)"
                            OnClick="() => { _readOnlyPage = Math.Max(1, _readOnlyPage - 1); }" />
-            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small"
+            <MudIconButton Icon="@Icons.Material.Outlined.ChevronRight" Size="Size.Small"
                            Disabled="@(_readOnlyPage * _pageSize >= (Data?.Rows.Count ?? 0))"
                            OnClick="() => { _readOnlyPage++; }" />
         </MudStack>

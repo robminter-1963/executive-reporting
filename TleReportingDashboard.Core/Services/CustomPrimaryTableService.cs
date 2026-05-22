@@ -35,7 +35,8 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
                     SELECT id, connection_id, table_name, alias,
                            is_primary, is_default_primary,
                            created_at, created_by_id, created_by_email,
-                           table_type, primary_column, additional_key_columns
+                           table_type, primary_column, additional_key_columns,
+                           description
                     FROM EMPOWER.RPT_custom_primary_tables
                     WHERE connection_id = @c
                     ORDER BY is_default_primary DESC, is_primary DESC, table_name, alias;", conn);
@@ -56,7 +57,8 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         CancellationToken ct = default,
         string? tableType = null,
         string? primaryColumn = null,
-        string? additionalKeyColumns = null)
+        string? additionalKeyColumns = null,
+        string? description = null)
     {
         // Normalize the new typing fields. Blank → NULL so the DB doesn't
         // store empty strings (keeps "is set" checks unambiguous). Column
@@ -66,6 +68,11 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         var normalizedTableType = string.IsNullOrWhiteSpace(tableType) ? null : tableType.Trim();
         var normalizedPrimaryColumn = NormalizeIdentifier(primaryColumn, "primaryColumn");
         var normalizedAdditionalKeys = NormalizeKeyColumnList(additionalKeyColumns);
+        var normalizedDescription = string.IsNullOrWhiteSpace(description)
+            ? null
+            // Cap at 500 chars to match the column width; admins occasionally
+            // paste long notes and we'd rather silently truncate than throw.
+            : description.Trim()[..Math.Min(description.Trim().Length, 500)];
 
         // Validate shape before hitting the DB — the emitter trusts these
         // values to end up in SQL, so we reject anything outside the safe
@@ -99,7 +106,11 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             var existingIdObj = await existingCmd.ExecuteScalarAsync(ct);
             if (existingIdObj is Guid existingId)
             {
-                await UpdateAsync(existingId, tableName, alias, isPrimary, isDefaultPrimary, ct);
+                await UpdateAsync(existingId, tableName, alias, isPrimary, isDefaultPrimary, ct,
+                    tableType: normalizedTableType,
+                    primaryColumn: normalizedPrimaryColumn,
+                    additionalKeyColumns: normalizedAdditionalKeys,
+                    description: normalizedDescription);
                 return (await GetByIdAsync(existingId, ct))!;
             }
         }
@@ -138,8 +149,9 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
                 (id, connection_id, table_name, alias,
                  is_primary, is_default_primary,
                  created_at, created_by_id, created_by_email,
-                 table_type, primary_column, additional_key_columns)
-            VALUES (@id, @c, @t, @a, @ip, @idp, @ca, @cbi, @cbe, @tt, @pc, @ak);", conn);
+                 table_type, primary_column, additional_key_columns,
+                 description)
+            VALUES (@id, @c, @t, @a, @ip, @idp, @ca, @cbi, @cbe, @tt, @pc, @ak, @desc);", conn);
         insert.Parameters.Add(new SqlParameter("@id", id));
         insert.Parameters.Add(new SqlParameter("@c", connectionId));
         insert.Parameters.Add(new SqlParameter("@t", tableName));
@@ -152,6 +164,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         insert.Parameters.Add(new SqlParameter("@tt", (object?)normalizedTableType ?? DBNull.Value));
         insert.Parameters.Add(new SqlParameter("@pc", (object?)normalizedPrimaryColumn ?? DBNull.Value));
         insert.Parameters.Add(new SqlParameter("@ak", (object?)normalizedAdditionalKeys ?? DBNull.Value));
+        insert.Parameters.Add(new SqlParameter("@desc", (object?)normalizedDescription ?? DBNull.Value));
         await insert.ExecuteNonQueryAsync(ct);
         _cache.Invalidate("CustomPrimaryTableService:");
 
@@ -168,7 +181,8 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             CreatedByEmail = createdByEmail,
             TableType = normalizedTableType,
             PrimaryColumn = normalizedPrimaryColumn,
-            AdditionalKeyColumns = normalizedAdditionalKeys
+            AdditionalKeyColumns = normalizedAdditionalKeys,
+            Description = normalizedDescription
         };
     }
 
@@ -178,7 +192,8 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         CancellationToken ct = default,
         string? tableType = null,
         string? primaryColumn = null,
-        string? additionalKeyColumns = null)
+        string? additionalKeyColumns = null,
+        string? description = null)
     {
         if (!PrimaryTableRef.TableRegex().IsMatch(tableName))
             throw new ArgumentException("Table name contains invalid characters.", nameof(tableName));
@@ -191,6 +206,9 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         var normalizedTableType = string.IsNullOrWhiteSpace(tableType) ? null : tableType.Trim();
         var normalizedPrimaryColumn = NormalizeIdentifier(primaryColumn, "primaryColumn");
         var normalizedAdditionalKeys = NormalizeKeyColumnList(additionalKeyColumns);
+        var normalizedDescription = string.IsNullOrWhiteSpace(description)
+            ? null
+            : description.Trim()[..Math.Min(description.Trim().Length, 500)];
 
         if (isDefaultPrimary) isPrimary = true;
 
@@ -237,7 +255,8 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
                SET table_name = @t, alias = @a,
                    is_primary = @ip, is_default_primary = @idp,
                    table_type = @tt, primary_column = @pc,
-                   additional_key_columns = @ak
+                   additional_key_columns = @ak,
+                   description = @desc
              WHERE id = @id;", conn);
         cmd.Parameters.Add(new SqlParameter("@id", id));
         cmd.Parameters.Add(new SqlParameter("@t", tableName));
@@ -247,6 +266,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         cmd.Parameters.Add(new SqlParameter("@tt", (object?)normalizedTableType ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@pc", (object?)normalizedPrimaryColumn ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@ak", (object?)normalizedAdditionalKeys ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@desc", (object?)normalizedDescription ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
         _cache.Invalidate("CustomPrimaryTableService:");
     }
@@ -277,7 +297,8 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         CreatedByEmail = r.IsDBNull(8) ? null : r.GetString(8),
         TableType = r.IsDBNull(9) ? null : r.GetString(9),
         PrimaryColumn = r.IsDBNull(10) ? null : r.GetString(10),
-        AdditionalKeyColumns = r.IsDBNull(11) ? null : r.GetString(11)
+        AdditionalKeyColumns = r.IsDBNull(11) ? null : r.GetString(11),
+        Description = r.IsDBNull(12) ? null : r.GetString(12)
     };
 
     private async Task<CustomPrimaryTableRecord?> GetByIdAsync(Guid id, CancellationToken ct)

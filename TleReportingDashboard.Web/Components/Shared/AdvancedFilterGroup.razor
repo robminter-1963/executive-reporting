@@ -45,7 +45,7 @@
             @if (!IsRoot)
             {
                 <MudTooltip Text="Remove this group (and everything inside)">
-                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                    <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                    Color="Color.Default"
                                    OnClick="@(() => OnRemove.InvokeAsync())" />
                 </MudTooltip>
@@ -83,13 +83,13 @@
         @* Footer: add condition + add group *@
         <MudStack Row Spacing="1" Class="mt-1">
             <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                       StartIcon="@Icons.Material.Filled.Add"
+                       StartIcon="@Icons.Material.Outlined.Add"
                        OnClick="AddClause"
                        Disabled="@(AvailableFields.Count == 0)">
                 Add condition
             </MudButton>
             <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
-                       StartIcon="@Icons.Material.Filled.AccountTree"
+                       StartIcon="@Icons.Material.Outlined.AccountTree"
                        OnClick="AddGroup">
                 Add group
             </MudButton>

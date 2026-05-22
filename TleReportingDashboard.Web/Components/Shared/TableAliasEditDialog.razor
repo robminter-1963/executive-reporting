@@ -55,12 +55,27 @@
                                  MaxItems="null"
                                  HelperText="@TableHelperText" />
             }
-            <MudTextField @bind-Value="_alias" Label="Alias" Placeholder="L"
+            @* Bound to the Alias property (not the backing field) so every
+               keystroke routes through the lowercase normalizer. The user
+               sees what gets saved while typing — no confusing "I typed
+               uppercase but it saved lowercase" surprise. *@
+            <MudTextField @bind-Value="Alias" Label="Alias" Placeholder="l"
                           Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
                           Required RequiredError="Alias is required"
                           Error="@IsAliasTaken()"
                           ErrorText="@("Already used on this connection")"
-                          HelperText="Required. Short identifier used in field references (e.g. L.ColName)." />
+                          HelperText="Required. Short identifier used in field references (e.g. l.ColName). Always saved lowercase." />
+
+            @* Optional free-text description. Shown in the Admin → Table
+               Aliases list so other admins can tell at a glance what each
+               alias is for ("loan terms — joined from dl via LNKEY",
+               "code lookup for milestone status", etc.). Capped at 500
+               chars at the service layer; the input doesn't enforce a
+               hard cap so admins see exactly what they typed. *@
+            <MudTextField T="string" @bind-Value="_description" Label="Description (optional)"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Lines="2"
+                          HelperText="What is this alias for? Up to 500 characters." />
 
             @* Primary curation flags. Eligible-as-primary surfaces the row
                in the Report Builder's "Suggested primaries" group; default
@@ -150,7 +165,7 @@
                             </MudTd>
                             <MudTd Style="text-align: right;">
                                 <MudTooltip Text="Remove role mapping">
-                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                                    Color="Color.Error"
                                                    OnClick="@(() => RemoveRoleOwner(row))" />
                                 </MudTooltip>
@@ -181,7 +196,7 @@
                         }
                     </MudSelect>
                     <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.Add"
+                               StartIcon="@Icons.Material.Outlined.Add"
                                Disabled="@(_newRoleId is null || string.IsNullOrEmpty(_newFieldId))"
                                OnClick="AddRoleOwner">
                         Add
@@ -218,6 +233,8 @@
     [Parameter] public string? InitialTableType { get; set; }
     [Parameter] public string? InitialPrimaryColumn { get; set; }
     [Parameter] public string? InitialAdditionalKeyColumns { get; set; }
+    // Optional free-text description; persisted to the description column.
+    [Parameter] public string? InitialDescription { get; set; }
 
     // DB-enumerated tables ("schema.table" strings). Caller (AdminTableAliasesTab)
     // fetches via SchemaBuilderService.GetTablesAsync and passes in.
@@ -252,7 +269,8 @@
         bool IsDefaultPrimary,
         string? TableType = null,
         string? PrimaryColumn = null,
-        string? AdditionalKeyColumns = null);
+        string? AdditionalKeyColumns = null,
+        string? Description = null);
     public record FieldOption(string Id, string Label);
     public record RoleOption(Guid Id, string Name);
     public record RoleOwnerRow(Guid RoleId, string OwnerFieldId)
@@ -264,6 +282,14 @@
 
     private string? _tableName;
     private string? _alias;
+    // Lowercase-normalizing facade. MudTextField binds here so the visible
+    // value updates as the user types; the underlying _alias storage always
+    // holds the lowercased form. Empty/null pass through unchanged.
+    private string? Alias
+    {
+        get => _alias;
+        set => _alias = string.IsNullOrEmpty(value) ? value : value.ToLowerInvariant();
+    }
     private bool _isPrimary;
     private bool _isDefaultPrimary;
     // True when the admin is registering a CTE/Lookup-backed virtual primary
@@ -285,6 +311,9 @@
     private string? _tableType;
     private string? _primaryColumn;
     private string? _additionalKeyColumns;
+    // Free-text note about what this alias is for. Optional. Bound to the
+    // Description input above; trimmed and capped at the service layer.
+    private string? _description;
 
     // Snapshot of the user-editable state captured at OnInitialized so the
     // unsaved-changes prompt can compare current values against it. Role-owner
@@ -300,7 +329,8 @@
         bool IsVirtual,
         string? TableType,
         string? PrimaryColumn,
-        string? AdditionalKeyColumns);
+        string? AdditionalKeyColumns,
+        string? Description);
     private FormSnapshot _initialSnapshot = default!;
 
     private static string Norm(string? s) => (s ?? string.Empty).Trim();
@@ -347,7 +377,9 @@
     protected override void OnInitialized()
     {
         _tableName = InitialTableName;
-        _alias = InitialAlias;
+        // Route through the property setter so a legacy uppercase alias
+        // pulled from the DB is normalized the moment the edit dialog opens.
+        Alias = InitialAlias;
         // Default implies Eligible; coerce on load so the dialog never shows
         // a contradictory state (default-on + eligible-off).
         _isPrimary = InitialIsPrimary || InitialIsDefaultPrimary;
@@ -355,6 +387,7 @@
         _tableType = InitialTableType;
         _primaryColumn = InitialPrimaryColumn;
         _additionalKeyColumns = InitialAdditionalKeyColumns;
+        _description = InitialDescription;
         _roleOwners = InitialRoleOwners.Select(r => new RoleOwnerRow(r.RoleId, r.OwnerFieldId)).ToList();
 
         // Copy the caller's list and ensure the current value is present so a
@@ -381,7 +414,7 @@
         // auto-detect) so the comparison reflects what the user actually sees.
         _initialSnapshot = new FormSnapshot(
             _tableName, _alias, _isPrimary, _isDefaultPrimary, _isVirtual,
-            _tableType, _primaryColumn, _additionalKeyColumns);
+            _tableType, _primaryColumn, _additionalKeyColumns, _description);
     }
 
     private bool IsDirty
@@ -396,7 +429,8 @@
                 || _isVirtual != s.IsVirtual
                 || !string.Equals(Norm(_tableType), Norm(s.TableType), StringComparison.Ordinal)
                 || !string.Equals(Norm(_primaryColumn), Norm(s.PrimaryColumn), StringComparison.Ordinal)
-                || !string.Equals(Norm(_additionalKeyColumns), Norm(s.AdditionalKeyColumns), StringComparison.Ordinal);
+                || !string.Equals(Norm(_additionalKeyColumns), Norm(s.AdditionalKeyColumns), StringComparison.Ordinal)
+                || !string.Equals(Norm(_description), Norm(s.Description), StringComparison.Ordinal);
         }
     }
 
@@ -444,12 +478,13 @@
         var isPrimary = _isPrimary || _isDefaultPrimary;
         MudDialog.Close(DialogResult.Ok(new EditResult(
             _tableName!.Trim(),
-            _alias!.Trim(),
+            _alias!.Trim().ToLowerInvariant(),
             isPrimary,
             _isDefaultPrimary,
             string.IsNullOrWhiteSpace(_tableType) ? null : _tableType!.Trim(),
             string.IsNullOrWhiteSpace(_primaryColumn) ? null : _primaryColumn!.Trim(),
-            string.IsNullOrWhiteSpace(_additionalKeyColumns) ? null : _additionalKeyColumns!.Trim())));
+            string.IsNullOrWhiteSpace(_additionalKeyColumns) ? null : _additionalKeyColumns!.Trim(),
+            string.IsNullOrWhiteSpace(_description) ? null : _description!.Trim())));
     }
 
     private void Cancel() => MudDialog.Cancel();

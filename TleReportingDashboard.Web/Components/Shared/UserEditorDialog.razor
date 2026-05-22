@@ -16,7 +16,7 @@
 <MudDialog>
     <TitleContent>
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-            <MudIcon Icon="@(IsNew ? Icons.Material.Filled.PersonAdd : Icons.Material.Filled.PersonOutline)" />
+            <MudIcon Icon="@(IsNew ? Icons.Material.Outlined.PersonAdd : Icons.Material.Outlined.PersonOutline)" />
             <MudText Typo="Typo.h6" Style="font-weight: 600;">
                 @(IsNew ? "Add user" : "Edit user")
             </MudText>
@@ -54,7 +54,7 @@
                        ToStringFunc="@RoleToLabel"
                        Disabled="@lockRoleField"
                        HelperText="@(lockRoleField ? "Only an Administrator can change this user's role." : null)"
-                       Clearable AdornmentIcon="@Icons.Material.Filled.Badge">
+                       Clearable AdornmentIcon="@Icons.Material.Outlined.Badge">
                 <MudSelectItem T="Guid?" Value="@((Guid?)null)">— None —</MudSelectItem>
                 @foreach (var r in _roles.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
                 {
@@ -80,7 +80,7 @@
                            MultiSelectionTextFunc="@(vals => vals.Count == 0 ? "None" : vals.Count == 1 ? TeamKeyToLabel(vals.First()) : $"{vals.Count} teams selected")"
                            ToStringFunc="@TeamKeyToLabel"
                            Variant="Variant.Outlined" Margin="Margin.Dense"
-                           Clearable AdornmentIcon="@Icons.Material.Filled.Groups"
+                           Clearable AdornmentIcon="@Icons.Material.Outlined.Groups"
                            HelperText="Teams scope this user's reports to rows owned by the selected team(s).">
                     @foreach (var t in _assignableTeams)
                     {
@@ -104,7 +104,7 @@
     <DialogActions>
         <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled"
-                   StartIcon="@Icons.Material.Filled.Save"
+                   StartIcon="@Icons.Material.Outlined.Save"
                    Disabled="@(!CanSave())" OnClick="Save">
             @(IsNew ? "Add" : "Save")
         </MudButton>

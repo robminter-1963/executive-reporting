@@ -1,0 +1,85 @@
+<svg width="800" height="320" xmlns="http://www.w3.org/2000/svg">
+  <!-- Header -->
+  <rect width="800" height="48" fill="#FFFFFF" stroke="#DADCE0"/>
+  <rect x="12" y="10" width="28" height="28" rx="4" fill="#1A73E8"/>
+  <text x="19" y="29" fill="white" font-size="12" font-weight="bold" font-family="sans-serif">T</text>
+  <text x="48" y="30" fill="#202124" font-size="13" font-weight="600" font-family="sans-serif">TLE Reporting</text>
+  <text x="155" y="30" fill="#9AA0A6" font-size="11" font-family="sans-serif">› Report Library</text>
+
+  <!-- App bar -->
+  <rect x="0" y="48" width="800" height="42" fill="#FFFFFF" stroke="#DADCE0"/>
+  <text x="12" y="74" fill="#202124" font-size="14" font-weight="600" font-family="sans-serif">TLE Reporting Dashboard</text>
+
+  <text x="470" y="72" fill="#5F6368" font-size="10" font-family="sans-serif">rob.minter</text>
+  <text x="470" y="84" fill="#9AA0A6" font-size="8" font-family="sans-serif">rob@tle.com</text>
+
+  <!-- Toolbar icons -->
+  <rect x="560" y="58" width="24" height="24" rx="2" fill="none" stroke="#5F6368"/>
+  <text x="565" y="75" fill="#5F6368" font-size="12" font-family="sans-serif">📊</text>
+  <rect x="590" y="58" width="24" height="24" rx="2" fill="none" stroke="#5F6368"/>
+  <text x="595" y="75" fill="#5F6368" font-size="12" font-family="sans-serif">⊞</text>
+  <rect x="620" y="58" width="24" height="24" rx="2" fill="none" stroke="#5F6368"/>
+  <text x="625" y="75" fill="#5F6368" font-size="12" font-family="sans-serif">⚙</text>
+  <rect x="660" y="56" width="100" height="28" rx="4" fill="#1A73E8"/>
+  <text x="674" y="74" fill="white" font-size="10" font-family="sans-serif">+ New Report</text>
+
+  <!-- Tabs -->
+  <rect x="12" y="98" width="90" height="28" rx="4 4 0 0" fill="#1A73E8"/>
+  <text x="25" y="116" fill="white" font-size="10" font-family="sans-serif">My Reports</text>
+  <rect x="108" y="98" width="110" height="28" rx="4 4 0 0" fill="#F8F9FA" stroke="#E8EAED"/>
+  <text x="118" y="116" fill="#5F6368" font-size="10" font-family="sans-serif">Shared With Me</text>
+  <rect x="224" y="98" width="80" height="28" rx="4 4 0 0" fill="#F8F9FA" stroke="#E8EAED"/>
+  <text x="238" y="116" fill="#5F6368" font-size="10" font-family="sans-serif">Templates</text>
+
+  <!-- Table -->
+  <rect x="12" y="126" width="776" height="24" fill="#F8F9FA"/>
+  <text x="20" y="142" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif">Name</text>
+  <text x="300" y="142" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif">Fields</text>
+  <text x="370" y="142" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif">Created</text>
+  <text x="480" y="142" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif">Last Run</text>
+  <text x="680" y="142" fill="#202124" font-size="10" font-weight="600" font-family="sans-serif" text-anchor="end">Actions</text>
+
+  <!-- Row 1 -->
+  <text x="20" y="170" fill="#202124" font-size="10" font-weight="500" font-family="sans-serif">Pipeline by Status</text>
+  <text x="300" y="170" fill="#5F6368" font-size="10" font-family="sans-serif">12</text>
+  <text x="370" y="170" fill="#5F6368" font-size="10" font-family="sans-serif">Apr 10, 2026</text>
+  <text x="480" y="170" fill="#5F6368" font-size="10" font-family="sans-serif">Apr 14, 2026 3:30 PM</text>
+  <!-- Action buttons -->
+  <text x="630" y="170" fill="#1A73E8" font-size="11" font-family="sans-serif">▶</text>
+  <text x="652" y="170" fill="#5F6368" font-size="11" font-family="sans-serif">✏</text>
+  <text x="674" y="170" fill="#5F6368" font-size="11" font-family="sans-serif">⎘</text>
+  <text x="696" y="170" fill="#5F6368" font-size="11" font-family="sans-serif">↗</text>
+  <text x="718" y="170" fill="#5F6368" font-size="11" font-family="sans-serif">⏰</text>
+  <text x="740" y="170" fill="#D93025" font-size="11" font-family="sans-serif">🗑</text>
+
+  <!-- Row 2 striped -->
+  <rect x="12" y="178" width="776" height="24" fill="#F8F9FA"/>
+  <text x="20" y="194" fill="#202124" font-size="10" font-weight="500" font-family="sans-serif">Zero Days In Status</text>
+  <text x="300" y="194" fill="#5F6368" font-size="10" font-family="sans-serif">12</text>
+  <text x="370" y="194" fill="#5F6368" font-size="10" font-family="sans-serif">Apr 12, 2026</text>
+  <text x="480" y="194" fill="#5F6368" font-size="10" font-family="sans-serif">Apr 14, 2026 3:15 PM</text>
+  <text x="630" y="194" fill="#1A73E8" font-size="11" font-family="sans-serif">▶</text>
+  <text x="652" y="194" fill="#5F6368" font-size="11" font-family="sans-serif">✏</text>
+  <text x="674" y="194" fill="#5F6368" font-size="11" font-family="sans-serif">⎘</text>
+  <text x="696" y="194" fill="#5F6368" font-size="11" font-family="sans-serif">↗</text>
+  <text x="718" y="194" fill="#5F6368" font-size="11" font-family="sans-serif">⏰</text>
+  <text x="740" y="194" fill="#D93025" font-size="11" font-family="sans-serif">🗑</text>
+
+  <!-- Row 3 -->
+  <text x="20" y="218" fill="#202124" font-size="10" font-weight="500" font-family="sans-serif">Loans by Campaign</text>
+  <text x="300" y="218" fill="#5F6368" font-size="10" font-family="sans-serif">10</text>
+  <text x="370" y="218" fill="#5F6368" font-size="10" font-family="sans-serif">Apr 13, 2026</text>
+  <text x="480" y="218" fill="#5F6368" font-size="10" font-family="sans-serif">Apr 14, 2026 2:00 PM</text>
+  <text x="630" y="218" fill="#1A73E8" font-size="11" font-family="sans-serif">▶</text>
+  <text x="652" y="218" fill="#5F6368" font-size="11" font-family="sans-serif">✏</text>
+  <text x="674" y="218" fill="#5F6368" font-size="11" font-family="sans-serif">⎘</text>
+  <text x="696" y="218" fill="#5F6368" font-size="11" font-family="sans-serif">↗</text>
+  <text x="718" y="218" fill="#5F6368" font-size="11" font-family="sans-serif">⏰</text>
+  <text x="740" y="218" fill="#D93025" font-size="11" font-family="sans-serif">🗑</text>
+
+  <!-- Legend -->
+  <rect x="12" y="250" width="776" height="60" rx="4" fill="#FFF8E1" stroke="#FFE082"/>
+  <text x="22" y="270" fill="#E65100" font-size="10" font-weight="600" font-family="sans-serif">Toolbar Icons (left to right):</text>
+  <text x="22" y="286" fill="#E65100" font-size="9" font-family="sans-serif">📊 Master Dashboard  |  ⊞ Grid Templates  |  ⚙ User Preferences  |  + New Report</text>
+  <text x="22" y="302" fill="#E65100" font-size="9" font-family="sans-serif">Row Actions: ▶ Run  |  ✏ Edit  |  ⎘ Clone  |  ↗ Share  |  ⏰ Schedule  |  🗑 Delete</text>
+</svg>

@@ -12,7 +12,7 @@
     @if (TemplateLocked && SelectedFields.Any())
     {
         <MudAlert Severity="Severity.Info" Dense Variant="Variant.Outlined"
-                  Icon="@Icons.Material.Filled.Lock">
+                  Icon="@Icons.Material.Outlined.Lock">
             Template fields can't be added or removed. You can still drag to reorder them.
             @if (OrphanFieldIds.Any())
             {
@@ -75,8 +75,8 @@
                         var canClose = item.IsCalc || !TemplateLocked;
                         var color = item.IsCalc ? Color.Success : Color.Primary;
                         var icon = item.IsCalc
-                            ? Icons.Material.Filled.Calculate
-                            : Icons.Material.Filled.DragIndicator;
+                            ? Icons.Material.Outlined.Calculate
+                            : Icons.Material.Outlined.DragIndicator;
                     }
                     @if (canClose)
                     {
@@ -132,7 +132,7 @@
                     var oidLocal = oid;
                     <MudTooltip Text="@($"\"{oid}\" is being included in the query but isn't part of the template / regular Columns. It may be a deleted/renamed field or a leftover from the Dashboard tab's extra group-by. Click ✕ to remove it from this report (allowed even when template-locked).")">
                         <MudChip T="string" Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
-                                 Icon="@Icons.Material.Filled.Warning"
+                                 Icon="@Icons.Material.Outlined.Warning"
                                  OnClose="@(() => OnFieldRemoved.InvokeAsync(oidLocal))">
                             Hidden: @oid
                         </MudChip>

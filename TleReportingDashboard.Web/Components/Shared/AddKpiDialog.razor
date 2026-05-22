@@ -1,0 +1,511 @@
+@using TleReportingDashboard.Web.Models
+@using TleReportingDashboard.Web.Services
+@using TleReportingDashboard.Web.Configuration
+@inject ISchemaService SchemaService
+@inject ICustomPrimaryTableService PrimaryTableSvc
+@inject IDialogService DialogService
+
+@* Add / edit one KPI card. Returns a populated CompanyKpi (without id /
+   sort_order / created_*; the service fills those on save).
+
+   Open with DialogOptions { BackdropClick = false, CloseOnEscapeKey = false }
+   so the dismiss paths route through the unsaved-changes prompt. *@
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@(IsNew ? Icons.Material.Outlined.AddChart : Icons.Material.Outlined.Edit)" />
+            <MudText Typo="Typo.h6">@(IsNew ? "Add KPI" : "Edit KPI")</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width: 520px;">
+            @* Connection — locked on edit because changing it would
+               invalidate every downstream pick (primary table, field).
+               Explicit ValueChanged (not @bind-Value) so the data-load
+               for primary tables + fields fires the moment the user
+               picks a connection; OnParametersSetAsync isn't called for
+               internal-state changes, only parent-parameter changes. *@
+            <MudSelect T="Guid?" Value="_connectionId"
+                       ValueChanged="OnConnectionChanged"
+                       Label="Connection" Required RequiredError="Connection is required"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                       Disabled="@(!IsNew)"
+                       HelperText="@(IsNew ? "Pick the data source this KPI queries." : "Locked while editing — delete and re-add to change.")">
+                @foreach (var c in Connections.Where(x => x.IsActive)
+                            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            @* Primary table — filtered to this connection's curated list. *@
+            <MudSelect T="string" @bind-Value="_primaryTable"
+                       Label="Primary table" Required RequiredError="Primary table is required"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                       Disabled="@(_connectionId is null)">
+                @foreach (var p in _primaryTables.OrderBy(p => p.TableName, StringComparer.OrdinalIgnoreCase))
+                {
+                    var formatted = PrimaryTableRef.Format(p.TableName, p.Alias);
+                    <MudSelectItem T="string" Value="@formatted">@formatted</MudSelectItem>
+                }
+            </MudSelect>
+
+            @* Field — only numeric for sum/avg/min/max; counting is allowed
+               on any field (typically the primary key). When aggregation is
+               Count we relax the filter to include every field type. *@
+            <MudSelect T="string" @bind-Value="_fieldId"
+                       Label="Field" Required RequiredError="Field is required"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                       Disabled="@(_connectionId is null)"
+                       HelperText="@FieldHelperText">
+                @foreach (var f in EligibleFields)
+                {
+                    <MudSelectItem T="string" Value="@f.Id">
+                        @f.Label
+                        <MudText Component="span" Typo="Typo.caption" Color="Color.Secondary"
+                                 Style="margin-left: 8px; font-size: 0.7rem;">
+                            @f.DataType
+                        </MudText>
+                    </MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSelect T="string" @bind-Value="_aggregation"
+                       Label="Aggregation" Required Variant="Variant.Outlined"
+                       Margin="Margin.Dense" Dense>
+                @foreach (var (key, label) in KpiAggregations.All)
+                {
+                    <MudSelectItem T="string" Value="@key">@label</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField @bind-Value="_label" Label="Display label (optional)"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                          HelperText="Leave blank to use the field's label." />
+
+            @* Period filter — optional. When set, the date-field picker
+               unlocks; when both are populated, the aggregation is bounded
+               by that period. "Custom range" reveals from/to date pickers. *@
+            <MudDivider />
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Time window (optional)</MudText>
+            <MudStack Row Spacing="2" AlignItems="AlignItems.Start">
+                <MudSelect T="string?" @bind-Value="_period" Label="Period"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Dense Clearable
+                           Style="flex: 1;">
+                    <MudSelectItem T="string?" Value="@((string?)null)">(none)</MudSelectItem>
+                    @foreach (var (key, label) in KpiPeriods.All)
+                    {
+                        <MudSelectItem T="string?" Value="@((string?)key)">@label</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="string?" @bind-Value="_dateFieldId" Label="Date field"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Dense Clearable
+                           Disabled="@(string.IsNullOrEmpty(_period))"
+                           Style="flex: 1;">
+                    <MudSelectItem T="string?" Value="@((string?)null)">(none)</MudSelectItem>
+                    @foreach (var f in DateFields)
+                    {
+                        <MudSelectItem T="string?" Value="@((string?)f.Id)">@f.Label</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            @if (string.Equals(_period, KpiPeriods.Custom, StringComparison.OrdinalIgnoreCase))
+            {
+                <MudStack Row Spacing="2" AlignItems="AlignItems.Start">
+                    <MudDatePicker @bind-Date="_dateFrom" Label="From"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Editable
+                                   Style="flex: 1;" />
+                    <MudDatePicker @bind-Date="_dateTo" Label="To"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Editable
+                                   Style="flex: 1;" />
+                </MudStack>
+            }
+            <MudCheckBox T="bool" @bind-Value="_comparePrevious" Color="Color.Primary" Dense
+                         Disabled="@(string.IsNullOrEmpty(_period) || string.IsNullOrEmpty(_dateFieldId))"
+                         Label="Compare to previous period (show delta chip)" />
+
+            @* Custom filters — schema-defined preset toggles. Same concept
+               as the Report Builder's Custom Filters bar. Each chip turns
+               the underlying SQL fragment on/off. Hidden when the schema
+               doesn't define any. *@
+            @if (_availableCustomFilters.Count > 0)
+            {
+                <MudDivider />
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Custom filters (optional)</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Click a chip to apply that pre-defined filter to the KPI's query.
+                </MudText>
+                <MudChipSet T="string" SelectedValues="_selectedCustomFilterIdsSet"
+                            SelectedValuesChanged="OnCustomFilterChipsChanged"
+                            SelectionMode="SelectionMode.MultiSelection">
+                    @foreach (var cf in _availableCustomFilters.OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase))
+                    {
+                        <MudChip T="string" Value="@cf.Id" Variant="Variant.Outlined" Color="Color.Primary">
+                            @cf.Label
+                        </MudChip>
+                    }
+                </MudChipSet>
+            }
+
+            @* Specific filter values — "where Field = Value" rows. The
+               admin picks a field, enters a literal value, and the KPI's
+               query layers the predicate on top of the date window and
+               any active custom filters. Empty list = no extra filters. *@
+            <MudDivider />
+            <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Specific filter values (optional)</MudText>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                           StartIcon="@Icons.Material.Outlined.Add"
+                           OnClick="AddFilterRow"
+                           Disabled="@(_allFields.Count == 0)">
+                    Add filter
+                </MudButton>
+            </MudStack>
+            @if (_filterRows.Count == 0)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                         Style="font-style: italic;">
+                    No value filters set. Click <strong>Add filter</strong> to constrain the KPI to specific values (e.g. "Status = Funded").
+                </MudText>
+            }
+            else
+            {
+                @foreach (var row in _filterRows)
+                {
+                    var r = row;
+                    <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
+                        <MudSelect T="string" Value="@r.FieldId"
+                                   ValueChanged="@(v => r.FieldId = v)"
+                                   Label="Field" Dense
+                                   Variant="Variant.Outlined" Margin="Margin.Dense"
+                                   Style="flex: 1;">
+                            @foreach (var f in _allFields.OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase))
+                            {
+                                <MudSelectItem T="string" Value="@f.Id">@f.Label</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudTextField T="string" @bind-Value="r.Value"
+                                      Label="Equals value" Dense
+                                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      Style="flex: 1;" />
+                        <MudIconButton Icon="@Icons.Material.Outlined.Close"
+                                       Size="Size.Small" Color="Color.Error"
+                                       OnClick="@(() => RemoveFilterRow(r))"
+                                       title="Remove this filter" />
+                    </MudStack>
+                }
+            }
+
+            @* Width — 12-column grid, same as tiles. Default 3 (≈ one
+               quarter of the band) reads nicely on most monitors. *@
+            <MudDivider />
+            <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Width</MudText>
+                <MudSlider T="int" @bind-Value="_colSpan" Min="2" Max="12" Step="1"
+                           Style="flex: 1;" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                         Style="min-width: 60px;">@_colSpan / 12</MudText>
+            </MudStack>
+
+            @if (!string.IsNullOrEmpty(_validationError))
+            {
+                <MudAlert Severity="Severity.Error" Dense>@_validationError</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   OnClick="Save" Disabled="@(!CanSave())">
+            @(IsNew ? "Add KPI" : "Save")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public Guid CompanyId { get; set; }
+    [Parameter] public List<CompanyConnectionRecord> Connections { get; set; } = new();
+    // When non-null we're editing — pre-populate from the supplied record.
+    [Parameter] public CompanyKpi? Initial { get; set; }
+
+    private bool IsNew => Initial is null;
+
+    private Guid? _connectionId;
+    private string _primaryTable = string.Empty;
+    private string _fieldId = string.Empty;
+    private string _aggregation = KpiAggregations.Sum;
+    private string? _label;
+    private string? _period;
+    private string? _dateFieldId;
+    private bool _comparePrevious;
+    private int _colSpan = 3;
+    private string? _validationError;
+
+    // Custom date range — bound to the MudDatePickers when Period == "custom".
+    private DateTime? _dateFrom;
+    private DateTime? _dateTo;
+
+    // Schema custom filters available for this connection + the subset
+    // currently selected (mirrored as both List<string> for save and
+    // IReadOnlyCollection<string> for MudChipSet's SelectedValues binding).
+    private List<CustomFilterDefinition> _availableCustomFilters = new();
+    private List<string> _selectedCustomFilterIds = new();
+    private IReadOnlyCollection<string> _selectedCustomFilterIdsSet =
+        Array.Empty<string>();
+
+    // Specific filter rows — one per added "Field = Value" entry. Stored
+    // as a small mutable record so the dialog can edit each row in place
+    // without nuking the list on every keystroke. Reassembled into a
+    // Dictionary<string, object?> on save (the QueryRequest shape).
+    private sealed class FilterRow
+    {
+        public string FieldId { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+    }
+    private List<FilterRow> _filterRows = new();
+
+    private List<CustomPrimaryTableRecord> _primaryTables = new();
+    private List<FieldConfig> _allFields = new();
+    private Guid? _loadedConnection;
+    private FormSnapshot _initialSnapshot = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Initial is not null)
+        {
+            _connectionId = Initial.ConnectionId;
+            _primaryTable = Initial.PrimaryTable;
+            _fieldId = Initial.FieldId;
+            _aggregation = Initial.Aggregation;
+            _label = Initial.Label;
+            _period = Initial.Period;
+            _dateFieldId = Initial.DateFieldId;
+            _comparePrevious = Initial.ComparePrevious;
+            _colSpan = Initial.ColSpan;
+            _dateFrom = Initial.DateFrom;
+            _dateTo = Initial.DateTo;
+            _selectedCustomFilterIds = Initial.CustomFilterIds is { Count: > 0 }
+                ? new List<string>(Initial.CustomFilterIds)
+                : new List<string>();
+            _selectedCustomFilterIdsSet = _selectedCustomFilterIds.ToList();
+            // Hydrate filter rows from the persisted dict. Values are
+            // JsonElements coming out of System.Text.Json — coerce to a
+            // string for the inline editor; users see what they typed.
+            _filterRows = Initial.Filters is { Count: > 0 }
+                ? Initial.Filters.Select(kv => new FilterRow
+                {
+                    FieldId = kv.Key,
+                    Value = kv.Value?.ToString() ?? string.Empty
+                }).ToList()
+                : new List<FilterRow>();
+            await EnsureConnectionDataLoaded();
+        }
+        _initialSnapshot = Snapshot();
+    }
+
+    // Wired to the Connection MudSelect's ValueChanged so picking a
+    // connection actually loads its primary tables + fields. Using
+    // @bind-Value alone wouldn't trigger this — OnParametersSetAsync
+    // doesn't fire for internal-state changes.
+    private async Task OnConnectionChanged(Guid? newValue)
+    {
+        if (_connectionId == newValue) return;
+        _connectionId = newValue;
+        await EnsureConnectionDataLoaded();
+    }
+
+    private async Task EnsureConnectionDataLoaded()
+    {
+        _loadedConnection = _connectionId;
+        if (_connectionId is not Guid cid)
+        {
+            _primaryTables = new();
+            _allFields = new();
+            _availableCustomFilters = new();
+            return;
+        }
+        try
+        {
+            _primaryTables = await PrimaryTableSvc.GetByConnectionAsync(cid);
+            _allFields = await SchemaService.GetFieldConfigsAsync(cid);
+            _availableCustomFilters = await SchemaService.GetCustomFiltersAsync(cid);
+        }
+        catch
+        {
+            _primaryTables = new();
+            _allFields = new();
+            _availableCustomFilters = new();
+        }
+        // Clear downstream selections when the connection changes during
+        // an open edit so we don't carry over a stale field id.
+        if (IsNew || _loadedConnection != Initial?.ConnectionId)
+        {
+            if (!_primaryTables.Any(p => string.Equals(
+                PrimaryTableRef.Format(p.TableName, p.Alias),
+                _primaryTable, StringComparison.OrdinalIgnoreCase)))
+            {
+                _primaryTable = string.Empty;
+            }
+            if (!_allFields.Any(f => string.Equals(f.Id, _fieldId, StringComparison.OrdinalIgnoreCase)))
+            {
+                _fieldId = string.Empty;
+            }
+            if (!_allFields.Any(f => string.Equals(f.Id, _dateFieldId, StringComparison.OrdinalIgnoreCase)))
+            {
+                _dateFieldId = null;
+            }
+        }
+    }
+
+    // Numeric fields qualify for SUM/AVG/MIN/MAX; any field qualifies for
+    // COUNT (admins typically count rows on the primary key).
+    private IEnumerable<FieldConfig> EligibleFields
+    {
+        get
+        {
+            var isCount = string.Equals(_aggregation, KpiAggregations.Count, StringComparison.OrdinalIgnoreCase);
+            if (isCount) return _allFields.OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase);
+            return _allFields
+                .Where(f => IsNumericType(f.DataType))
+                .OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private IEnumerable<FieldConfig> DateFields =>
+        _allFields
+            .Where(f => string.Equals(f.DataType, "date", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(f.DataType, "datetime", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsNumericType(string? dataType) =>
+        string.Equals(dataType, "currency", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(dataType, "integer", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(dataType, "decimal", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(dataType, "percent", StringComparison.OrdinalIgnoreCase);
+
+    private string FieldHelperText =>
+        string.Equals(_aggregation, KpiAggregations.Count, StringComparison.OrdinalIgnoreCase)
+            ? "Any field — counted as rows."
+            : "Numeric fields only (currency / integer / decimal / percent).";
+
+    private bool CanSave()
+    {
+        if (_connectionId is null) return false;
+        if (string.IsNullOrWhiteSpace(_primaryTable)) return false;
+        if (string.IsNullOrWhiteSpace(_fieldId)) return false;
+        if (string.IsNullOrWhiteSpace(_aggregation)) return false;
+        if (!string.IsNullOrEmpty(_period) && string.IsNullOrEmpty(_dateFieldId)) return false;
+        // Custom range requires both ends to be set; otherwise the date
+        // filter resolves to (null, null) and the KPI runs unbounded.
+        if (string.Equals(_period, KpiPeriods.Custom, StringComparison.OrdinalIgnoreCase)
+            && (_dateFrom is null || _dateTo is null))
+        {
+            return false;
+        }
+        // Specific filter rows are optional, but each row must be fully
+        // populated to count — otherwise we'd persist a meaningless entry.
+        if (_filterRows.Any(r => string.IsNullOrWhiteSpace(r.FieldId)
+                              || string.IsNullOrWhiteSpace(r.Value)))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    private void OnCustomFilterChipsChanged(IReadOnlyCollection<string> selected)
+    {
+        _selectedCustomFilterIdsSet = selected;
+        _selectedCustomFilterIds = selected?.ToList() ?? new List<string>();
+    }
+
+    private void AddFilterRow()
+    {
+        _filterRows.Add(new FilterRow());
+    }
+    private void RemoveFilterRow(FilterRow row)
+    {
+        _filterRows.Remove(row);
+    }
+
+    private void Save()
+    {
+        _validationError = null;
+        if (!CanSave())
+        {
+            _validationError = "Fill in the required fields above. Custom range needs a from + to date; partially-filled filter rows need a value.";
+            return;
+        }
+        // Collapse the filter rows into the dict shape the QueryRequest
+        // and CompanyKpi.Filters consume. Last-wins on duplicate field
+        // ids — the UI doesn't prevent two rows on the same field, but
+        // QueryRequest expects a single value per key.
+        var filtersDict = _filterRows.Count == 0
+            ? null
+            : _filterRows
+                .Where(r => !string.IsNullOrWhiteSpace(r.FieldId)
+                         && !string.IsNullOrWhiteSpace(r.Value))
+                .GroupBy(r => r.FieldId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary<IGrouping<string, FilterRow>, string, object?>(
+                    g => g.Key,
+                    g => (object?)g.Last().Value.Trim(),
+                    StringComparer.OrdinalIgnoreCase);
+
+        var customFilterIds = _selectedCustomFilterIds is { Count: > 0 }
+            ? _selectedCustomFilterIds.Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+            : null;
+
+        var isCustom = string.Equals(_period, KpiPeriods.Custom, StringComparison.OrdinalIgnoreCase);
+        var kpi = new CompanyKpi
+        {
+            Id              = Initial?.Id ?? Guid.Empty,
+            CompanyId       = CompanyId,
+            ConnectionId    = _connectionId!.Value,
+            PrimaryTable    = _primaryTable.Trim(),
+            FieldId         = _fieldId,
+            Aggregation     = _aggregation,
+            Label           = string.IsNullOrWhiteSpace(_label) ? null : _label!.Trim(),
+            DateFieldId     = string.IsNullOrEmpty(_period) ? null : _dateFieldId,
+            Period          = string.IsNullOrEmpty(_dateFieldId) ? null : _period,
+            ComparePrevious = !string.IsNullOrEmpty(_period) && !string.IsNullOrEmpty(_dateFieldId) && _comparePrevious,
+            ColSpan         = Math.Clamp(_colSpan, 2, 12),
+            SortOrder       = Initial?.SortOrder ?? 0,
+            CreatedAt       = Initial?.CreatedAt ?? DateTime.UtcNow,
+            CreatedByEmail  = Initial?.CreatedByEmail,
+            // New (filters / custom range) fields.
+            DateFrom        = isCustom ? _dateFrom?.ToUniversalTime() : null,
+            DateTo          = isCustom ? _dateTo?.ToUniversalTime() : null,
+            CustomFilterIds = customFilterIds,
+            Filters         = filtersDict
+        };
+        MudDialog?.Close(DialogResult.Ok(kpi));
+    }
+
+    // ── Unsaved-changes guard ──
+    // Snapshot includes the filter fields too so toggling a chip or adding
+    // a row counts as a dirty edit. The mutable collections are flattened
+    // to fingerprint strings — record equality on List<T> is reference-based
+    // and would always read as dirty.
+    private record FormSnapshot(
+        Guid? ConnectionId, string PrimaryTable, string FieldId, string Aggregation,
+        string? Label, string? Period, string? DateFieldId, bool ComparePrevious, int ColSpan,
+        DateTime? DateFrom, DateTime? DateTo,
+        string CustomFiltersFingerprint, string FilterRowsFingerprint);
+    private FormSnapshot Snapshot() => new(
+        _connectionId, _primaryTable, _fieldId, _aggregation,
+        _label, _period, _dateFieldId, _comparePrevious, _colSpan,
+        _dateFrom, _dateTo,
+        FingerprintCustomFilters(),
+        FingerprintFilterRows());
+    private string FingerprintCustomFilters() =>
+        string.Join("|", _selectedCustomFilterIds
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase));
+    private string FingerprintFilterRows() =>
+        string.Join("|", _filterRows.Select(r => $"{r.FieldId}={r.Value}"));
+    private bool IsDirty => !Snapshot().Equals(_initialSnapshot);
+
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () => { if (CanSave()) Save(); return Task.CompletedTask; });
+}

@@ -2,13 +2,15 @@
 @page "/help/{Section}"
 @rendermode InteractiveServer
 @inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IAdminAccessService AdminAccess
 
 <PageTitle>Help - Executive Reporting Suite</PageTitle>
 
-<MudMainContent Style="padding: 0; max-width: 900px; margin-left: 15px;">
+<MudMainContent Style="padding: 12px 16px 0 16px; margin-left: 15px;">
     <MudStack Spacing="3">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+            <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                            OnClick="@(() => Navigation.NavigateTo("/"))" title="Back" />
             <MudText Typo="Typo.h5" Style="font-weight: 600;">Help</MudText>
         </MudStack>
@@ -17,20 +19,26 @@
         <MudPaper Elevation="0" Class="pa-4" Style="border: 1px solid #E8EAED; border-radius: 4px;">
             <MudText Typo="Typo.subtitle1" Style="font-weight: 600;" Class="mb-2">Contents</MudText>
             <MudStack Spacing="0">
-                @foreach (var s in _sections)
+                @foreach (var s in VisibleSections)
                 {
                     var sec = s;
                     <MudLink Href="@($"/help/{sec.Key}")" Typo="Typo.body2" Style="padding: 4px 0;"
-                             Color="@(sec.Key == (Section ?? _sections[0].Key) ? Color.Primary : Color.Default)">
+                             Color="@(sec.Key == (Section ?? VisibleSections.First().Key) ? Color.Primary : Color.Default)">
                         @sec.Title
                     </MudLink>
                 }
             </MudStack>
         </MudPaper>
 
-        @* ── Content ── *@
+        @* ── Content ──
+           The active-section lookup is gated by the same visibility filter
+           as the TOC so a non-admin who lands on /help/admin (e.g. via a
+           stale bookmark) sees the "not available" notice rather than
+           admin-only content. *@
         @{
-            var active = _sections.FirstOrDefault(s => s.Key == (Section ?? _sections[0].Key));
+            var requestedKey = Section ?? VisibleSections.First().Key;
+            var active = VisibleSections.FirstOrDefault(s => s.Key == requestedKey);
+            var requestedExists = _sections.Any(s => s.Key == requestedKey);
         }
         @if (active is not null)
         {
@@ -39,13 +47,81 @@
                 @((MarkupString)active.Html)
             </MudPaper>
         }
+        else if (requestedExists)
+        {
+            @* Section exists in the catalog but is hidden for this user's
+               access level — show a polite notice + nudge back to the
+               default landing section instead of silently rendering
+               nothing. *@
+            <MudPaper Elevation="0" Class="pa-4 d-flex flex-column align-center" Style="border: 1px dashed #E8EAED; border-radius: 4px;">
+                <MudIcon Icon="@Icons.Material.Outlined.LockPerson" Size="Size.Large" Color="Color.Default" />
+                <MudText Typo="Typo.h6" Class="mt-2" Style="font-weight: 600;">This help topic isn't available for your access level</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-1" Style="text-align: center; max-width: 480px;">
+                    Some sections (Admin, Promotion, Theme, Grid Templates) are reserved for users with admin permissions. Pick another topic from the list above.
+                </MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+                           StartIcon="@Icons.Material.Outlined.MenuBook"
+                           OnClick="@(() => Navigation.NavigateTo($"/help/{VisibleSections.First().Key}"))">
+                    Go to @VisibleSections.First().Title
+                </MudButton>
+            </MudPaper>
+        }
     </MudStack>
 </MudMainContent>
 
 @code {
     [Parameter] public string? Section { get; set; }
 
-    private record HelpSection(string Key, string Title, string Html);
+    // The admin sections the current user can actually open. Loaded in
+    // OnInitializedAsync. Empty = pure viewer / no admin access at all.
+    // GetAllowedSectionsAsync returns AdminSections.All when the user
+    // is a global Administrator, so the global-admin case naturally
+    // sees every gated section.
+    private IReadOnlySet<string> _allowedSections =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    // Per-section filter. A help section is visible when:
+    //   - RequiredAdminSection is null  → public, always shown.
+    //   - RequiredAdminSection is ""    → any admin grant qualifies
+    //                                     (umbrella "Admin overview" topic).
+    //   - RequiredAdminSection is a key → the user must have that
+    //                                     specific AdminSections key.
+    // This is tighter than the previous coarse "has any admin" gate —
+    // a System Support role limited to Companies/Users no longer sees
+    // help for Promotion or Theme.
+    private IEnumerable<HelpSection> VisibleSections => _sections.Where(IsVisibleFor);
+
+    private bool IsVisibleFor(HelpSection s)
+    {
+        if (s.RequiredAdminSection is null) return true;
+        if (s.RequiredAdminSection.Length == 0) return _allowedSections.Count > 0;
+        return _allowedSections.Contains(s.RequiredAdminSection);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var email = authState.User.FindFirst("preferred_username")?.Value
+                 ?? authState.User.FindFirst("email")?.Value
+                 ?? authState.User.Identity?.Name
+                 ?? string.Empty;
+        if (string.IsNullOrEmpty(email)) return;
+
+        // Single round-trip. For a global Administrator this returns the
+        // full AdminSections.All set; for a section-scoped role it
+        // returns just that role's grant; for a pure viewer it returns
+        // the empty set.
+        _allowedSections = await AdminAccess.GetAllowedSectionsAsync(email);
+    }
+
+    // RequiredAdminSection drives visibility:
+    //   null         → public (default)
+    //   ""           → any admin section grant (umbrella Admin overview)
+    //   "<key>"      → must match a specific AdminSections key
+    // Keep gates as narrow as the help content lets you: the Promotion
+    // and Theme topics each describe a specific tab the user must
+    // actually have access to, so they're tied to those exact keys.
+    private record HelpSection(string Key, string Title, string Html, string? RequiredAdminSection = null);
 
     private readonly List<HelpSection> _sections = new()
     {
@@ -63,7 +139,7 @@
 <h4>Navigation map</h4>
 <table style='width:100%; border-collapse:collapse; margin:12px 0;'>
 <tr style='background:#F8F9FA;'><th style='text-align:left; padding:8px; border:1px solid #E8EAED;'>Where</th><th style='text-align:left; padding:8px; border:1px solid #E8EAED;'>How to get there</th></tr>
-<tr><td style='padding:8px; border:1px solid #E8EAED;'>Master Dashboard</td><td style='padding:8px; border:1px solid #E8EAED;'>Pick a company from the picker, or click the Ralis logo when you have access to multiple companies.</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>Master Dashboard</td><td style='padding:8px; border:1px solid #E8EAED;'>Pick a company from the picker, or click the ACME logo when you have access to multiple companies.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>Report Library</td><td style='padding:8px; border:1px solid #E8EAED;'>Click the back arrow on the Master Dashboard, or the chart icon on the user menu.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>Report Builder</td><td style='padding:8px; border:1px solid #E8EAED;'>From the Library: <strong>+ New Report</strong> or click the edit pencil on any of your reports.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>Admin</td><td style='padding:8px; border:1px solid #E8EAED;'>User menu (top-right) → <strong>Admin</strong>. Visible if your role grants access to at least one admin section.</td></tr>
@@ -73,14 +149,14 @@
 </table>
 
 <h4>The environment badge</h4>
-<p>If you see a <strong>STAGING</strong> chip next to the Ralis logo, you're on the staging instance — changes there don't affect production. Production has a quiet <strong>PRODUCTION</strong> badge so admins always know which environment they're touching.</p>"),
+<p>If you see a <strong>STAGING</strong> chip next to the ACME logo, you're on the staging instance — changes there don't affect production. Production has a quiet <strong>PRODUCTION</strong> badge so admins always know which environment they're touching.</p>"),
 
         new("master-dashboard", "Master Dashboard", @"
 <p>The Master Dashboard is the per-company home page. It shows multiple report tiles organized into <strong>tabs</strong> (top-level groups) and optional <strong>sections</strong> (visual groupings within a tab).</p>
 
 <h4>Layout</h4>
 <ul>
-<li><strong>Tabs</strong> — Top-level groupings (e.g. ""Pipeline"", ""Funded Loans""). Click a tab to switch. Layout edits are preserved when you switch tabs — no need to save first.</li>
+<li><strong>Tabs</strong> — Top-level groupings (e.g. ""Active"", ""Archived""). Click a tab to switch. Layout edits are preserved when you switch tabs — no need to save first.</li>
 <li><strong>Sections</strong> — Sub-groupings inside a tab. When a tab has sections, a small section-tab strip appears below the tile area; click a section to focus its tiles.</li>
 <li><strong>Tiles</strong> — One per report. Each tile renders as a card with a header band, a data area, and a small footer band.</li>
 </ul>
@@ -162,6 +238,14 @@
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>&#128197; Schedule</td><td style='padding:8px; border:1px solid #E8EAED;'>Set up recurring email exports.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>&#128465; Delete</td><td style='padding:8px; border:1px solid #E8EAED;'>Owner-only.</td></tr>
 </table>
+
+<h4>Sections</h4>
+<p>Reports in the My Reports tab can be grouped into admin-curated <strong>sections</strong>. Section headers show the section name, the report count, and a kebab (⋮) menu with two actions:</p>
+<ul>
+<li><strong>Rename section</strong> — Change the section's display name. References to the old name are updated everywhere it appears.</li>
+<li><strong>Remove section</strong> — Delete the section. Any reports inside it move back to <strong>(Uncategorized)</strong> automatically — nothing is lost.</li>
+</ul>
+<p>The synthetic <strong>(Uncategorized)</strong> bucket can't be renamed or removed — it's just the catch-all for reports with no section assigned. Section actions are hidden for viewer-only users.</p>
 
 <h4>Admin view toggle</h4>
 <p>Admins see an <strong>Admin view</strong> switch in the toolbar. When on, the My Reports tab broadens to <em>every user's</em> reports and adds an Owner column. Edit and Delete still require ownership; the toggle only affects what's listed.</p>"),
@@ -246,7 +330,7 @@
 <ol>
 <li>Click the <strong>Dashboard</strong> tab after running a query.</li>
 <li>Pick a <strong>Group By</strong> field. The Group By dropdown lists every field on the connection, even ones not in the report — selecting one auto-adds it to the query while keeping it hidden from the detail grid.</li>
-<li>Pick a <strong>Primary Measure</strong> (e.g. Loan Amount) and an <strong>Aggregation</strong> (Sum, Avg, Count, Min, Max).</li>
+<li>Pick a <strong>Primary Measure</strong> (e.g. Total Amount) and an <strong>Aggregation</strong> (Sum, Avg, Count, Min, Max).</li>
 <li>Optionally add <strong>extra measures</strong> via the <strong>+ Measure</strong> button.</li>
 <li>Pick a <strong>Chart</strong> type (Bar, Pie, Line, or None).</li>
 </ol>
@@ -267,7 +351,7 @@
 <h4>What you see</h4>
 <ul>
 <li><strong>Header band</strong> — Tab name (when launched from a Master Dashboard tile) + report name. The active company's logo sits below the header so you always know whose data you're looking at.</li>
-<li><strong>Group banner</strong> — When the source dashboard had a Group By and you clicked a specific group's row, the banner reads ""Showing only rows where Status = Funded"" (or whichever filter applies). When you clicked the Totals row, it reads ""All Records"".</li>
+<li><strong>Group banner</strong> — When the source dashboard had a Group By and you clicked a specific group's row, the banner reads ""Showing only rows where Status = Active"" (or whichever filter applies). When you clicked the Totals row, it reads ""All Records"".</li>
 <li><strong>Row count + Show SQL + Export</strong> — Top-right of the header.</li>
 </ul>
 
@@ -311,7 +395,10 @@
 <p>Hidden columns are excluded from the export. Re-enable them via the Selected Fields bar (eye icon) before exporting if you need them.</p>
 
 <h4>Tile exports</h4>
-<p>Exporting from a Master Dashboard tile gives you the underlying detail rows, not the aggregated dashboard projection. Equivalent to opening the tile's drill-down in ""All Records"" view and exporting from there — but without the navigation.</p>"),
+<p>Exporting from a Master Dashboard tile gives you the underlying detail rows, not the aggregated dashboard projection. Equivalent to opening the tile's drill-down in ""All Records"" view and exporting from there — but without the navigation.</p>
+
+<h4>Empty-result confirmation</h4>
+<p>When you export a Master Dashboard tile that currently has <strong>no records</strong>, the app prompts before downloading: <em>""This report doesn't have any records right now. Do you still want to download the file?""</em> Click <strong>Download anyway</strong> to get a headers-only file (useful as a template scaffold), or <strong>Cancel</strong> to back out.</p>"),
 
         new("grid-templates", "Grid Templates", @"
 <p>Grid templates define reusable field selections + column layouts. Linked reports inherit the template's settings.</p>
@@ -342,7 +429,7 @@
 </ol>
 
 <h4>Cloning a template</h4>
-<p>Use Clone on the templates list to duplicate a template — the dialog lets you retarget the clone to a different connection (across companies if needed).</p>"),
+<p>Use Clone on the templates list to duplicate a template — the dialog lets you retarget the clone to a different connection (across companies if needed).</p>", RequiredAdminSection: ""),
 
         new("viewer", "Running Reports (Viewer)", @"
 <p>The Viewer is read-only. It runs the saved report, fixes connection + field selection, and shows Table, Chart, and Dashboard tabs.</p>
@@ -413,7 +500,15 @@
 </ul>
 
 <h4>System Support pattern</h4>
-<p>The System Support role is designed for support engineers who need cross-company visibility but shouldn't have full admin power. Typical configuration: tick Companies, DB Connections, Users on the Roles tab; leave Roles, Schema Builder, and Theme unchecked so they can't escalate or re-paint the app.</p>"),
+<p>The System Support role is designed for support engineers who need cross-company visibility but shouldn't have full admin power. Typical configuration: tick Companies, DB Connections, Users on the Roles tab; leave Roles, Schema Builder, and Theme unchecked so they can't escalate or re-paint the app.</p>
+
+<h4>Schema Builder — Table Aliases</h4>
+<p>The <strong>Table Aliases</strong> tab in Schema Builder defines the table/alias pairs used across the connection (Source Table on fields, Target Table on joins, Primary Table on reports). Two rules to be aware of:</p>
+<ul>
+<li><strong>Aliases are always lowercase.</strong> The Alias input lowercases your typing in real time — typing <code>L</code> stores <code>l</code>. Legacy uppercase aliases are normalized to lowercase the moment you open them for edit.</li>
+<li><strong>Aliases must be unique on a connection.</strong> If you try to reuse an alias that's already in use, the field flags <em>""Already used on this connection""</em> inline and the Save button stays disabled until you pick a different one. The check is case-insensitive — <code>L</code> and <code>l</code> count as the same alias.</li>
+</ul>
+<p>The Alias field is always required; you can't save a table-alias row without one.</p>", RequiredAdminSection: ""),
 
         new("promotion", "Promotion (Staging → Production)", @"
 <p>Use the Admin → Promotion tab to move configuration from Staging to Production via a downloadable JSON package. No live cross-environment DB writes — admins review the file before applying.</p>
@@ -438,7 +533,7 @@
 <li>Production refuses packages whose source environment isn't in <code>Promotion:AllowedSourceEnvironments</code> (defaults to <code>STAGING</code>).</li>
 <li>Each schema config import overwrites the target's schema and writes a history row — rollback is via Schema History.</li>
 <li>Reports / dashboards / master tabs aren't promotable yet; only schema configs are supported in this version.</li>
-</ul>"),
+</ul>", RequiredAdminSection: AdminSections.Promotion),
 
         new("theme", "Theme", @"
 <p>The Admin → Theme tab tunes the app's color palette. Changes apply on each user's next page load.</p>
@@ -459,7 +554,7 @@
 <p>Click any swatch tile to open the picker dialog. The dialog lists all 147 standard CSS named colors with a search box, an inline preview swatch, and a custom hex field for one-off values. Click a row to apply.</p>
 
 <h4>Reset</h4>
-<p>The <strong>Reset to defaults</strong> button reverts every token in the editor to the seeded values <em>without</em> saving — preview the seed palette first, then click Save if you want to commit.</p>"),
+<p>The <strong>Reset to defaults</strong> button reverts every token in the editor to the seeded values <em>without</em> saving — preview the seed palette first, then click Save if you want to commit.</p>", RequiredAdminSection: AdminSections.Theme),
 
         new("tips", "Tips and Shortcuts", @"
 <h4>Quick interactions</h4>
@@ -468,8 +563,9 @@
 <li><strong>Double-click</strong> a dashboard column header to edit its label.</li>
 <li><strong>Double-click</strong> a tab name on the Master Dashboard to rename it.</li>
 <li><strong>Right-click</strong> a Master Dashboard tile to see the SQL that produced its data.</li>
-<li>Click the <strong>Ralis logo</strong> to return to the company picker (when you have access to multiple companies).</li>
+<li>Click the <strong>ACME logo</strong> to return to the company picker (when you have access to multiple companies).</li>
 <li>Drag-and-drop reorders work on tiles, sections, column-order rows, sort dialogs, field chips, and dashboard column chips. Drop on the last item to land at the end.</li>
+<li><strong>Dropdowns auto-scroll to your current pick.</strong> Open any dropdown with an item already selected (Connection, Company, Sort By, etc.) and the list opens scrolled to that item — no hunting through 200 currencies for ""USD"".</li>
 </ul>
 
 <h4>Notifications &amp; feedback</h4>

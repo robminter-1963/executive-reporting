@@ -4,7 +4,7 @@
    click without opening the whole row-click handler (stopPropagation). *@
 
 <div style="display: inline-block; margin-left: 4px;" @onclick:stopPropagation="true">
-    <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense
+    <MudMenu Icon="@Icons.Material.Outlined.MoreVert" Size="Size.Small" Dense
              AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
              Style="padding: 0; min-width: 0;" IconSize="Size.Small">
         @foreach (var m in Methods)
@@ -13,7 +13,7 @@
             <MudMenuItem OnClick="@(() => OnMethodChanged.InvokeAsync(mLocal))">
                 @if (string.Equals(CurrentMethod, mLocal, StringComparison.OrdinalIgnoreCase))
                 {
-                    <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Style="margin-right: 4px;" />
+                    <MudIcon Icon="@Icons.Material.Outlined.Check" Size="Size.Small" Style="margin-right: 4px;" />
                 }
                 @mLocal
             </MudMenuItem>
@@ -29,10 +29,10 @@
                 <MudTextField T="string" @bind-Value="_literalInput" Placeholder="e.g. 100%"
                               Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
                               Style="width: 140px;" />
-                <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small"
+                <MudIconButton Icon="@Icons.Material.Outlined.Check" Size="Size.Small"
                                Color="Color.Primary" OnClick="CommitLiteral"
                                title="Confirm" />
-                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small"
                                OnClick="() => _editingLiteral = false"
                                title="Cancel" />
             </MudStack>

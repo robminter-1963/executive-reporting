@@ -1,0 +1,72 @@
+@using MudBlazor
+
+@* Reusable table-shaped loading placeholder. Renders a header strip and
+   N rows of pulsing bars sized to look like the eventual table — better
+   perceived speed than a spinner above empty space, because the page
+   layout doesn't shift when the data arrives.
+
+   Usage:
+       @if (_isLoading)
+       {
+           <SkeletonTable Rows="6" Columns="5" />
+       }
+       else
+       {
+           <MudTable ...>
+       }
+*@
+
+<div class="skeleton-table" style="@($"width: 100%; {ContainerStyle}")">
+    @if (ShowHeader)
+    {
+        <div style="@($"display: grid; grid-template-columns: {ResolvedGridTemplate}; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #E2E8F0;")">
+            @for (var c = 0; c < Columns; c++)
+            {
+                <MudSkeleton SkeletonType="SkeletonType.Text"
+                             Animation="Animation.Pulse"
+                             Height="14px"
+                             Style="border-radius: 4px;" />
+            }
+        </div>
+    }
+    @for (var r = 0; r < Rows; r++)
+    {
+        <div style="@($"display: grid; grid-template-columns: {ResolvedGridTemplate}; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #F1F5F9;")">
+            @for (var c = 0; c < Columns; c++)
+            {
+                <MudSkeleton SkeletonType="SkeletonType.Text"
+                             Animation="Animation.Wave"
+                             Height="12px"
+                             Width="@SkeletonWidth(r, c)"
+                             Style="border-radius: 4px;" />
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int Rows { get; set; } = 5;
+    [Parameter] public int Columns { get; set; } = 4;
+    [Parameter] public bool ShowHeader { get; set; } = true;
+    [Parameter] public string? ContainerStyle { get; set; }
+
+    // CSS grid template — equal-width fractions by default so the
+    // skeleton spans whatever width the parent gives it. Override
+    // when the loaded table has known fixed widths.
+    [Parameter] public string? GridTemplate { get; set; }
+
+    private string ResolvedGridTemplate =>
+        string.IsNullOrWhiteSpace(GridTemplate)
+            ? string.Join(" ", Enumerable.Repeat("1fr", Columns))
+            : GridTemplate!;
+
+    // Vary widths slightly per (row, col) so the placeholder reads as
+    // "rows of varying content" rather than a uniform grid of bars.
+    // Deterministic so SSR / re-renders don't flicker on each render.
+    private static readonly int[] WidthCycle = { 95, 70, 88, 60, 82, 75, 90, 65 };
+    private static string SkeletonWidth(int row, int col)
+    {
+        var idx = (row * 3 + col * 5) % WidthCycle.Length;
+        return $"{WidthCycle[idx]}%";
+    }
+}

@@ -178,7 +178,7 @@
                             <MudTooltip Text="Show the SQL that produced this view">
                                 <MudButton Variant="Variant.Outlined" Size="Size.Small"
                                            Color="Color.Default"
-                                           StartIcon="@Icons.Material.Filled.Code"
+                                           StartIcon="@Icons.Material.Outlined.Code"
                                            OnClick="ShowDetailQuery"
                                            Disabled="@(_detailData?.Sql is null)">
                                     Show SQL
@@ -197,6 +197,14 @@
         {
             <MudAlert Severity="Severity.Error">@_error</MudAlert>
         }
+        else if (_isLoading && _detailData is null)
+        {
+            @* Skeleton table while the drill-down query runs. The detail
+               view is expensive (no pagination on grouped output), so a
+               table-shaped placeholder makes the wait feel structured
+               rather than empty. *@
+            <SkeletonTable Rows="12" Columns="6" />
+        }
         else if (_detailData is not null && _detailData.Rows.Any())
         {
             @* Same sort indicator pattern as the Report Viewer. *@
@@ -213,7 +221,7 @@
                         var label = GetFieldLabel(step.Field);
                         var isDesc = string.Equals(step.Direction, "desc", StringComparison.OrdinalIgnoreCase);
                         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
-                                 Icon="@(isDesc ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)">
+                                 Icon="@(isDesc ? Icons.Material.Outlined.ArrowDownward : Icons.Material.Outlined.ArrowUpward)">
                             @priority. @label
                         </MudChip>
                     }
@@ -339,13 +347,9 @@
         }
         else if (!_isLoading)
         {
-            <MudPaper Class="pa-8 d-flex flex-column align-center justify-center" Elevation="0"
-                      Style="border: 1px dashed #DADCE0; min-height: 300px;">
-                <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" Color="Color.Default" />
-                <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
-                    No results found.
-                </MudText>
-            </MudPaper>
+            <EmptyState Icon="@Icons.Material.Outlined.SearchOff"
+                        Heading="Nothing to show"
+                        Body="There aren't any matching records to display right now." />
         }
     </MudStack>
 </MudMainContent>

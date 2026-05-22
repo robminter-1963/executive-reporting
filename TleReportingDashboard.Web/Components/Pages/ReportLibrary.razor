@@ -83,10 +83,10 @@
 <MudPaper Elevation="1" Square Style="background: var(--surface-card, #FFFFFF); border-bottom: 1px solid var(--border-default, #DADCE0); padding: 8px 16px; flex: 0 0 auto;">
     <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width: 100%;">
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+            <MudIconButton Icon="@Icons.Material.Outlined.ArrowBack"
                            OnClick="GoBack"
                            title="Back" />
-            <MudIcon Icon="@Icons.Material.Filled.Assessment" Color="Color.Primary" />
+            <MudIcon Icon="@Icons.Material.Outlined.Assessment" Color="Color.Primary" />
             <MudText Typo="Typo.h6" Style="font-weight: 600; color: #202124;">Report Library</MudText>
         </MudStack>
         <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Justify="Justify.FlexEnd">
@@ -94,7 +94,7 @@
                (as a dropdown off the user name) so they're available on every
                page instead of only here. *@
             <MudTooltip Text="Master Dashboard" Placement="Placement.Bottom">
-                <MudIconButton Icon="@Icons.Material.Filled.DashboardCustomize" Color="Color.Default"
+                <MudIconButton Icon="@Icons.Material.Outlined.DashboardCustomize" Color="Color.Default"
                                OnClick="@(() => Navigation.NavigateTo("/"))" />
             </MudTooltip>
             @* Cross-user view moved off this header into a dedicated
@@ -105,7 +105,7 @@
             @if (_isAdmin)
             {
                 <MudTooltip Text="Grid Templates" Placement="Placement.Bottom">
-                    <MudIconButton Icon="@Icons.Material.Filled.GridView" Color="Color.Default"
+                    <MudIconButton Icon="@Icons.Material.Outlined.GridView" Color="Color.Default"
                                    OnClick="@(() => Navigation.NavigateTo("/grid-templates"))" />
                 </MudTooltip>
             }
@@ -115,7 +115,7 @@
                can run shared reports but never create or edit their own. *@
             @if (!_isViewerOnly)
             {
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Outlined.Add"
                            OnClick="@(() => Navigation.NavigateTo("/builder"))">
                     New Report
                 </MudButton>
@@ -147,7 +147,7 @@
     <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mb-4" Wrap="Wrap.Wrap">
         <MudTextField @bind-Value="_searchText" Placeholder="Search reports by name..."
                       Variant="Variant.Outlined" Margin="Margin.Dense" Immediate
-                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search"
                       DebounceInterval="200" Style="max-width: 480px; flex: 1;" />
         <MudSelect T="Guid?" Value="_selectedCompanyId" ValueChanged="OnCompanyChanged"
                    Label="Company" Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -191,7 +191,7 @@
            Edit / Share / Schedule which are inappropriate for the role. *@
         @if (!_isViewerOnly)
         {
-        <MudTabPanel Text="My Reports" Icon="@Icons.Material.Filled.Folder">
+        <MudTabPanel Text="My Reports" Icon="@Icons.Material.Outlined.Folder">
             @* Section management toolbar — only meaningful when a single
                company is in scope (sections are per-company). The Create
                Section button opens a small dialog to add an empty section
@@ -199,8 +199,8 @@
             @if (_selectedCompanyId is not null)
             {
                 <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.CreateNewFolder"
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                               StartIcon="@Icons.Material.Outlined.CreateNewFolder"
                                OnClick="OpenCreateSectionDialog">
                         Create Section
                     </MudButton>
@@ -236,10 +236,37 @@
                     <MudPaper Elevation="0" Class="mb-1" Style="border: 1px solid #DADCE0; border-radius: 4px;">
                         <div style="padding: 6px 12px; background: #F1F3F4; cursor: pointer; display: flex; align-items: center; gap: 4px; user-select: none;"
                              @onclick="() => ToggleSection(sectionName)">
-                            <MudIcon Icon="@(expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" Style="color: #5F6368;" />
-                            <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Style="color: #5F6368;" />
+                            <MudIcon Icon="@(expanded ? Icons.Material.Outlined.ExpandMore : Icons.Material.Outlined.ChevronRight)" Size="Size.Small" Style="color: #5F6368;" />
+                            <MudIcon Icon="@Icons.Material.Outlined.Folder" Size="Size.Small" Style="color: #5F6368;" />
                             <MudText Typo="Typo.body2" Style="font-weight: 600;">@sectionName</MudText>
                             <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 4px;">(@sectionReports.Count)</MudText>
+                            @* Per-section actions (rename / remove). Only shown for
+                               admin-defined sections — the synthetic (Uncategorized)
+                               bucket has no row in RPT_library_sections to mutate.
+                               Hidden from viewer-only roles. stopPropagation keeps
+                               clicks inside the menu from collapsing/expanding the
+                               section. *@
+                            @if (!_isViewerOnly && !string.Equals(sectionName, UncategorizedSectionLabel, StringComparison.Ordinal))
+                            {
+                                var sectionIdLookup = _librarySections.FirstOrDefault(s => string.Equals(s.Name, sectionName, StringComparison.OrdinalIgnoreCase))?.Id;
+                                if (sectionIdLookup is Guid sId)
+                                {
+                                    <div style="margin-left: auto;" @onclick:stopPropagation="true">
+                                        <MudMenu Icon="@Icons.Material.Outlined.MoreVert" Size="Size.Small" Dense
+                                                 AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+                                                 title="Section actions">
+                                            <MudMenuItem Icon="@Icons.Material.Outlined.Edit"
+                                                         OnClick="@(() => OpenRenameSectionDialogAsync(sId, sectionName))">
+                                                Rename section
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Outlined.Delete" IconColor="Color.Error"
+                                                         OnClick="@(() => ConfirmRemoveSectionAsync(sId, sectionName, sectionReports.Count))">
+                                                Remove section
+                                            </MudMenuItem>
+                                        </MudMenu>
+                                    </div>
+                                }
+                            }
                         </div>
                         @if (expanded)
                         {
@@ -270,7 +297,7 @@
                                caption so admins know which label users see. *@
                             <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
                                 @{ var fav = _favoriteIds.Contains(context.Id); }
-                                <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                <MudIconButton Icon="@(fav ? Icons.Material.Outlined.Star : Icons.Material.Outlined.StarBorder)"
                                                Size="Size.Small"
                                                Color="@(fav ? Color.Warning : Color.Default)"
                                                title="@(fav ? "Unfavorite" : "Add to favorites")"
@@ -286,7 +313,7 @@
                                        jump out as distinct from quantity meta. *@
                                     <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
                                              Style="height: 18px; font-size: 0.65rem;"
-                                             Icon="@Icons.Material.Filled.Category">
+                                             Icon="@Icons.Material.Outlined.Category">
                                         @context.Category
                                     </MudChip>
                                 }
@@ -304,7 +331,7 @@
                                                 Placement="Placement.Top">
                                         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Tertiary"
                                                  Style="height: 18px; font-size: 0.65rem;"
-                                                 Icon="@Icons.Material.Filled.GridView">
+                                                 Icon="@Icons.Material.Outlined.GridView">
                                             Templated
                                         </MudChip>
                                     </MudTooltip>
@@ -335,7 +362,7 @@
                             @if (_scheduledReportIds.Contains(context.Id))
                             {
                                 <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
-                                    <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Color="Color.Primary" />
+                                    <MudIcon Icon="@Icons.Material.Outlined.Schedule" Size="Size.Small" Color="Color.Primary" />
                                     @if (_nextRunByReport.TryGetValue(context.Id, out var nextRun))
                                     {
                                         <MudText Typo="Typo.caption" Color="Color.Secondary">
@@ -353,7 +380,7 @@
                             @if (IsDashboardEnabled(context))
                             {
                                 <MudTooltip Text="Eligible for Master Dashboard (Show on Master Dashboard is on)">
-                                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small" Color="Color.Primary" />
+                                    <MudIcon Icon="@Icons.Material.Outlined.Dashboard" Size="Size.Small" Color="Color.Primary" />
                                 </MudTooltip>
                             }
                         </MudTd>
@@ -363,7 +390,7 @@
                                 var onTabsLabel = string.Join(", ", onTabs);
                                 <MudTooltip Text="@($"Pinned on Master Dashboard tab: {onTabsLabel}")">
                                     <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Justify="Justify.Center">
-                                        <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Success" />
+                                        <MudIcon Icon="@Icons.Material.Outlined.PushPin" Size="Size.Small" Color="Color.Success" />
                                         <MudText Typo="Typo.caption" Color="Color.Secondary">@onTabsLabel</MudText>
                                     </MudStack>
                                 </MudTooltip>
@@ -374,24 +401,24 @@
                                 var ownedByMe = string.Equals(context.OwnerId, _userId, StringComparison.OrdinalIgnoreCase);
                             }
                             <MudStack Row Spacing="0" Style="display: inline-flex !important;">
-                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
                                                Color="Color.Primary" title="Run"
                                                OnClick="() => ViewReport(context.Id)" />
                                 @if (ownedByMe)
                                 {
-                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                                    Color="Color.Default" title="Edit"
                                                    OnClick="() => EditReport(context.Id)" />
                                 }
-                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small"
                                                Color="Color.Default" title="Clone"
                                                OnClick="() => CloneReport(context)" />
                                 @if (ownedByMe)
                                 {
-                                    <MudIconButton Icon="@Icons.Material.Filled.Share" Size="Size.Small"
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Share" Size="Size.Small"
                                                    Color="Color.Default" title="Share"
                                                    OnClick="() => OpenShareDialog(context)" />
-                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                                    Color="Color.Error" title="Delete"
                                                    OnClick="() => ConfirmDelete(context)" />
                                 }
@@ -409,18 +436,18 @@
             }
             else if (!_isLoading)
             {
-                <EmptyState Icon="@Icons.Material.Filled.NoteAdd"
+                <EmptyState Icon="@Icons.Material.Outlined.NoteAdd"
                             Heading="You haven't created any reports yet"
                             Body="Reports turn raw connection data into something readable. Pick fields, filters, and sorting in the builder and save the result here."
                             CtaLabel="Create your first report"
-                            CtaIcon="@Icons.Material.Filled.Add"
+                            CtaIcon="@Icons.Material.Outlined.Add"
                             OnCtaClick="@(() => Navigation.NavigateTo("/builder"))" />
             }
         </MudTabPanel>
         }
 
         @* ── Tab 2: Shared With Me ── *@
-        <MudTabPanel Text="Shared With Me" Icon="@Icons.Material.Filled.PeopleAlt">
+        <MudTabPanel Text="Shared With Me" Icon="@Icons.Material.Outlined.PeopleAlt">
             @if (FilteredSharedReports.Any())
             {
                 <MudTable Items="@FilteredSharedReports" Hover Striped Dense FixedHeader
@@ -453,7 +480,7 @@
                                caption so admins know which label users see. *@
                             <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
                                 @{ var fav = _favoriteIds.Contains(context.Id); }
-                                <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                <MudIconButton Icon="@(fav ? Icons.Material.Outlined.Star : Icons.Material.Outlined.StarBorder)"
                                                Size="Size.Small"
                                                Color="@(fav ? Color.Warning : Color.Default)"
                                                title="@(fav ? "Unfavorite" : "Add to favorites")"
@@ -491,7 +518,7 @@
                             @if (IsDashboardEnabled(context))
                             {
                                 <MudTooltip Text="Eligible for Master Dashboard (Show on Master Dashboard is on)">
-                                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small" Color="Color.Primary" />
+                                    <MudIcon Icon="@Icons.Material.Outlined.Dashboard" Size="Size.Small" Color="Color.Primary" />
                                 </MudTooltip>
                             }
                         </MudTd>
@@ -501,7 +528,7 @@
                                 var onTabsLabel = string.Join(", ", onTabs);
                                 <MudTooltip Text="@($"Pinned on Master Dashboard tab: {onTabsLabel}")">
                                     <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Justify="Justify.Center">
-                                        <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Success" />
+                                        <MudIcon Icon="@Icons.Material.Outlined.PushPin" Size="Size.Small" Color="Color.Success" />
                                         <MudText Typo="Typo.caption" Color="Color.Secondary">@onTabsLabel</MudText>
                                     </MudStack>
                                 </MudTooltip>
@@ -509,7 +536,7 @@
                         </MudTd>
                         <MudTd DataLabel="Actions" Style="text-align: right;">
                             <MudStack Row Spacing="0" Style="display: inline-flex !important;">
-                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
                                                Color="Color.Primary" title="Run"
                                                OnClick="() => ViewReport(context.Id)" />
                                 @* Clone makes the cloning user the new
@@ -519,7 +546,7 @@
                                    viewer-only user gets on shared rows. *@
                                 @if (!_isViewerOnly)
                                 {
-                                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                                    <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small"
                                                    Color="Color.Default" title="Clone"
                                                    OnClick="() => CloneReport(context)" />
                                 }
@@ -538,7 +565,7 @@
             }
             else if (!_isLoading)
             {
-                <EmptyState Icon="@Icons.Material.Filled.PeopleAlt"
+                <EmptyState Icon="@Icons.Material.Outlined.PeopleAlt"
                             Heading="No shared reports yet"
                             Body="When a teammate shares a report with you, it'll show up here. You can also share your own from the My Reports tab." />
             }
@@ -550,7 +577,7 @@
            for them. Hiding the tab keeps the tab strip honest. *@
         @if (!_isViewerOnly)
         {
-        <MudTabPanel Text="Recent" Icon="@Icons.Material.Filled.History">
+        <MudTabPanel Text="Recent" Icon="@Icons.Material.Outlined.History">
             @if (FilteredRecent.Any())
             {
                 <MudTable Items="@FilteredRecent" Hover Striped Dense FixedHeader
@@ -582,7 +609,7 @@
                                caption so admins know which label users see. *@
                             <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
                                 @{ var fav = _favoriteIds.Contains(context.Id); }
-                                <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                <MudIconButton Icon="@(fav ? Icons.Material.Outlined.Star : Icons.Material.Outlined.StarBorder)"
                                                Size="Size.Small"
                                                Color="@(fav ? Color.Warning : Color.Default)"
                                                title="@(fav ? "Unfavorite" : "Add to favorites")"
@@ -617,7 +644,7 @@
                             @if (IsDashboardEnabled(context))
                             {
                                 <MudTooltip Text="Eligible for Master Dashboard (Show on Master Dashboard is on)">
-                                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small" Color="Color.Primary" />
+                                    <MudIcon Icon="@Icons.Material.Outlined.Dashboard" Size="Size.Small" Color="Color.Primary" />
                                 </MudTooltip>
                             }
                         </MudTd>
@@ -627,7 +654,7 @@
                                 var onTabsLabel = string.Join(", ", onTabs);
                                 <MudTooltip Text="@($"Pinned on Master Dashboard tab: {onTabsLabel}")">
                                     <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Justify="Justify.Center">
-                                        <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Success" />
+                                        <MudIcon Icon="@Icons.Material.Outlined.PushPin" Size="Size.Small" Color="Color.Success" />
                                         <MudText Typo="Typo.caption" Color="Color.Secondary">@onTabsLabel</MudText>
                                     </MudStack>
                                 </MudTooltip>
@@ -635,19 +662,19 @@
                         </MudTd>
                         <MudTd DataLabel="Actions" Style="text-align: right;">
                             <MudStack Row Spacing="0" Style="display: inline-flex !important;">
-                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
                                                Color="Color.Primary" title="Run"
                                                OnClick="() => ViewReport(context.Id)" />
-                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                                Color="Color.Default" title="Edit"
                                                OnClick="() => EditReport(context.Id)" />
-                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small"
                                                Color="Color.Default" title="Clone"
                                                OnClick="() => CloneReport(context)" />
-                                <MudIconButton Icon="@Icons.Material.Filled.Share" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.Share" Size="Size.Small"
                                                Color="Color.Default" title="Share"
                                                OnClick="() => OpenShareDialog(context)" />
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                                Color="Color.Error" title="Delete"
                                                OnClick="() => ConfirmDelete(context)" />
                             </MudStack>
@@ -665,7 +692,7 @@
             }
             else if (!_isLoading)
             {
-                <EmptyState Icon="@Icons.Material.Filled.History"
+                <EmptyState Icon="@Icons.Material.Outlined.History"
                             Heading="Nothing here yet"
                             Body="Reports you've opened recently will appear here, so the ones you use most are always one click away." />
             }
@@ -681,7 +708,7 @@
            (admin override) are exposed. *@
         @if (_isAdmin)
         {
-        <MudTabPanel Text="Other Users' Reports" Icon="@Icons.Material.Filled.GroupWork">
+        <MudTabPanel Text="Other Users' Reports" Icon="@Icons.Material.Outlined.GroupWork">
             @if (FilteredOtherUserReports.Any())
             {
                 <div class="rl-section-list">
@@ -693,10 +720,37 @@
                     <MudPaper Elevation="0" Class="mb-1" Style="border: 1px solid #DADCE0; border-radius: 4px;">
                         <div style="padding: 6px 12px; background: #F1F3F4; cursor: pointer; display: flex; align-items: center; gap: 4px; user-select: none;"
                              @onclick="() => ToggleSection(sectionName)">
-                            <MudIcon Icon="@(expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)" Size="Size.Small" Style="color: #5F6368;" />
-                            <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Style="color: #5F6368;" />
+                            <MudIcon Icon="@(expanded ? Icons.Material.Outlined.ExpandMore : Icons.Material.Outlined.ChevronRight)" Size="Size.Small" Style="color: #5F6368;" />
+                            <MudIcon Icon="@Icons.Material.Outlined.Folder" Size="Size.Small" Style="color: #5F6368;" />
                             <MudText Typo="Typo.body2" Style="font-weight: 600;">@sectionName</MudText>
                             <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 4px;">(@sectionReports.Count)</MudText>
+                            @* Per-section actions (rename / remove). Only shown for
+                               admin-defined sections — the synthetic (Uncategorized)
+                               bucket has no row in RPT_library_sections to mutate.
+                               Hidden from viewer-only roles. stopPropagation keeps
+                               clicks inside the menu from collapsing/expanding the
+                               section. *@
+                            @if (!_isViewerOnly && !string.Equals(sectionName, UncategorizedSectionLabel, StringComparison.Ordinal))
+                            {
+                                var sectionIdLookup = _librarySections.FirstOrDefault(s => string.Equals(s.Name, sectionName, StringComparison.OrdinalIgnoreCase))?.Id;
+                                if (sectionIdLookup is Guid sId)
+                                {
+                                    <div style="margin-left: auto;" @onclick:stopPropagation="true">
+                                        <MudMenu Icon="@Icons.Material.Outlined.MoreVert" Size="Size.Small" Dense
+                                                 AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+                                                 title="Section actions">
+                                            <MudMenuItem Icon="@Icons.Material.Outlined.Edit"
+                                                         OnClick="@(() => OpenRenameSectionDialogAsync(sId, sectionName))">
+                                                Rename section
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Outlined.Delete" IconColor="Color.Error"
+                                                         OnClick="@(() => ConfirmRemoveSectionAsync(sId, sectionName, sectionReports.Count))">
+                                                Remove section
+                                            </MudMenuItem>
+                                        </MudMenu>
+                                    </div>
+                                }
+                            }
                         </div>
                         @if (expanded)
                         {
@@ -716,7 +770,7 @@
                                         <span id="@($"report-row-{context.Id}")" style="display: none;"></span>
                                         <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
                                             @{ var fav = _favoriteIds.Contains(context.Id); }
-                                            <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                            <MudIconButton Icon="@(fav ? Icons.Material.Outlined.Star : Icons.Material.Outlined.StarBorder)"
                                                            Size="Size.Small"
                                                            Color="@(fav ? Color.Warning : Color.Default)"
                                                            title="@(fav ? "Unfavorite" : "Add to favorites")"
@@ -729,7 +783,7 @@
                                             {
                                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
                                                          Style="height: 18px; font-size: 0.65rem;"
-                                                         Icon="@Icons.Material.Filled.Category">
+                                                         Icon="@Icons.Material.Outlined.Category">
                                                     @context.Category
                                                 </MudChip>
                                             }
@@ -752,7 +806,7 @@
                                             var onTabsLabel = string.Join(", ", onTabs);
                                             <MudTooltip Text="@($"Pinned on Master Dashboard tab: {onTabsLabel}")">
                                                 <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Justify="Justify.Center">
-                                                    <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Success" />
+                                                    <MudIcon Icon="@Icons.Material.Outlined.PushPin" Size="Size.Small" Color="Color.Success" />
                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">@onTabsLabel</MudText>
                                                 </MudStack>
                                             </MudTooltip>
@@ -760,14 +814,14 @@
                                     </MudTd>
                                     <MudTd DataLabel="Actions" Style="text-align: right;">
                                         <MudStack Row Spacing="0" Style="display: inline-flex !important;">
-                                            <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                            <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
                                                            Color="Color.Primary" title="Run / preview"
                                                            OnClick="() => ViewReport(context.Id)" />
                                             @* Admin override delete — same flow as the
                                                My Reports admin-delete path. ConfirmDelete
                                                surfaces the owner's email so the click
                                                is informed. *@
-                                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                            <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
                                                            Color="Color.Error" title="Delete (admin override)"
                                                            OnClick="() => ConfirmDelete(context)" />
                                         </MudStack>
@@ -784,7 +838,7 @@
             }
             else if (!_isLoading)
             {
-                <EmptyState Icon="@Icons.Material.Filled.GroupWork"
+                <EmptyState Icon="@Icons.Material.Outlined.GroupWork"
                             Heading="No other users' reports"
                             Body="When other users in the companies you administer save reports, they'll appear here. Pin them to dashboards or clean up after departed users from this tab." />
             }
@@ -796,7 +850,7 @@
            set to fire" without tab-hopping per owner. Flat MudTable
            (no per-section grouping) — schedule status is the natural
            grouping; sections aren't meaningful here. *@
-        <MudTabPanel Text="Scheduled" Icon="@Icons.Material.Filled.Schedule">
+        <MudTabPanel Text="Scheduled" Icon="@Icons.Material.Outlined.Schedule">
             @if (_scheduledAdminReports.Count > 0)
             {
                 <MudTable Items="@_scheduledAdminReports.OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase)"
@@ -817,7 +871,7 @@
                         <MudTd DataLabel="Name">
                             <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
                                 @{ var fav = _favoriteIds.Contains(context.Id); }
-                                <MudIconButton Icon="@(fav ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                <MudIconButton Icon="@(fav ? Icons.Material.Outlined.Star : Icons.Material.Outlined.StarBorder)"
                                                Size="Size.Small"
                                                Color="@(fav ? Color.Warning : Color.Default)"
                                                title="@(fav ? "Unfavorite" : "Add to favorites")"
@@ -830,7 +884,7 @@
                                 {
                                     <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
                                              Style="height: 18px; font-size: 0.65rem;"
-                                             Icon="@Icons.Material.Filled.Category">
+                                             Icon="@Icons.Material.Outlined.Category">
                                         @context.Category
                                     </MudChip>
                                 }
@@ -847,7 +901,7 @@
                             {
                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
                                          Style="height: 20px; font-size: 0.7rem;"
-                                         Icon="@Icons.Material.Filled.Schedule">
+                                         Icon="@Icons.Material.Outlined.Schedule">
                                     @count active
                                 </MudChip>
                             }
@@ -878,7 +932,7 @@
                                can preview a scheduled report's output without
                                leaving the page. *@
                             <MudStack Row Spacing="0" Style="display: inline-flex !important;">
-                                <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small"
+                                <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
                                                Color="Color.Primary" title="Run / preview"
                                                OnClick="() => ViewReport(context.Id)" />
                             </MudStack>
@@ -891,7 +945,7 @@
             }
             else if (!_isLoading)
             {
-                <EmptyState Icon="@Icons.Material.Filled.Schedule"
+                <EmptyState Icon="@Icons.Material.Outlined.Schedule"
                             Heading="No active schedules"
                             Body="When any user sets up a recurring delivery for a report, it'll show up here. Use this tab to quickly find and audit every fire-on-schedule report across owners." />
             }
@@ -1670,6 +1724,67 @@
         catch (Exception ex)
         {
             Snackbar.Add($"Failed to create section: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenRenameSectionDialogAsync(Guid sectionId, string currentName)
+    {
+        var parameters = new DialogParameters<RenameDialog>
+        {
+            { x => x.InitialValue, currentName },
+            { x => x.Title, "Rename Library Section" },
+            { x => x.Label, "Section name" }
+        };
+        var dlg = await DialogService.ShowAsync<RenameDialog>("Rename Library Section", parameters,
+            DialogPresets.Locked(MaxWidth.ExtraSmall));
+        var result = await dlg.Result;
+        if (result is null || result.Canceled || result.Data is not string newName) return;
+        newName = newName.Trim();
+        if (string.IsNullOrEmpty(newName) || string.Equals(newName, currentName, StringComparison.Ordinal)) return;
+
+        try
+        {
+            await LibrarySectionSvc.RenameSectionAsync(sectionId, newName);
+            await ReloadLibrarySectionsAsync();
+            Snackbar.Add($"Renamed section to \"{newName}\".", Severity.Success);
+        }
+        catch (InvalidOperationException ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to rename section: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // Soft-delete via LibrarySectionService — the service transaction
+    // nulls out library_section_id on every report in the section before
+    // marking it inactive, so reports flow back to (Uncategorized) rather
+    // than getting orphaned or hidden.
+    private async Task ConfirmRemoveSectionAsync(Guid sectionId, string sectionName, int reportCount)
+    {
+        var msg = reportCount > 0
+            ? $"Remove section \"{sectionName}\"? The {reportCount} report(s) inside will move to (Uncategorized)."
+            : $"Remove section \"{sectionName}\"?";
+        var confirmed = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = "Remove section",
+            Message = msg,
+            YesText = "Remove",
+            CancelText = "Cancel"
+        });
+        if (confirmed != true) return;
+
+        try
+        {
+            await LibrarySectionSvc.DeleteSectionAsync(sectionId);
+            await ReloadLibrarySectionsAsync();
+            Snackbar.Add($"Removed section \"{sectionName}\".", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to remove section: {ex.Message}", Severity.Error);
         }
     }
 

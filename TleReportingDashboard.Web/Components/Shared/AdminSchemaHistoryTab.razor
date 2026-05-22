@@ -34,12 +34,12 @@
             <MudDatePicker Label="To" @bind-Date="_filterTo" Clearable
                            Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;" />
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                       StartIcon="@Icons.Material.Filled.FilterList"
+                       StartIcon="@Icons.Material.Outlined.FilterList"
                        OnClick="ReloadAsync" Disabled="@_loading">
                 Apply
             </MudButton>
             <MudButton Variant="Variant.Text" Color="Color.Default"
-                       StartIcon="@Icons.Material.Filled.Clear"
+                       StartIcon="@Icons.Material.Outlined.Clear"
                        OnClick="ClearFilters" Disabled="@_loading">
                 Clear
             </MudButton>
@@ -54,7 +54,7 @@
         <MudSpacer />
         <MudTooltip Text="Delete only the rows you've checked in the table">
             <MudButton Variant="Variant.Outlined" Color="Color.Error"
-                       StartIcon="@Icons.Material.Filled.DeleteSweep"
+                       StartIcon="@Icons.Material.Outlined.DeleteSweep"
                        Disabled="@(_selected.Count == 0 || _loading)"
                        OnClick="DeleteSelectedAsync">
                 Delete Selected (@_selected.Count)
@@ -62,7 +62,7 @@
         </MudTooltip>
         <MudTooltip Text="Delete every row matching the current filter (connection + date range)">
             <MudButton Variant="Variant.Filled" Color="Color.Error"
-                       StartIcon="@Icons.Material.Filled.DeleteForever"
+                       StartIcon="@Icons.Material.Outlined.DeleteForever"
                        Disabled="@(!_filterFrom.HasValue || !_filterTo.HasValue || _loading)"
                        OnClick="DeleteByDateRangeAsync">
                 Delete by Date Range
@@ -79,7 +79,7 @@
     {
         <MudPaper Elevation="0" Class="pa-6 d-flex flex-column align-center"
                   Style="border: 1px dashed #DADCE0;">
-            <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Large" Color="Color.Default" />
+            <MudIcon Icon="@Icons.Material.Outlined.History" Size="Size.Large" Color="Color.Default" />
             <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
                 No history rows match the current filters.
             </MudText>
@@ -129,7 +129,7 @@
                     </MudTd>
                     <MudTd>
                         <MudTooltip Text="Preview JSON">
-                            <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                            <MudIconButton Icon="@Icons.Material.Outlined.Visibility" Size="Size.Small"
                                            OnClick="@(() => PreviewAsync(context))" />
                         </MudTooltip>
                     </MudTd>

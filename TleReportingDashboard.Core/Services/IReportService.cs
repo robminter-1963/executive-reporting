@@ -16,6 +16,13 @@ public interface IReportService
     Task<SavedReport?> GetReportByIdAsync(Guid id);
     Task<SavedReport> SaveReportAsync(SavedReport report);
     Task<SavedReport> UpdateReportAsync(SavedReport report);
+    // Admin-only: update a report regardless of owner. Mirrors
+    // DeleteReportAsAdminAsync — skips the owner_id check in the SQL so
+    // a global admin can edit on behalf of any user. The OwnerId on the
+    // saved record is preserved (admin edits don't change ownership).
+    // Callers MUST gate this behind an IsAdmin check; the service does
+    // not re-validate.
+    Task<SavedReport> UpdateReportAsAdminAsync(SavedReport report);
     Task DeleteReportAsync(Guid id, string userId);
     // Admin-only: delete any report regardless of owner. Used to clean up
     // reports left behind when a user departs the company. Callers MUST

@@ -404,10 +404,11 @@
                                 <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
                                                Color="Color.Primary" title="Run"
                                                OnClick="() => ViewReport(context.Id)" />
-                                @if (ownedByMe)
+                                @if (ownedByMe || _hasAnyAdminAccess)
                                 {
                                     <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
-                                                   Color="Color.Default" title="Edit"
+                                                   Color="Color.Default"
+                                                   title="@(ownedByMe ? "Edit" : "Edit (admin)")"
                                                    OnClick="() => EditReport(context.Id)" />
                                 }
                                 <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small"
@@ -702,11 +703,15 @@
         @* ── Tab 4: Other Users' Reports (admin-only) ──
            Cross-user view, replaces the previous Admin-View toggle on
            My Reports. Admins use this tab to add other users' reports
-           to dashboards or to clean up after departed users. Edit /
-           Share / Clone are intentionally absent — admins shouldn't
-           modify other users' work; only Run (preview) and Delete
-           (admin override) are exposed. *@
-        @if (_isAdmin)
+           to dashboards or to clean up after departed users. Edit and
+           Delete are exposed as admin overrides — admins frequently
+           need to fix or maintain reports on behalf of users (broken
+           filters, schema renames, etc.). Share / Clone are still
+           absent — those affordances should stay with the owner.
+           Gate: _hasAnyAdminAccess (broader than just Global admin) so
+           Administrator-role users and admin-section-role users both
+           see this tab. *@
+        @if (_hasAnyAdminAccess)
         {
         <MudTabPanel Text="Other Users' Reports" Icon="@Icons.Material.Outlined.GroupWork">
             @if (FilteredOtherUserReports.Any())
@@ -817,6 +822,14 @@
                                             <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
                                                            Color="Color.Primary" title="Run / preview"
                                                            OnClick="() => ViewReport(context.Id)" />
+                                            @* Admin override edit — routes through
+                                               ReportBuilder which uses UpdateReportAsAdminAsync
+                                               (drops the owner_id SQL check) on save.
+                                               OwnerId is preserved; admin's edit doesn't
+                                               change ownership. *@
+                                            <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                                           Color="Color.Default" title="Edit (admin override)"
+                                                           OnClick="() => EditReport(context.Id)" />
                                             @* Admin override delete — same flow as the
                                                My Reports admin-delete path. ConfirmDelete
                                                surfaces the owner's email so the click
@@ -968,6 +981,11 @@
     private string _userEmail = string.Empty;
     private string _userName = string.Empty;
     private bool _isAdmin;
+    // True for global admins AND for users holding any admin-section role
+    // (System Support, etc.). Broader than _isAdmin — used to gate the
+    // "edit any user's report" affordance so company-scoped admin roles
+    // can also clean up / fix reports across users.
+    private bool _hasAnyAdminAccess;
 
     private List<SavedReport> _myReports = new();
     // Reports owned by OTHER users. Populated only for global admins via
@@ -1260,6 +1278,18 @@
                 && string.IsNullOrEmpty(Configuration["AzureAd:ClientId"]);
             _isAdmin = AdminService.IsAdmin(_userEmail);
 
+            // Compute the broad admin signal up front — needed before the
+            // task-launch block below so otherUsersTask / allSchedulesTask
+            // fire for any-admin (Administrator role, admin sections), not
+            // just Global admins listed in RPT_admins.
+            UserRecord? adminUserRecord = null;
+            try { adminUserRecord = await UserManagement.GetByEmailAsync(_userEmail); } catch { /* non-fatal */ }
+            var earlyHasAdminAccess = await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
+            _hasAnyAdminAccess = _isAdmin
+                || earlyHasAdminAccess
+                || adminUserRecord?.IsAdmin == true
+                || adminUserRecord?.RoleAdminSections is { Count: > 0 };
+
             // Priority: explicit ?tab= in URL wins (e.g. returning from builder with tab context),
             // otherwise restore the last tab the user was on this session.
             if (InitialTab is int t && t >= 0 && t <= 3)
@@ -1287,8 +1317,10 @@
             var myReportsTask = ReportService.GetReportsAsync(_userId);
             // Cross-user reports for the admin tab. Filter to !owned-by-me
             // client-side so My Reports and Other Users' Reports never
-            // overlap. Skipped for non-admins.
-            var otherUsersTask = _isAdmin
+            // overlap. Skipped for non-admins. Uses the broad admin gate so
+            // Administrator-role users (not just Global admins listed in
+            // RPT_admins) see the tab populated.
+            var otherUsersTask = _hasAnyAdminAccess
                 ? ReportService.GetAllReportsAsync()
                 : Task.FromResult(new List<SavedReport>());
             var sharedTask = SharingService.GetSharedWithMeAsync(_userId);
@@ -1296,7 +1328,7 @@
             // Admin-only — every schedule in the system, drives the
             // "Scheduled" admin tab. Skipped for non-admins so this
             // diagnostic query doesn't fire from non-privileged sessions.
-            var allSchedulesTask = _isAdmin
+            var allSchedulesTask = _hasAnyAdminAccess
                 ? ScheduleService.GetAllSchedulesAsync()
                 : Task.FromResult(new List<ReportSchedule>());
             var companiesTask = CompanyRegistry.GetActiveAsync();
@@ -1320,8 +1352,11 @@
             // Admin-section roles (System Support et al.) bypass this filter
             // — they need cross-company visibility to do administrative work,
             // same model the picker / master-dashboard already use.
-            var hasAdminAccess = await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
-            if (!_isAdmin && !hasAdminAccess && !string.IsNullOrEmpty(_userEmail))
+            // _hasAnyAdminAccess was computed up top before the task launches.
+            // The company-scope filter below only applies to users who DON'T
+            // have admin access — same "any admin track" semantics so
+            // Administrator-role users see every company they should.
+            if (!_hasAnyAdminAccess && !string.IsNullOrEmpty(_userEmail))
             {
                 var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
                 var allowed = access.Select(a => a.CompanyId).ToHashSet();
@@ -1801,6 +1836,13 @@
             LibrarySectionId = source.LibrarySectionId,
             OwnerId = _userId,
             OwnerEmail = _userEmail,
+            // Copy CompanyId from source so the in-memory clone matches the
+            // ApplyCompany filter immediately. SaveReportAsync recomputes
+            // company_id server-side from ConnectionId, but the returned
+            // instance is the same reference we sent in — so without this
+            // the clone lands with CompanyId=Guid.Empty client-side and
+            // vanishes from the UI whenever a specific company is picked.
+            CompanyId = source.CompanyId,
             FieldIds = source.FieldIds,
             Filters = source.Filters,
             Aggregations = source.Aggregations,
@@ -1814,7 +1856,11 @@
         };
         var (ok, saved) = await Snackbar.RunAsync(Logger, "cloning report",
             () => ReportService.SaveReportAsync(cloned));
-        if (ok && saved is not null) _myReports.Add(saved);
+        if (ok && saved is not null)
+        {
+            _myReports.Add(saved);
+            Snackbar.Add($"Cloned to \"{saved.Name}\".", Severity.Success);
+        }
     }
 
     // ── Share dialog ──

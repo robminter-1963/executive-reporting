@@ -1,4 +1,5 @@
 using System.Data.Common;
+using TleReportingDashboard.Web.Configuration;
 using TleReportingDashboard.Web.Models;
 
 namespace TleReportingDashboard.Web.Services.QueryPipeline;
@@ -38,6 +39,22 @@ public static class AdvancedFilterSqlEmitter
         // only fields explicitly flagged for conversion should wrap.
         public bool ApplyTimezoneConversion { get; init; }
 
+        // LookupType binding for the chip-picker → admin-authored
+        // FilterPredicateSql path. When both are set, InList/NotInList
+        // (and Equals/NotEquals) emit the admin's predicate against the
+        // joined lookup table instead of comparing the field's own column
+        // to the user-picked codes. Matches the SqlEmitter.BuildFilterWhereClauses
+        // behavior so Advanced Filters and Header Filters generate the same
+        // WHERE for the same field + picked values.
+        public string? LookupTypeId { get; init; }
+        public string? FilterPredicateSql { get; init; }
+
+        // Alternate column for the WHERE comparison when this field is
+        // filtered via a LookupType. See Configuration.FieldDefinition.FilterColumn.
+        // Honored as a fallback when FilterPredicateSql isn't set, before
+        // the legacy "field's own column" path.
+        public string? FilterColumn { get; init; }
+
         // Non-date LHS expression — inline SqlExpression if present,
         // otherwise the qualified column reference. Date-typed fields
         // bypass this and go through BuildDateLhs (which always casts
@@ -51,16 +68,30 @@ public static class AdvancedFilterSqlEmitter
     // Top-level entry. Returns the WHERE fragment (with outer parens)
     // that the caller ANDs onto its WHERE list, or empty string when
     // the tree contains no usable clauses.
+    //
+    // lookupTypes (optional): the connection's LookupTypes catalog. When
+    // a clause's field carries a LookupTypeId + FilterPredicateSql, the
+    // emitter substitutes the admin's predicate (with {values} or implicit
+    // IN-append) instead of comparing the field's own column to the
+    // user-picked codes. Pass null/empty when LookupType binding isn't
+    // applicable — falls back to the legacy plain-column comparison.
     public static string BuildGroupExpression(
         FilterGroup group,
         Func<string, FilterableField?> resolve,
         ISqlDialect dialect,
-        List<DbParameter> parameters)
+        List<DbParameter> parameters,
+        IReadOnlyList<LookupTypeDefinition>? lookupTypes = null)
     {
         var isPostgres = string.Equals(dialect.Name, "postgres", StringComparison.OrdinalIgnoreCase);
         var joinOp = string.Equals(group.Op, FilterGroupOps.Or, StringComparison.OrdinalIgnoreCase)
             ? " OR "
             : " AND ";
+
+        var lookupTypeMap = lookupTypes is { Count: > 0 }
+            ? lookupTypes
+                .GroupBy(lt => lt.Id, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase)
+            : null;
 
         var fragments = new List<string>();
         if (group.Items is not null)
@@ -71,11 +102,11 @@ public static class AdvancedFilterSqlEmitter
                 string? fragment = null;
                 if (item.Clause is not null)
                 {
-                    fragment = BuildLeafClause(item.Clause, resolve, isPostgres, dialect, parameters);
+                    fragment = BuildLeafClause(item.Clause, resolve, isPostgres, dialect, parameters, lookupTypeMap);
                 }
                 else if (item.Group is not null)
                 {
-                    fragment = BuildGroupExpression(item.Group, resolve, dialect, parameters);
+                    fragment = BuildGroupExpression(item.Group, resolve, dialect, parameters, lookupTypes);
                 }
 
                 if (!string.IsNullOrWhiteSpace(fragment))
@@ -107,7 +138,8 @@ public static class AdvancedFilterSqlEmitter
         Func<string, FilterableField?> resolve,
         bool isPostgres,
         ISqlDialect dialect,
-        List<DbParameter> parameters)
+        List<DbParameter> parameters,
+        IReadOnlyDictionary<string, LookupTypeDefinition>? lookupTypeMap)
     {
         if (string.IsNullOrEmpty(filter.FieldId) || string.IsNullOrEmpty(filter.Op))
             return string.Empty;
@@ -119,7 +151,7 @@ public static class AdvancedFilterSqlEmitter
             && string.IsNullOrWhiteSpace(field.SourceColumn))
             return string.Empty;
 
-        return BuildClause(field, filter, isPostgres, dialect, parameters) ?? string.Empty;
+        return BuildClause(field, filter, isPostgres, dialect, parameters, lookupTypeMap) ?? string.Empty;
     }
 
     private static string BuildClause(
@@ -127,13 +159,39 @@ public static class AdvancedFilterSqlEmitter
         FilterClause filter,
         bool isPostgres,
         ISqlDialect dialect,
-        List<DbParameter> parameters)
+        List<DbParameter> parameters,
+        IReadOnlyDictionary<string, LookupTypeDefinition>? lookupTypeMap)
     {
         var op = filter.Op;
 
         // Null checks — type-agnostic.
         if (op == FilterOperators.IsNull)    return $"{field.GetRawExpression()} IS NULL";
         if (op == FilterOperators.IsNotNull) return $"{field.GetRawExpression()} IS NOT NULL";
+
+        // LookupType binding short-circuits. Precedence (highest first):
+        //   1. FilterColumn — explicit single-column shortcut. Admin
+        //      pointed at the column to compare against; always honor it
+        //      first. Picker is responsible for sending Codes.
+        //   2. FilterPredicateSql — joined-table escape hatch. Only fires
+        //      when FilterColumn is empty AND the predicate has a valid
+        //      substitution path ({values} OR SourceTableRef+ValueColumn).
+        //   3. Fall through to the plain "<expr> IN (descriptions)"
+        //      legacy path.
+        if ((op == FilterOperators.InList || op == FilterOperators.NotInList)
+            && filter.Values.Count > 0
+            && !string.IsNullOrWhiteSpace(field.FilterColumn))
+        {
+            return BuildFilterColumnClause(field, filter, dialect, parameters);
+        }
+        if ((op == FilterOperators.InList || op == FilterOperators.NotInList)
+            && filter.Values.Count > 0
+            && !string.IsNullOrWhiteSpace(field.LookupTypeId)
+            && !string.IsNullOrWhiteSpace(field.FilterPredicateSql)
+            && lookupTypeMap is not null
+            && lookupTypeMap.TryGetValue(field.LookupTypeId!, out var lookupType))
+        {
+            return BuildLookupTypeClause(field, lookupType, filter, dialect, parameters);
+        }
 
         // Booleans — dialect-aware storage (SQL Server uses CHAR(1) Y/N).
         if (op == FilterOperators.IsTrue)
@@ -291,6 +349,78 @@ public static class AdvancedFilterSqlEmitter
             RelativeDatePresets.LastYear    => $"{lhs} >= {firstOfLastYear} AND {lhs} < {firstOfYear}",
             _                               => $"{lhs} = {daysAgo(1)}"
         };
+    }
+
+    // Emits the admin's FilterPredicateSql with the user-picked value list
+    // bound through parameters. Two binding modes (mirror SqlEmitter.BuildFilterWhereClauses):
+    //   • Placeholder: predicate contains "{values}" → substitute "(@p0, @p1, ...)"
+    //   • Implicit: no placeholder → AND-append
+    //     "AND <LookupType.SourceTableRef>.<ValueColumn> IN (@p0, ...)"
+    // For NotInList we wrap the whole thing in NOT (...) so an admin
+    // predicate that joins to the lookup table still negates correctly —
+    // negating just the IN list would leave the join open and match nothing.
+    // Falls back to the field's own column when the lookup type didn't
+    // declare a SourceTableRef/ValueColumn (keeps the filter biting).
+    private static string BuildLookupTypeClause(
+        FilterableField field,
+        LookupTypeDefinition lookupType,
+        FilterClause filter,
+        ISqlDialect dialect,
+        List<DbParameter> parameters)
+    {
+        var inParams = new List<string>(filter.Values.Count);
+        foreach (var v in filter.Values)
+        {
+            var name = "@af_p" + parameters.Count;
+            parameters.Add(dialect.CreateParameter(name, v));
+            inParams.Add(name);
+        }
+        var inList = $"({string.Join(", ", inParams)})";
+
+        var predicate = field.FilterPredicateSql!;
+        string body;
+        if (predicate.Contains("{values}", StringComparison.Ordinal))
+        {
+            body = predicate.Replace("{values}", inList, StringComparison.Ordinal);
+        }
+        else if (!string.IsNullOrWhiteSpace(lookupType.SourceTableRef)
+                 && !string.IsNullOrWhiteSpace(lookupType.ValueColumn))
+        {
+            body = $"{predicate} AND {lookupType.SourceTableRef}.{lookupType.ValueColumn} IN {inList}";
+        }
+        else
+        {
+            // Last-resort fallback: compare the field's own column. Won't
+            // route through the lookup table but at least produces a
+            // non-empty WHERE so the filter has some effect.
+            body = $"{field.GetRawExpression()} IN {inList}";
+        }
+
+        return filter.Op == FilterOperators.NotInList
+            ? $"NOT ({body})"
+            : $"({body})";
+    }
+
+    // Emits "{FilterColumn} IN (@af_p0, ...)" — or NOT IN for NotInList.
+    // The picker is responsible for sending Codes (CODENUMs) when the
+    // field has a FilterColumn set; this just binds them and emits the
+    // comparison against the admin's chosen column on the field's row.
+    private static string BuildFilterColumnClause(
+        FilterableField field,
+        FilterClause filter,
+        ISqlDialect dialect,
+        List<DbParameter> parameters)
+    {
+        var inParams = new List<string>(filter.Values.Count);
+        foreach (var v in filter.Values)
+        {
+            var name = "@af_p" + parameters.Count;
+            parameters.Add(dialect.CreateParameter(name, v));
+            inParams.Add(name);
+        }
+        var inList = $"({string.Join(", ", inParams)})";
+        var op = filter.Op == FilterOperators.NotInList ? "NOT IN" : "IN";
+        return $"{field.FilterColumn} {op} {inList}";
     }
 
     private static string BuildTextOpClause(

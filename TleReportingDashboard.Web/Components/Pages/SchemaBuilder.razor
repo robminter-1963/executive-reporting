@@ -348,25 +348,28 @@
                                         }
                                     </CellTemplate>
                                 </TemplateColumn>
-                                @* Source columns expose the parent table this join hangs off
+                                @* Source column exposes the parent table this join hangs off
                                    so admins can scan precedence at a glance. Empty cells
                                    (legacy joins with no source set) trigger the soft-warning
-                                   tooltip in JoinResolver at query time. *@
+                                   tooltip in JoinResolver at query time.
+                                   Table + alias collapsed into one column to match the
+                                   Target column's "table\nAS alias" layout — admins read
+                                   them as a pair anyway, so the two stacked lines are
+                                   easier to scan than two separate columns. *@
                                 <TemplateColumn T="JoinEntry" title="Source Table" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
                                     <CellTemplate>
                                         @if (!string.IsNullOrWhiteSpace(context.Item.SourceTable))
                                         {
                                             <MudText Typo="Typo.body2">@context.Item.SourceTable</MudText>
+                                            @if (!string.IsNullOrWhiteSpace(context.Item.SourceAlias))
+                                            {
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">AS @context.Item.SourceAlias</MudText>
+                                            }
                                         }
                                         else
                                         {
                                             <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-style: italic;">(unset)</MudText>
                                         }
-                                    </CellTemplate>
-                                </TemplateColumn>
-                                <TemplateColumn T="JoinEntry" title="Source Alias" HeaderStyle="width: 8%;" CellStyle="width: 8%;">
-                                    <CellTemplate>
-                                        <MudText Typo="Typo.body2">@context.Item.SourceAlias</MudText>
                                     </CellTemplate>
                                 </TemplateColumn>
                                 <TemplateColumn T="JoinEntry" title="Target Table" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
@@ -596,6 +599,80 @@
                     {
                         <MudText Typo="Typo.body2" Color="Color.Secondary">
                             No lookups defined yet. Lookups are reusable CTE definitions that fields and custom filters can reference by ID.
+                        </MudText>
+                    }
+                </MudPaper>
+            </MudStack>
+        </MudTabPanel>
+
+        @* ── Tab: Lookup Types ── Drive the chip-picker on field filters.
+           Each row is an admin-authored SELECT + value/display column
+           names. Fields reference these via the "Lookup Type" dropdown in
+           the field editor, paired with a FilterPredicateSql fragment. *@
+        <MudTabPanel Text="Lookup Types" Icon="@Icons.Material.Outlined.PlaylistAddCheck">
+            <MudStack Spacing="2" Class="pa-2">
+                <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            Lookup Types (@_lookupTypes.Count)
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Add" OnClick="() => OpenLookupTypeDialog(null, true)">
+                            Add Lookup Type
+                        </MudButton>
+                    </MudStack>
+
+                    @if (_lookupTypes.Any())
+                    {
+                        <MudDataGrid T="LookupTypeEntry" Items="_lookupTypes" Dense Hover Striped Style="width: 100%;" Class="schema-fixed-grid">
+                            <Columns>
+                                <TemplateColumn T="LookupTypeEntry" title="ID" HeaderStyle="width: 15%;" CellStyle="width: 15%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Item.Id</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupTypeEntry" title="Label" HeaderStyle="width: 20%;" CellStyle="width: 20%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.body2">@context.Item.Label</MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupTypeEntry" title="Value / Display" HeaderStyle="width: 18%;" CellStyle="width: 18%;">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace;">
+                                            @context.Item.ValueColumn / @context.Item.DisplayColumn
+                                        </MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupTypeEntry" title="SELECT Preview">
+                                    <CellTemplate>
+                                        <MudText Typo="Typo.caption" Style="font-family: monospace; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 350px;"
+                                                 title="@context.Item.SelectSql">
+                                            @context.Item.SelectSql
+                                        </MudText>
+                                    </CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn T="LookupTypeEntry" title=""
+                                                HeaderStyle="width: 90px; white-space: nowrap; text-align: right;"
+                                                CellStyle="width: 90px; white-space: nowrap; text-align: right;">
+                                    <CellTemplate>
+                                        @{ var ltRow = context.Item; }
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                                       Color="Color.Primary"
+                                                       OnClick="@(() => OpenLookupTypeDialog(ltRow, false))"
+                                                       title="Edit lookup type" />
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                                       Color="Color.Error"
+                                                       OnClick="@(() => _lookupTypes.Remove(ltRow))"
+                                                       title="Delete lookup type" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            No lookup types defined yet. A Lookup Type holds an admin-authored SELECT that supplies the values shown in a field's filter chip picker.
                         </MudText>
                     }
                 </MudPaper>
@@ -1030,6 +1107,7 @@
 
     // Lookups
     private List<LookupEntry> _lookups = new();
+    private List<LookupTypeEntry> _lookupTypes = new();
 
     // Custom Filters
     private List<CustomFilterEntry> _customFilters = new();
@@ -1079,6 +1157,7 @@
                 Fields = _fields,
                 Joins = _joins,
                 Lookups = _lookups,
+                LookupTypes = _lookupTypes,
                 CustomFilters = _customFilters,
                 Domains = _domainList,
                 Settings = new
@@ -1442,24 +1521,31 @@
         }
     }
 
-    // Fired by AdminTableAliasesTab after a true alias rename (old + new
-    // both non-empty, case-different). Rewrites every in-memory field whose
-    // SourceTable matches the old alias to the new one. Operates on the
-    // editor's _fields list — the change isn't persisted until the admin
-    // hits Save, matching how every other Schema Builder edit works.
-    // Snackbar reports the count so the admin sees the side effect they
-    // just triggered.
+    // Fired by AdminTableAliasesTab after an alias change that requires
+    // upstream field rewriting. Triggers in two cases:
+    //   1. Rename — OldAlias = previous alias, NewAlias = new alias.
+    //   2. Alias added to a previously-aliasless row — OldAlias = the bare
+    //      table name, NewAlias = the new alias. Fields that referenced
+    //      the table by its name need to switch to the alias; otherwise
+    //      SQL Server rejects bare-name references once the FROM/JOIN
+    //      uses the aliased form.
+    //
+    // The rewrite itself doesn't care which case fired — it matches every
+    // field whose SourceTable equals the old reference (case-insensitive)
+    // and switches it to the new one. Operates on the editor's in-memory
+    // _fields list; the change isn't persisted until the admin hits Save.
+    // Snackbar reports the count so the admin sees what changed.
     private void HandleAliasRenamed((string OldAlias, string NewAlias) rename)
     {
-        var (oldAlias, newAlias) = rename;
-        if (string.IsNullOrWhiteSpace(oldAlias) || string.IsNullOrWhiteSpace(newAlias)) return;
+        var (oldRef, newRef) = rename;
+        if (string.IsNullOrWhiteSpace(oldRef) || string.IsNullOrWhiteSpace(newRef)) return;
 
         var count = 0;
         foreach (var f in _fields)
         {
-            if (string.Equals(f.SourceTable, oldAlias, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(f.SourceTable, oldRef, StringComparison.OrdinalIgnoreCase))
             {
-                f.SourceTable = newAlias;
+                f.SourceTable = newRef;
                 count++;
             }
         }
@@ -1467,7 +1553,7 @@
         if (count > 0)
         {
             Snackbar.Add(
-                $"Renamed alias \"{oldAlias}\" → \"{newAlias}\" on {count} field{(count == 1 ? "" : "s")}. Save the schema to persist.",
+                $"Updated SourceTable \"{oldRef}\" → \"{newRef}\" on {count} field{(count == 1 ? "" : "s")}. Save the schema to persist.",
                 Severity.Info);
         }
     }
@@ -1508,8 +1594,23 @@
                 {
                     Id = lu.Id,
                     Label = lu.Label,
-                    SqlPreamble = lu.SqlPreamble,
+                    SqlPreamble = lu.SqlPreamble ?? string.Empty,
                     SqlJoin = lu.SqlJoin ?? string.Empty
+                });
+            }
+
+            // Load lookup types (filter-picker sources)
+            _lookupTypes.Clear();
+            foreach (var lt in config.LookupTypes)
+            {
+                _lookupTypes.Add(new LookupTypeEntry
+                {
+                    Id = lt.Id,
+                    Label = lt.Label,
+                    SelectSql = lt.SelectSql,
+                    ValueColumn = lt.ValueColumn,
+                    DisplayColumn = lt.DisplayColumn,
+                    SourceTableRef = lt.SourceTableRef ?? string.Empty
                 });
             }
 
@@ -1559,6 +1660,9 @@
                     JoinIds = MergeFieldJoinIds(field.JoinId, field.JoinIds),
                     SqlJoin = field.SqlJoin,
                     LookupIds = field.LookupIds is not null ? new List<string>(field.LookupIds) : null,
+                    LookupTypeId = field.LookupTypeId,
+                    FilterPredicateSql = field.FilterPredicateSql,
+                    FilterColumn = field.FilterColumn,
                     RolesRequired = field.RolesRequired,
                     ValueSortOrder = field.ValueSortOrder is not null
                         ? new Dictionary<string, int>(field.ValueSortOrder)
@@ -1959,6 +2063,7 @@
             { "IsNew", isNew },
             { "AvailableSources", sources },
             { "AvailableLookups", _lookups.AsEnumerable() },
+            { "AvailableLookupTypes", _lookupTypes.AsEnumerable() },
             { "AvailableJoins", _joins },
             { "AvailableDomains", _domainList.AsEnumerable() },
             { "ConnectionType", CurrentConnectionType },
@@ -2038,6 +2143,9 @@
             field.JoinIds = edited.JoinIds;
             field.SqlJoin = edited.SqlJoin;
             field.LookupIds = edited.LookupIds;
+            field.LookupTypeId = edited.LookupTypeId;
+            field.FilterPredicateSql = edited.FilterPredicateSql;
+            field.FilterColumn = edited.FilterColumn;
             field.RolesRequired = edited.RolesRequired;
             field.Format = edited.Format;
             field.ApplyTimezoneConversion = edited.ApplyTimezoneConversion;
@@ -2269,6 +2377,35 @@
         }
         else if (join is not null)
         {
+            // Cascade Id renames into field references (FieldEntry.JoinIds).
+            // Without this, fields keep the old join id and the picker shows
+            // an unremovable "(missing)" marker. Same pattern as Lookup /
+            // Lookup Type rename cascades.
+            var oldId = join.Id;
+            var newId = edited.Id;
+            if (!string.IsNullOrWhiteSpace(oldId)
+                && !string.Equals(oldId, newId, StringComparison.Ordinal))
+            {
+                var touched = 0;
+                foreach (var f in _fields)
+                {
+                    if (f.JoinIds is null) continue;
+                    for (var i = 0; i < f.JoinIds.Count; i++)
+                    {
+                        if (string.Equals(f.JoinIds[i], oldId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            f.JoinIds[i] = newId;
+                            touched++;
+                        }
+                    }
+                }
+                if (touched > 0)
+                {
+                    Snackbar.Add(
+                        $"Updated {touched} field reference{(touched == 1 ? "" : "s")} from join \"{oldId}\" to \"{newId}\". Save the schema to persist.",
+                        Severity.Info);
+                }
+            }
             // Copy edited values back to the original instance
             join.Id = edited.Id;
             join.JoinType = edited.JoinType;
@@ -2304,13 +2441,11 @@
         StateHasChanged();
     }
 
-    // Index 6 = the Export tab (Fields, Joins, Lookups, Custom Filters,
-    // Domains, Settings, Export). Kept as a named constant so reordering the
-    // panels only requires updating one place.
-    // Index order after adding Table Aliases as tab 0:
-    //   0 Table Aliases, 1 Fields, 2 Joins, 3 Lookups, 4 Custom Filters,
-    //   5 Domains, 6 Settings, 7 Export.
-    private const int ExportTabIndex = 7;
+    // Named constant for the Export tab so reordering the panels only
+    // requires updating one place. Current layout:
+    //   0 Table Aliases, 1 Joins, 2 Custom Filters, 3 Lookups,
+    //   4 Lookup Types, 5 Field Sections, 6 Fields, 7 Settings, 8 Export.
+    private const int ExportTabIndex = 8;
 
     private void OnActiveTabChanged(int newIndex)
     {
@@ -2363,8 +2498,29 @@
             Fields = _fields.Select(f => BuildFieldOutput(f)),
             Lookups = _lookups.Select(lu =>
             {
-                var obj = new Dictionary<string, object?> { ["Id"] = lu.Id, ["Label"] = lu.Label, ["SqlPreamble"] = lu.SqlPreamble };
-                if (!string.IsNullOrWhiteSpace(lu.SqlJoin)) obj["SqlJoin"] = lu.SqlJoin;
+                var obj = new Dictionary<string, object?> { ["Id"] = lu.Id, ["Label"] = lu.Label };
+                if (!string.IsNullOrWhiteSpace(lu.SqlPreamble)) obj["SqlPreamble"] = lu.SqlPreamble;
+                if (!string.IsNullOrWhiteSpace(lu.SqlJoin))     obj["SqlJoin"]     = lu.SqlJoin;
+                return obj;
+            }),
+            // Lookup Types — admin-authored filter-picker sources.
+            // Distinct from Lookups above; runtime reads them via
+            // ILookupValueService when a field's chip filter opens.
+            // SourceTableRef serializes only when set (it's optional —
+            // used only by the implicit IN-append path in field
+            // FilterPredicateSql).
+            LookupTypes = _lookupTypes.Select(lt =>
+            {
+                var obj = new Dictionary<string, object?>
+                {
+                    ["Id"] = lt.Id,
+                    ["Label"] = lt.Label,
+                    ["SelectSql"] = lt.SelectSql,
+                    ["ValueColumn"] = lt.ValueColumn,
+                    ["DisplayColumn"] = lt.DisplayColumn
+                };
+                if (!string.IsNullOrWhiteSpace(lt.SourceTableRef))
+                    obj["SourceTableRef"] = lt.SourceTableRef;
                 return obj;
             }),
             CustomFilters = _customFilters.Select(cf =>
@@ -2526,6 +2682,19 @@
         // that uses a lookup CTE for custom sort order) — not just SqlExpression fields.
         if (f.LookupIds is not null && f.LookupIds.Count > 0)
             result["LookupIds"] = f.LookupIds;
+
+        // Lookup-type binding for the chip picker. LookupTypeId points at
+        // a row in the Lookup Types tab (admin-authored SELECT + value /
+        // display columns). FilterPredicateSql is the WHERE fragment that
+        // gets emitted when the user filters via that picker (with
+        // {values} placeholder substitution or implicit IN append). Both
+        // serialize only when non-empty so legacy field rows stay clean.
+        if (!string.IsNullOrWhiteSpace(f.LookupTypeId))
+            result["LookupTypeId"] = f.LookupTypeId;
+        if (!string.IsNullOrWhiteSpace(f.FilterPredicateSql))
+            result["FilterPredicateSql"] = f.FilterPredicateSql;
+        if (!string.IsNullOrWhiteSpace(f.FilterColumn))
+            result["FilterColumn"] = f.FilterColumn;
 
         if (!string.IsNullOrWhiteSpace(f.RolesRequired))
         {
@@ -2689,6 +2858,35 @@
         public List<string>? JoinIds { get; set; }  // References to existing joins from the Joins tab
         public string? SqlJoin { get; set; }
         public List<string>? LookupIds { get; set; }
+
+        // FK to a LookupTypeDefinition (the new "Lookup Types" tab in
+        // Schema Builder). Drives the header-filter chip picker for this
+        // field — the lookup type's SELECT populates the chips. Distinct
+        // from CodeSetId (Empower SET_CODESETS) and from LookupIds (CTE
+        // lookups for sort/join). Always paired with FilterPredicateSql
+        // below — without one of the two set, the picker can't emit a
+        // useful filter.
+        public string? LookupTypeId { get; set; }
+
+        // Admin-authored WHERE fragment emitted when the user filters on
+        // this field via the LookupType picker. Two substitution modes:
+        //   • Placeholder: predicate contains "{values}" — system
+        //     substitutes "(@p0, @p1, ...)" bound to the user's picks.
+        //   • Implicit: no placeholder — system AND-appends
+        //     "AND <LookupType.SourceTableRef>.<ValueColumn> IN (@p0, ...)"
+        //     after the admin's predicate.
+        // Nothing about the predicate is hardcoded; admins author it
+        // freely (joining the lookup table to the data, etc.).
+        public string? FilterPredicateSql { get; set; }
+
+        // Alternate column expression for filter comparison when bound to
+        // a LookupType. Set to e.g. "c_30.CODEINT" on a field whose
+        // SourceColumn is c_30.CODEDESC, so the picker can send CODENUMs
+        // and the WHERE becomes "c_30.CODEINT IN (@p0, ...)" — same row,
+        // just a different column on it. Distinct from FilterPredicateSql
+        // (which handles cases needing a separate joined lookup table).
+        public string? FilterColumn { get; set; }
+
         public string? RolesRequired { get; set; }
         public Dictionary<string, int>? ValueSortOrder { get; set; }
         // Display format — applied at render/export time, not in SQL.
@@ -2802,10 +3000,97 @@
         }
         else if (lookup is not null)
         {
+            // Cascade Id renames into field references so the lookup picker
+            // doesn't end up with an unremovable orphan. The "(missing)"
+            // marker in FieldEditDialog catches anything we can't update
+            // here (e.g. legacy schemas loaded with already-stale ids), but
+            // for in-session renames this keeps the references clean.
+            var oldId = lookup.Id;
+            var newId = edited.Id;
+            if (!string.IsNullOrWhiteSpace(oldId)
+                && !string.Equals(oldId, newId, StringComparison.Ordinal))
+            {
+                var touched = 0;
+                foreach (var f in _fields)
+                {
+                    if (f.LookupIds is null) continue;
+                    for (var i = 0; i < f.LookupIds.Count; i++)
+                    {
+                        if (string.Equals(f.LookupIds[i], oldId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            f.LookupIds[i] = newId;
+                            touched++;
+                        }
+                    }
+                }
+                if (touched > 0)
+                {
+                    Snackbar.Add(
+                        $"Updated {touched} field reference{(touched == 1 ? "" : "s")} from \"{oldId}\" to \"{newId}\". Save the schema to persist.",
+                        Severity.Info);
+                }
+            }
             lookup.Id = edited.Id;
             lookup.Label = edited.Label;
             lookup.SqlPreamble = edited.SqlPreamble;
             lookup.SqlJoin = edited.SqlJoin;
+        }
+        StateHasChanged();
+    }
+
+    // Lookup Types are the value source for filter chip pickers — the
+    // admin authors a SELECT + value/display columns here, then references
+    // this lookup type from a Field via "Lookup Type" in the field editor.
+    private async Task OpenLookupTypeDialog(LookupTypeEntry? lookupType, bool isNew)
+    {
+        var parameters = new DialogParameters
+        {
+            { "LookupType", lookupType ?? new LookupTypeEntry() },
+            { "IsNew", isNew }
+        };
+        var dialog = await DialogService.ShowAsync<LookupTypeEditDialog>(
+            isNew ? "Add Lookup Type" : "Edit Lookup Type", parameters,
+            DialogPresets.Locked(MaxWidth.Medium));
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not LookupTypeEntry edited) return;
+
+        if (isNew)
+        {
+            _lookupTypes.Add(edited);
+        }
+        else if (lookupType is not null)
+        {
+            // Cascade Id renames into field references. Same rationale as
+            // OpenLookupDialog above — keeps FieldDefinition.LookupTypeId
+            // in sync so the filter chip picker keeps resolving.
+            var oldId = lookupType.Id;
+            var newId = edited.Id;
+            if (!string.IsNullOrWhiteSpace(oldId)
+                && !string.Equals(oldId, newId, StringComparison.Ordinal))
+            {
+                var touched = 0;
+                foreach (var f in _fields)
+                {
+                    if (string.Equals(f.LookupTypeId, oldId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        f.LookupTypeId = newId;
+                        touched++;
+                    }
+                }
+                if (touched > 0)
+                {
+                    Snackbar.Add(
+                        $"Updated {touched} field reference{(touched == 1 ? "" : "s")} from \"{oldId}\" to \"{newId}\". Save the schema to persist.",
+                        Severity.Info);
+                }
+            }
+            lookupType.Id = edited.Id;
+            lookupType.Label = edited.Label;
+            lookupType.SelectSql = edited.SelectSql;
+            lookupType.ValueColumn = edited.ValueColumn;
+            lookupType.DisplayColumn = edited.DisplayColumn;
+            lookupType.SourceTableRef = edited.SourceTableRef;
         }
         StateHasChanged();
     }
@@ -2852,6 +3137,27 @@
         public string Label { get; set; } = string.Empty;
         public string SqlPreamble { get; set; } = string.Empty;
         public string SqlJoin { get; set; } = string.Empty;
+    }
+
+    // Editor-side mirror of LookupTypeDefinition. Owns one row per
+    // entry in the Lookup Types tab. Drives the FieldEditDialog's
+    // "Lookup Type" dropdown and ILookupValueService at runtime.
+    public class LookupTypeEntry
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        // Admin-authored SELECT (e.g. "SELECT CODENUM, CODEDESC FROM
+        // EMPOWER.SET_CODESETS WHERE CODEINT=1"). Returns the picker
+        // values when ILookupValueService runs it.
+        public string SelectSql { get; set; } = string.Empty;
+        // Column name in the SELECT result that becomes the filter value.
+        public string ValueColumn { get; set; } = string.Empty;
+        // Column name shown in the picker.
+        public string DisplayColumn { get; set; } = string.Empty;
+        // Optional: how the admin references the lookup table in field
+        // FilterPredicateSqls. Used by the implicit IN-append path
+        // (when the predicate has no {values} placeholder).
+        public string SourceTableRef { get; set; } = string.Empty;
     }
 
     // One row in the Source Table / Alias picker. Value is what gets stored

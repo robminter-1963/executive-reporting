@@ -40,6 +40,8 @@ public sealed class AdminAccessService : IAdminAccessService
         if (string.IsNullOrWhiteSpace(email)) return false;
         if (_admins.IsAdmin(email)) return true;
         var user = await _users.GetByEmailAsync(email, ct);
+        // Administrator role bypasses the section list — full access.
+        if (user?.IsAdmin == true) return true;
         return user?.RoleAdminSections is { Count: > 0 } sections
             && sections.Contains(sectionKey, StringComparer.OrdinalIgnoreCase);
     }
@@ -49,6 +51,13 @@ public sealed class AdminAccessService : IAdminAccessService
         if (string.IsNullOrWhiteSpace(email)) return false;
         if (_admins.IsAdmin(email)) return true;
         var user = await _users.GetByEmailAsync(email, ct);
+        // UserRecord.IsAdmin is the authoritative role-name=='Administrator'
+        // flag — it bypasses admin-section gates elsewhere, so it has to
+        // satisfy "any admin access" too. Without this, a user assigned the
+        // Administrator role but not also listed in RPT_admins reports as
+        // having no admin access at all, even though every other path
+        // treats them as a full admin.
+        if (user?.IsAdmin == true) return true;
         return user?.RoleAdminSections is { Count: > 0 };
     }
 
@@ -57,11 +66,14 @@ public sealed class AdminAccessService : IAdminAccessService
         if (string.IsNullOrWhiteSpace(email))
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Administrator → every section.
+        // Administrator → every section. Two paths to this: listed in
+        // RPT_admins, or assigned the Administrator role (UserRecord.IsAdmin).
         if (_admins.IsAdmin(email))
             return new HashSet<string>(AdminSections.All.Select(s => s.Key), StringComparer.OrdinalIgnoreCase);
 
         var user = await _users.GetByEmailAsync(email, ct);
+        if (user?.IsAdmin == true)
+            return new HashSet<string>(AdminSections.All.Select(s => s.Key), StringComparer.OrdinalIgnoreCase);
         if (user?.RoleAdminSections is null) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         return new HashSet<string>(user.RoleAdminSections, StringComparer.OrdinalIgnoreCase);
     }

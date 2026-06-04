@@ -327,21 +327,45 @@
                     additionalKeyColumns: edited.AdditionalKeyColumns,
                     description: edited.Description);
 
-                // Detect a true alias rename — both ends non-empty and different
-                // (case-insensitive). Notify the parent BEFORE LoadEntriesAsync
-                // so it can rewrite in-memory field references while the old
-                // alias is still meaningful. Adds (old blank) and clears (new
-                // blank) are intentionally excluded: there's nothing to rewrite
-                // when the old alias was empty, and clearing is treated as a
-                // destructive authoring change the admin handles manually.
+                // Notify the parent about an alias change so it can rewrite
+                // in-memory field references whose SourceTable matches the
+                // OLD identifier. Two trigger cases:
+                //
+                //   1. Alias rename: both old and new aliases are non-empty
+                //      and differ. OldRef = old alias.
+                //   2. Alias added:  old alias was empty, new is non-empty.
+                //      OldRef = the table name. Fields that referenced the
+                //      bare table name need to switch to the new alias —
+                //      once a table is aliased in FROM, SQL Server forbids
+                //      the bare-name qualifier (the classic "multi-part
+                //      identifier could not be bound" failure).
+                //
+                // Alias cleared (old non-empty, new empty) stays as a
+                // destructive authoring action the admin handles manually —
+                // we don't auto-revert fields back to bare-table refs.
                 var oldAlias = entry.Alias ?? string.Empty;
                 var newAlias = edited.Alias ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(oldAlias)
-                    && !string.IsNullOrWhiteSpace(newAlias)
-                    && !string.Equals(oldAlias, newAlias, StringComparison.OrdinalIgnoreCase)
-                    && OnAliasRenamed.HasDelegate)
+                if (OnAliasRenamed.HasDelegate)
                 {
-                    await OnAliasRenamed.InvokeAsync((oldAlias, newAlias));
+                    string? oldRef = null;
+                    if (!string.IsNullOrWhiteSpace(oldAlias)
+                        && !string.IsNullOrWhiteSpace(newAlias)
+                        && !string.Equals(oldAlias, newAlias, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Case 1: rename.
+                        oldRef = oldAlias;
+                    }
+                    else if (string.IsNullOrWhiteSpace(oldAlias)
+                          && !string.IsNullOrWhiteSpace(newAlias))
+                    {
+                        // Case 2: alias added. OldRef is the table name so
+                        // the parent rewrites fields keyed to it.
+                        oldRef = entry.TableName;
+                    }
+                    if (!string.IsNullOrWhiteSpace(oldRef))
+                    {
+                        await OnAliasRenamed.InvokeAsync((oldRef!, newAlias));
+                    }
                 }
             },
             successMessage: $"Updated to \"{PrimaryTableRef.Format(edited.TableName, edited.Alias)}\"."))

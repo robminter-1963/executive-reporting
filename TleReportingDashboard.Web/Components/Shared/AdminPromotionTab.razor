@@ -5,6 +5,7 @@
 @inject IPromotionPackageService Promotion
 @inject ICompanyRegistry Companies
 @inject ICompanyConnectionAdminService Connections
+@inject IReportService Reports
 @inject ISchemaConfigStore SchemaStore
 @inject IConfiguration Configuration
 @inject IWebHostEnvironment HostEnv
@@ -14,9 +15,12 @@
 
 <MudStack Spacing="3" Class="pa-2">
     <MudText Typo="Typo.body2" Color="Color.Secondary">
-        Promote configuration from <strong>@_envLabel</strong> to a target environment
-        by exporting a package, then importing it on the destination instance.
-        Schema configs are supported today; reports / dashboards will follow.
+        Promote configuration from <strong>@_envLabel</strong> to a target environment by
+        exporting a package, then importing it on the destination instance. Schema configs,
+        companies, reports, dashboards, and library/grid taxonomy are supported.
+        <strong>Database connections never travel</strong> — they hold credentials and stay
+        environment-specific; reports and dashboards re-link to connections that already
+        exist in the target, matched by name.
     </MudText>
 
     <MudPaper Elevation="0" Style="border: 1px solid #E8EAED; border-radius: 4px; padding: 16px;">
@@ -24,43 +28,95 @@
             @* ── Export tab ────────────────────────────────────── *@
             <MudTabPanel Text="Export package" Icon="@Icons.Material.Outlined.FileDownload">
                 <MudStack Spacing="3" Class="pt-3">
-                    <MudText Typo="Typo.body2" Color="Color.Secondary">
-                        Pick which connection schemas to bundle. The package is a
-                        single JSON file you'll upload on the destination instance.
-                    </MudText>
-
                     @if (_exportLoading)
                     {
                         <MudProgressLinear Indeterminate Color="Color.Primary" />
                     }
-                    else if (_exportRows.Count == 0)
-                    {
-                        <MudAlert Severity="Severity.Info" Dense>
-                            No connections with a saved schema config were found.
-                        </MudAlert>
-                    }
                     else
                     {
-                        <MudTable Items="_exportRows" Dense Hover T="ExportRow">
-                            <HeaderContent>
-                                <MudTh Style="width: 40px;"></MudTh>
-                                <MudTh>Connection</MudTh>
-                                <MudTh>Company</MudTh>
-                                <MudTh Style="width: 120px; text-align: right;">Fields</MudTh>
-                                <MudTh Style="width: 120px; text-align: right;">Joins</MudTh>
-                            </HeaderContent>
-                            <RowTemplate>
-                                <MudTd>
-                                    <MudCheckBox T="bool" Value="@context.Selected"
-                                                 ValueChanged="@((bool v) => context.Selected = v)"
-                                                 Dense Color="Color.Primary" />
-                                </MudTd>
-                                <MudTd>@context.ConnectionName</MudTd>
-                                <MudTd>@context.CompanyName</MudTd>
-                                <MudTd Style="text-align: right;">@context.FieldCount</MudTd>
-                                <MudTd Style="text-align: right;">@context.JoinCount</MudTd>
-                            </RowTemplate>
-                        </MudTable>
+                        <MudText Typo="Typo.subtitle2">1. Pick what to include</MudText>
+                        <MudPaper Elevation="0" Style="border: 1px solid #DADCE0; border-radius: 4px; padding: 12px;">
+                            <MudStack Spacing="0">
+                                <MudCheckBox T="bool" @bind-Value="_inclCompanies" Dense Color="Color.Primary"
+                                             Label="Companies" />
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-8 mb-2">
+                                    Tenant definitions (code, name, website). Matched or created by code on import.
+                                </MudText>
+                                <MudCheckBox T="bool" @bind-Value="_inclTaxonomy" Dense Color="Color.Primary"
+                                             Label="Library sections &amp; grid templates" />
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-8 mb-2">
+                                    Report Library sections plus the grid templates your reports reference, so imported reports don't land orphaned.
+                                </MudText>
+                                <MudCheckBox T="bool" @bind-Value="_inclReports" Dense Color="Color.Primary"
+                                             Label="Reports" />
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-8 mb-2">
+                                    Saved report definitions. Re-linked to the target's connection by name; owner set to the importing admin.
+                                </MudText>
+                                <MudCheckBox T="bool" @bind-Value="_inclDashboards" Dense Color="Color.Primary"
+                                             Label="Dashboards" />
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-8">
+                                    Master Dashboard tabs, sections, and tiles. Tiles re-link to reports by name.
+                                </MudText>
+                            </MudStack>
+                        </MudPaper>
+
+                        <MudText Typo="Typo.subtitle2">2. Pick which companies to bundle</MudText>
+                        @if (_companyRows.Count == 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Dense>No active companies found.</MudAlert>
+                        }
+                        else
+                        {
+                            <MudTable Items="_companyRows" Dense Hover T="CompanyRow">
+                                <HeaderContent>
+                                    <MudTh Style="width: 40px;"></MudTh>
+                                    <MudTh>Company</MudTh>
+                                    <MudTh>Code</MudTh>
+                                    <MudTh Style="width: 100px; text-align: right;">Reports</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>
+                                        <MudCheckBox T="bool" Value="@context.Selected"
+                                                     ValueChanged="@((bool v) => context.Selected = v)"
+                                                     Dense Color="Color.Primary" />
+                                    </MudTd>
+                                    <MudTd>@context.Name</MudTd>
+                                    <MudTd>@context.Code</MudTd>
+                                    <MudTd Style="text-align: right;">@context.ReportCount</MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+
+                        <MudText Typo="Typo.subtitle2">3. Schema configs (optional)</MudText>
+                        @if (_schemaRows.Count == 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Dense>
+                                No connections with a saved schema config were found.
+                            </MudAlert>
+                        }
+                        else
+                        {
+                            <MudTable Items="_schemaRows" Dense Hover T="SchemaRow">
+                                <HeaderContent>
+                                    <MudTh Style="width: 40px;"></MudTh>
+                                    <MudTh>Connection</MudTh>
+                                    <MudTh>Company</MudTh>
+                                    <MudTh Style="width: 90px; text-align: right;">Fields</MudTh>
+                                    <MudTh Style="width: 90px; text-align: right;">Joins</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>
+                                        <MudCheckBox T="bool" Value="@context.Selected"
+                                                     ValueChanged="@((bool v) => context.Selected = v)"
+                                                     Dense Color="Color.Primary" />
+                                    </MudTd>
+                                    <MudTd>@context.ConnectionName</MudTd>
+                                    <MudTd>@context.CompanyName</MudTd>
+                                    <MudTd Style="text-align: right;">@context.FieldCount</MudTd>
+                                    <MudTd Style="text-align: right;">@context.JoinCount</MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
 
                         <MudTextField @bind-Value="_exportNotes" Label="Notes (optional)"
                                       Lines="2" Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -69,13 +125,11 @@
                         <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
                             <MudButton Variant="Variant.Filled" Color="Color.Primary"
                                        StartIcon="@Icons.Material.Outlined.FileDownload"
-                                       Disabled="@(!_exportRows.Any(r => r.Selected) || _exporting)"
+                                       Disabled="@(!CanExport || _exporting)"
                                        OnClick="OnExport">
-                                @(_exporting ? "Exporting..." : "Export selected")
+                                @(_exporting ? "Exporting..." : "Export package")
                             </MudButton>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                @_exportRows.Count(r => r.Selected) of @_exportRows.Count selected
-                            </MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@ExportSummary</MudText>
                         </MudStack>
                     }
                 </MudStack>
@@ -85,9 +139,9 @@
             <MudTabPanel Text="Import package" Icon="@Icons.Material.Outlined.FileUpload">
                 <MudStack Spacing="3" Class="pt-3">
                     <MudText Typo="Typo.body2" Color="Color.Secondary">
-                        Upload a package exported from an upstream environment.
-                        You'll see a preview of every entry; mapping each to a
-                        target connection here is required before anything writes.
+                        Upload a package exported from an upstream environment. Map each source
+                        company to a target here (or create it) and map any schema configs to a
+                        connection — everything else resolves automatically by name.
                     </MudText>
 
                     <InputFile id="promotion-upload" OnChange="OnPackageUploaded" accept=".json" style="display:none" />
@@ -111,6 +165,15 @@
                                     Exported: @_parsedPackage.ExportedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
                                     @(string.IsNullOrEmpty(_parsedPackage.ExportedBy) ? "" : $" by {_parsedPackage.ExportedBy}")
                                 </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Contains:
+                                    @_parsedPackage.Companies.Count companies,
+                                    @_parsedPackage.LibrarySections.Count sections,
+                                    @_parsedPackage.GridTemplates.Count templates,
+                                    @_parsedPackage.Reports.Count reports,
+                                    @_parsedPackage.Dashboards.Count dashboards,
+                                    @_parsedPackage.SchemaConfigs.Count schema configs.
+                                </MudText>
                                 @if (!string.IsNullOrWhiteSpace(_parsedPackage.Notes))
                                 {
                                     <MudText Typo="Typo.caption">Notes: @_parsedPackage.Notes</MudText>
@@ -118,32 +181,55 @@
                             </MudStack>
                         </MudPaper>
 
-                        @if (_parsedPackage.SchemaConfigs.Count == 0)
+                        @* Company-scoped mapping (reports / dashboards / sections / templates) *@
+                        @if (_companyMapRows.Count > 0)
                         {
-                            <MudAlert Severity="Severity.Info" Dense>
-                                Package contains no schema config entries.
-                            </MudAlert>
+                            <MudText Typo="Typo.subtitle2">Map companies</MudText>
+                            <MudTable Items="_companyMapRows" Dense T="CompanyMapRow">
+                                <HeaderContent>
+                                    <MudTh>Source company</MudTh>
+                                    <MudTh Style="width: 360px;">Target (this env)</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>@context.SourceName <MudText Typo="Typo.caption" Color="Color.Secondary">(@context.SourceCode)</MudText></MudTd>
+                                    <MudTd>
+                                        <MudSelect T="string" Value="context.TargetKey"
+                                                   ValueChanged="@((string v) => context.TargetKey = v)"
+                                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense>
+                                            <MudSelectItem T="string" Value="@SkipKey">— skip —</MudSelectItem>
+                                            @if (_parsedPackage.Companies.Any(c => c.SourceId == context.SourceId))
+                                            {
+                                                <MudSelectItem T="string" Value="@CreateKey">＋ Create '@context.SourceName'</MudSelectItem>
+                                            }
+                                            @foreach (var t in _targetCompanies)
+                                            {
+                                                <MudSelectItem T="string" Value="@t.Id.ToString()">@t.Name (@t.Code)</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                    </MudTd>
+                                </RowTemplate>
+                            </MudTable>
                         }
-                        else
+
+                        @* Schema-config mapping (per connection) *@
+                        @if (_importSchemaRows.Count > 0)
                         {
-                            <MudTable Items="_importRows" Dense T="ImportRow">
+                            <MudText Typo="Typo.subtitle2">Map schema configs to connections</MudText>
+                            <MudTable Items="_importSchemaRows" Dense T="ImportSchemaRow">
                                 <HeaderContent>
                                     <MudTh>Source connection</MudTh>
-                                    <MudTh>Source company</MudTh>
-                                    <MudTh Style="width: 120px; text-align: right;">Fields</MudTh>
+                                    <MudTh Style="width: 90px; text-align: right;">Fields</MudTh>
                                     <MudTh Style="width: 360px;">Target connection (this env)</MudTh>
                                     <MudTh Style="width: 200px;">Status</MudTh>
                                 </HeaderContent>
                                 <RowTemplate>
-                                    <MudTd>@context.Entry.SourceConnectionName</MudTd>
-                                    <MudTd>@context.Entry.SourceCompanyName</MudTd>
+                                    <MudTd>@context.Entry.SourceConnectionName <MudText Typo="Typo.caption" Color="Color.Secondary">(@context.Entry.SourceCompanyName)</MudText></MudTd>
                                     <MudTd Style="text-align: right;">@context.Entry.Schema.Fields.Count</MudTd>
                                     <MudTd>
                                         <MudSelect T="Guid?" Value="context.TargetConnectionId"
                                                    ValueChanged="@((Guid? v) => context.TargetConnectionId = v)"
                                                    ToStringFunc="@_targetLabel"
-                                                   Variant="Variant.Outlined" Margin="Margin.Dense"
-                                                   Dense Clearable>
+                                                   Variant="Variant.Outlined" Margin="Margin.Dense" Dense Clearable>
                                             <MudSelectItem T="Guid?" Value="@((Guid?)null)">— pick target —</MudSelectItem>
                                             @foreach (var t in _targetConnections)
                                             {
@@ -156,25 +242,36 @@
                                         {
                                             <MudChip T="string" Size="Size.Small"
                                                      Color="@(r.Success ? Color.Success : Color.Error)"
-                                                     Variant="Variant.Outlined">
-                                                @r.Message
-                                            </MudChip>
+                                                     Variant="Variant.Outlined">@r.Message</MudChip>
                                         }
                                     </MudTd>
                                 </RowTemplate>
                             </MudTable>
+                        }
 
-                            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
-                                <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                                           StartIcon="@Icons.Material.Outlined.PlayArrow"
-                                           Disabled="@(!_importRows.Any(r => r.TargetConnectionId.HasValue) || _importing)"
-                                           OnClick="OnImport">
-                                    @(_importing ? "Importing..." : "Apply mapped entries")
-                                </MudButton>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                    Each mapped entry overwrites the target's current schema and writes a history row.
-                                </MudText>
-                            </MudStack>
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Outlined.PlayArrow"
+                                       Disabled="@(!CanImport || _importing)"
+                                       OnClick="OnImport">
+                                @(_importing ? "Importing..." : "Apply import")
+                            </MudButton>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Existing reports are left unchanged; companies, sections, templates, and dashboard tabs are matched or created.
+                            </MudText>
+                        </MudStack>
+
+                        @if (_importMessages.Count > 0)
+                        {
+                            <MudPaper Elevation="0" Style="border: 1px solid #DADCE0; border-radius: 4px; padding: 12px; max-height: 320px; overflow-y: auto;">
+                                <MudText Typo="Typo.subtitle2" Class="mb-2">Import results</MudText>
+                                @foreach (var m in _importMessages)
+                                {
+                                    <MudText Typo="Typo.caption"
+                                             Color="@(m.StartsWith("✗") ? Color.Error : m.StartsWith("✓") ? Color.Success : Color.Secondary)"
+                                             Style="display:block;">@m</MudText>
+                                }
+                            </MudPaper>
                         }
                     }
                 </MudStack>
@@ -186,21 +283,43 @@
 @code {
     [Parameter] public string CurrentUserEmail { get; set; } = string.Empty;
 
+    private const string SkipKey = "__skip__";
+    private const string CreateKey = "__create__";
+
     private string _envLabel = "this environment";
 
     // Export-side state
     private bool _exportLoading = true;
     private bool _exporting;
-    private List<ExportRow> _exportRows = new();
+    private bool _inclCompanies = true;
+    private bool _inclTaxonomy = true;
+    private bool _inclReports = true;
+    private bool _inclDashboards = true;
+    private List<CompanyRow> _companyRows = new();
+    private List<SchemaRow> _schemaRows = new();
     private string _exportNotes = string.Empty;
 
     // Import-side state
     private PromotionPackage? _parsedPackage;
     private byte[]? _uploadedBytes;
-    private List<ImportRow> _importRows = new();
+    private List<CompanyMapRow> _companyMapRows = new();
+    private List<ImportSchemaRow> _importSchemaRows = new();
+    private List<CompanyRecordLite> _targetCompanies = new();
     private List<CompanyConnectionRecord> _targetConnections = new();
     private Dictionary<Guid, string> _connectionLabelCache = new();
+    private List<string> _importMessages = new();
     private bool _importing;
+
+    private bool AnyItemSelected => _inclCompanies || _inclTaxonomy || _inclReports || _inclDashboards;
+    private bool CanExport =>
+        (AnyItemSelected && _companyRows.Any(r => r.Selected)) ||
+        _schemaRows.Any(r => r.Selected);
+    private string ExportSummary =>
+        $"{_companyRows.Count(r => r.Selected)} companies, {_schemaRows.Count(r => r.Selected)} schema configs selected";
+
+    private bool CanImport =>
+        _companyMapRows.Any(r => r.TargetKey != SkipKey) ||
+        _importSchemaRows.Any(r => r.TargetConnectionId.HasValue);
 
     protected override async Task OnInitializedAsync()
     {
@@ -208,28 +327,36 @@
             ?? HostEnv.EnvironmentName
             ?? "this environment";
 
-        // Pre-load both sides — connection lists are small, doing it
-        // upfront keeps the tab snappy when switching between Export
-        // and Import tabs.
-        await ReloadConnectionsAsync();
+        await ReloadAsync();
         _exportLoading = false;
     }
 
-    private async Task ReloadConnectionsAsync()
+    private async Task ReloadAsync()
     {
-        var rows = new List<ExportRow>();
+        var companyRows = new List<CompanyRow>();
+        var schemaRows = new List<SchemaRow>();
         var allTargets = new List<CompanyConnectionRecord>();
         var labels = new Dictionary<Guid, string>();
+        var targetCompanies = new List<CompanyRecordLite>();
+
         var companies = (await Companies.GetActiveAsync()).ToList();
-        // Per-company connection fetches are independent — parallelize.
-        // The Select's index is preserved into the resulting array, so
-        // companies[i] still pairs with connsByCompany[i] after the
-        // WhenAll resolves.
+        // Per-company connection fetches are independent — parallelize. The
+        // Select index is preserved into the result array, so companies[i]
+        // pairs with connsByCompany[i] after WhenAll.
         var connsByCompany = await Task.WhenAll(
             companies.Select(co => Connections.GetByCompanyAsync(co.Id)));
+
+        // One admin-scoped fetch, grouped by company for the (cosmetic) count.
+        var reportCounts = (await Reports.GetAllReportsAsync())
+            .GroupBy(r => r.CompanyId)
+            .ToDictionary(g => g.Key, g => g.Count());
+
         for (var i = 0; i < companies.Count; i++)
         {
             var co = companies[i];
+            targetCompanies.Add(new CompanyRecordLite(co.Id, co.Code, co.Name));
+            companyRows.Add(new CompanyRow(co.Id, co.Name, co.Code, reportCounts.GetValueOrDefault(co.Id)));
+
             foreach (var c in connsByCompany[i].Where(x => x.IsActive))
             {
                 allTargets.Add(c);
@@ -237,18 +364,14 @@
 
                 var schema = SchemaStore.GetForConnection(c.Id);
                 if (schema.Fields.Count > 0 || schema.Joins.Count > 0)
-                {
-                    rows.Add(new ExportRow(
-                        c.Id,
-                        c.Name,
-                        co.Name,
-                        schema.Fields.Count,
-                        schema.Joins.Count));
-                }
+                    schemaRows.Add(new SchemaRow(c.Id, c.Name, co.Name, schema.Fields.Count, schema.Joins.Count));
             }
         }
-        _exportRows = rows.OrderBy(r => r.CompanyName).ThenBy(r => r.ConnectionName).ToList();
+
+        _companyRows = companyRows.OrderBy(r => r.Name).ToList();
+        _schemaRows = schemaRows.OrderBy(r => r.CompanyName).ThenBy(r => r.ConnectionName).ToList();
         _targetConnections = allTargets.OrderBy(c => labels[c.Id]).ToList();
+        _targetCompanies = targetCompanies.OrderBy(c => c.Name).ToList();
         _connectionLabelCache = labels;
     }
 
@@ -263,20 +386,23 @@
         _exporting = true;
         try
         {
-            var ids = _exportRows.Where(r => r.Selected).Select(r => r.ConnectionId).ToList();
+            var request = new PromotionExportRequest
+            {
+                SchemaConfigConnectionIds = _schemaRows.Where(r => r.Selected).Select(r => r.ConnectionId).ToList(),
+                CompanyIds = _companyRows.Where(r => r.Selected).Select(r => r.Id).ToList(),
+                IncludeCompanies = _inclCompanies,
+                IncludeLibraryAndGridTaxonomy = _inclTaxonomy,
+                IncludeReports = _inclReports,
+                IncludeDashboards = _inclDashboards
+            };
             await Snackbar.RunAsync(Logger, "exporting promotion package", async () =>
             {
-                var bytes = await Promotion.ExportAsync(ids, CurrentUserEmail,
+                var bytes = await Promotion.ExportAsync(request, CurrentUserEmail,
                     string.IsNullOrWhiteSpace(_exportNotes) ? null : _exportNotes.Trim());
                 var fileName = $"promotion-{_envLabel.ToLowerInvariant()}-{DateTime.Now:yyyy-MM-dd_HHmm}.json";
-
-                // Hand the bytes to the browser as a download. JS interop
-                // builds a Blob URL and triggers a synthetic click — the
-                // standard pattern for streaming server-built files in a
-                // Blazor Server app without a controller endpoint.
                 await JS.DownloadAsync(fileName, bytes);
             },
-            successMessage: $"Exported {_exportRows.Count(r => r.Selected)} entries.");
+            successMessage: "Package exported.");
         }
         finally
         {
@@ -289,21 +415,49 @@
         if (e.File is null) return;
         try
         {
-            // 4 MB cap. Schema configs run a few hundred KB at most;
-            // anything larger is almost certainly the wrong file. Browser-
-            // side validation isn't reliable, so guard server-side.
+            // 4 MB cap. Even a full company bundle runs a few hundred KB;
+            // anything larger is almost certainly the wrong file.
             const long maxBytes = 4L * 1024 * 1024;
             await using var stream = e.File.OpenReadStream(maxBytes);
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms);
             _uploadedBytes = ms.ToArray();
             _parsedPackage = Promotion.Parse(_uploadedBytes);
-            _importRows = _parsedPackage.SchemaConfigs
-                .Select(s => new ImportRow(s, null, null))
+            _importMessages = new();
+
+            // Build company-mapping rows from every source company referenced
+            // by any company-scoped section (companies, reports, dashboards,
+            // sections). Auto-map to a target whose code matches.
+            var sourceCompanies = new Dictionary<Guid, (string Name, string Code)>();
+            foreach (var c in _parsedPackage.Companies)
+                sourceCompanies[c.SourceId] = (c.Name, c.Code);
+            foreach (var d in _parsedPackage.Dashboards)
+                sourceCompanies.TryAdd(d.SourceCompanyId, (d.SourceCompanyName, ""));
+            foreach (var r in _parsedPackage.Reports)
+                sourceCompanies.TryAdd(r.SourceCompanyId, (r.SourceCompanyName ?? "(company in package)", ""));
+
+            _companyMapRows = sourceCompanies.Select(kv =>
+            {
+                var row = new CompanyMapRow
+                {
+                    SourceId = kv.Key,
+                    SourceName = kv.Value.Name,
+                    SourceCode = kv.Value.Code,
+                    TargetKey = SkipKey
+                };
+                var byCode = _targetCompanies.FirstOrDefault(t =>
+                    !string.IsNullOrEmpty(kv.Value.Code) &&
+                    string.Equals(t.Code, kv.Value.Code, StringComparison.OrdinalIgnoreCase));
+                if (byCode is not null) row.TargetKey = byCode.Id.ToString();
+                else if (_parsedPackage.Companies.Any(c => c.SourceId == kv.Key)) row.TargetKey = CreateKey;
+                return row;
+            }).OrderBy(r => r.SourceName).ToList();
+
+            // Schema configs map to connections (existing flow). Auto-map by name.
+            _importSchemaRows = _parsedPackage.SchemaConfigs
+                .Select(s => new ImportSchemaRow(s, null, null))
                 .ToList();
-            // Auto-map by source connection name when an exact match
-            // exists in this env's targets — admins can still override.
-            foreach (var row in _importRows)
+            foreach (var row in _importSchemaRows)
             {
                 var match = _targetConnections.FirstOrDefault(t =>
                     string.Equals(t.Name, row.Entry.SourceConnectionName, StringComparison.OrdinalIgnoreCase));
@@ -314,7 +468,8 @@
         {
             _parsedPackage = null;
             _uploadedBytes = null;
-            _importRows = new();
+            _companyMapRows = new();
+            _importSchemaRows = new();
             Snackbar.Add($"Couldn't parse package: {ex.Message}", Severity.Error);
         }
     }
@@ -324,18 +479,50 @@
         _importing = true;
         try
         {
-            foreach (var row in _importRows)
+            var msgs = new List<string>();
+
+            // 1. Schema configs (per-connection).
+            foreach (var row in _importSchemaRows)
             {
                 if (row.TargetConnectionId is not Guid target) continue;
-                row.Result = await Promotion.ImportSchemaConfigAsync(
-                    row.Entry, target, CurrentUserEmail);
+                row.Result = await Promotion.ImportSchemaConfigAsync(row.Entry, target, CurrentUserEmail);
+                msgs.Add($"{(row.Result.Success ? "✓" : "✗")} Schema '{row.Entry.SourceConnectionName}': {row.Result.Message}");
             }
-            var ok = _importRows.Count(r => r.Result?.Success == true);
-            var fail = _importRows.Count(r => r.Result?.Success == false);
-            Snackbar.Add(
-                $"Import complete — {ok} applied, {fail} failed.",
-                fail == 0 ? Severity.Success : Severity.Warning);
-            await ReloadConnectionsAsync();
+
+            // 2. Company-scoped sections (companies, sections, templates,
+            //    reports, dashboards) in one resolving pass.
+            if (_parsedPackage is not null && _companyMapRows.Count > 0)
+            {
+                var mappings = _companyMapRows
+                    .Where(r => r.TargetKey != SkipKey)
+                    .Select(r => new CompanyImportMapping(
+                        r.SourceId,
+                        r.TargetKey == CreateKey ? null : Guid.Parse(r.TargetKey),
+                        r.TargetKey == CreateKey))
+                    .ToList();
+
+                if (mappings.Count > 0)
+                {
+                    var report = await Promotion.ImportCompanyScopedAsync(_parsedPackage, mappings, CurrentUserEmail);
+                    msgs.AddRange(report.Messages);
+                    Snackbar.Add(
+                        $"Imported: {report.CompaniesCreated} companies created, {report.Reports} reports, " +
+                        $"{report.GridTemplates} templates, {report.LibrarySections} sections, " +
+                        $"{report.DashboardTiles} dashboard tiles.",
+                        report.AnyFailures ? Severity.Warning : Severity.Success);
+                }
+            }
+
+            _importMessages = msgs;
+            if (_importSchemaRows.Any(r => r.Result is not null) && _companyMapRows.All(r => r.TargetKey == SkipKey))
+            {
+                var ok = _importSchemaRows.Count(r => r.Result?.Success == true);
+                var fail = _importSchemaRows.Count(r => r.Result?.Success == false);
+                Snackbar.Add($"Schema import — {ok} applied, {fail} failed.",
+                    fail == 0 ? Severity.Success : Severity.Warning);
+            }
+
+            await ReloadAsync();
         }
         finally
         {
@@ -343,7 +530,20 @@
         }
     }
 
-    private sealed class ExportRow
+    private sealed class CompanyRow
+    {
+        public Guid Id { get; }
+        public string Name { get; }
+        public string Code { get; }
+        public int ReportCount { get; }
+        public bool Selected { get; set; } = true;
+        public CompanyRow(Guid id, string name, string code, int reportCount)
+        {
+            Id = id; Name = name; Code = code; ReportCount = reportCount;
+        }
+    }
+
+    private sealed class SchemaRow
     {
         public Guid ConnectionId { get; }
         public string ConnectionName { get; }
@@ -351,29 +551,31 @@
         public int FieldCount { get; }
         public int JoinCount { get; }
         public bool Selected { get; set; }
-
-        public ExportRow(Guid id, string connName, string companyName, int fields, int joins)
+        public SchemaRow(Guid id, string connName, string companyName, int fields, int joins)
         {
-            ConnectionId = id;
-            ConnectionName = connName;
-            CompanyName = companyName;
-            FieldCount = fields;
-            JoinCount = joins;
+            ConnectionId = id; ConnectionName = connName; CompanyName = companyName;
+            FieldCount = fields; JoinCount = joins;
         }
     }
 
-    private sealed class ImportRow
+    private sealed class CompanyMapRow
+    {
+        public Guid SourceId { get; set; }
+        public string SourceName { get; set; } = "";
+        public string SourceCode { get; set; } = "";
+        public string TargetKey { get; set; } = SkipKey;
+    }
+
+    private sealed record CompanyRecordLite(Guid Id, string Code, string Name);
+
+    private sealed class ImportSchemaRow
     {
         public PromotionPackage.SchemaConfigEntry Entry { get; }
         public Guid? TargetConnectionId { get; set; }
         public ImportResult? Result { get; set; }
-
-        public ImportRow(PromotionPackage.SchemaConfigEntry entry,
-                         Guid? targetConnectionId, ImportResult? result)
+        public ImportSchemaRow(PromotionPackage.SchemaConfigEntry entry, Guid? targetConnectionId, ImportResult? result)
         {
-            Entry = entry;
-            TargetConnectionId = targetConnectionId;
-            Result = result;
+            Entry = entry; TargetConnectionId = targetConnectionId; Result = result;
         }
     }
 }

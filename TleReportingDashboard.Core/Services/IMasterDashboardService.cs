@@ -25,7 +25,14 @@ public interface IMasterDashboardService
 
     // ── Tiles ──
     Task<List<MasterDashboardTile>> GetTilesAsync(Guid companyId, int tabId);
-    Task<List<SavedReport>> GetAvailableReportsAsync(Guid companyId);
+    // Picker source for the master-dashboard "Add Report" / "Pin to my view"
+    // flows. Returns reports with ShowOnMaster=true that the user is allowed
+    // to pin: company-scoped reports (any owner in the user's current
+    // company) PLUS reports shared directly with the user (regardless of
+    // the report's home company). userId is optional — pass null/empty to
+    // skip the shared-with-me branch and get only the company-scoped
+    // reports (back-compat behavior for callers without a user context).
+    Task<List<SavedReport>> GetAvailableReportsAsync(Guid companyId, string? userId = null);
     Task AddTileAsync(Guid companyId, int tabId, Guid reportId, string? userEmail, int colSpan = 12, int? sectionId = null);
     Task RemoveTileAsync(int tileId, string? userEmail);
     Task UpdateLayoutAsync(List<MasterDashboardTile> tiles, string? userEmail);
@@ -60,6 +67,46 @@ public interface IMasterDashboardService
     // the limit, and enforced server-side in AddSectionAsync so a bypassed
     // UI can't blow past it.
     const int MaxSectionsPerTab = 10;
+
+    // ── Per-user personal tile pins ────────────────────────────────────
+    // The "personal layer": every user can pin reports to their own view
+    // of a tab without touching the shared canonical layout. Pins are
+    // scoped to (user, company, tab); only the owning user sees them.
+    // Solves the non-admin report-owner case where they want their own
+    // report on a dashboard tab but aren't allowed to mutate the shared
+    // layout. No admin gate on these methods — every user can manage
+    // their own pins.
+
+    // Returns the user's personal tiles for the given tab. The
+    // MasterDashboard merges these with GetTilesAsync and renders the
+    // combined list ordered by sort_order; the IsPersonal flag drives
+    // the per-user unpin affordance and visual indicator.
+    Task<List<MasterDashboardTile>> GetPersonalTilesAsync(string userId, Guid companyId, int tabId);
+
+    // Creates a personal pin. Idempotent on the (user, tab, report)
+    // unique index — re-adding the same report on the same tab is a
+    // silent no-op. Returns the inserted (or existing) tile row.
+    Task<MasterDashboardTile> AddPersonalTileAsync(
+        string userId, Guid companyId, int tabId, Guid reportId,
+        int colSpan = 12, int? sectionId = null);
+
+    // Removes a single personal pin. user_id check in the WHERE clause
+    // means a user can only remove their OWN pins — calling with someone
+    // else's tile id is a silent no-op (zero-row UPDATE / DELETE).
+    Task RemovePersonalTileAsync(string userId, int personalTileId);
+
+    // Updates the layout properties of a single personal pin (size + title
+    // alignment). user_id check in the WHERE clause means a user can only
+    // edit their OWN pins. Shared/canonical tiles go through
+    // UpdateLayoutAsync instead — that's admin-only and batch-shaped.
+    Task UpdatePersonalTileLayoutAsync(string userId, int personalTileId,
+        int colSpan, int height, string? titleAlign);
+
+    // Distinct set of report ids the user has personal-pinned anywhere
+    // (across every tab in any company). Used by the "Pin to my view"
+    // picker to filter out reports the user has already pinned, so they
+    // don't see duplicates in the candidate list.
+    Task<HashSet<Guid>> GetPersonalPlacedReportIdsAsync(string userId);
 
     // ── Per-user tab visibility ── Hidden tabs are scoped to (user, tab).
     // Tabs themselves remain shared at the company level — this is purely a

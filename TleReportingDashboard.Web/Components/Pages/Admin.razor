@@ -148,6 +148,12 @@
                     <AdminAppSettingsTab CurrentUserEmail="@_currentUserEmail" />
                 </MudTabPanel>
             }
+            @if (_allowedSections.Contains(AdminSections.AuditLog))
+            {
+                <MudTabPanel Text="Audit Log" Icon="@Icons.Material.Outlined.FactCheck">
+                    <AdminAuditLogTab />
+                </MudTabPanel>
+            }
             @if (_allowedSections.Contains(AdminSections.ColumnWidths))
             {
                 <MudTabPanel Text="Column Widths" Icon="@Icons.Material.Outlined.ViewColumn">

@@ -94,6 +94,29 @@ try
     // appsettings doesn't define it (read-only behavior is fine here).
     builder.Services.Configure<AdminOptions>(
         builder.Configuration.GetSection("Admins"));
+
+    // Audit logger plumbing. AdminService + CompanyConnectionAdminService
+    // (both registered here) consume IAuditLogger as of the SOC-2
+    // change-management work; without these three lines, DI validation
+    // fails at app start with "Unable to resolve IAuditLogger" and the
+    // process exits → IIS reports ANCM 502.5.
+    //
+    // Worker writes carry no HttpContext (Hangfire jobs run on a
+    // background thread, SchedulerSyncService is a hosted service), so
+    // the actor on every audit row from this process resolves to "(system)"
+    // — which is the right attribution. If the Worker grows authenticated
+    // endpoints later, those requests will populate HttpContext and the
+    // accessor will surface the real user.
+    builder.Services.AddHttpContextAccessor();
+    builder.Services.AddSingleton<ICurrentUserAccessor, HttpContextCurrentUserAccessor>();
+    // configConnStr is declared further down (used by the Hangfire +
+    // notification-service block) — read directly here so the audit-
+    // logger pick can happen before AdminService's DI registration.
+    if (!string.IsNullOrEmpty(builder.Configuration.GetConnectionString("ConfigDb")))
+        builder.Services.AddSingleton<IAuditLogger, AuditLogger>();
+    else
+        builder.Services.AddSingleton<IAuditLogger, InMemoryAuditLogger>();
+
     builder.Services.AddSingleton<IAdminService, AdminService>();
 
     // The job class itself — Hangfire activates it from the scoped DI

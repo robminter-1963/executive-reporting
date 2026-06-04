@@ -8,6 +8,7 @@ public sealed class CompanyAdminService : ICompanyAdminService
     private readonly ICompanyRegistry _registry;
     private readonly ConfigDbCache _cache;
     private readonly EditorModeState _editorMode;
+    private readonly IAuditLogger _audit;
     private readonly ILogger<CompanyAdminService> _logger;
 
     public CompanyAdminService(
@@ -15,6 +16,7 @@ public sealed class CompanyAdminService : ICompanyAdminService
         ICompanyRegistry registry,
         ConfigDbCache cache,
         EditorModeState editorMode,
+        IAuditLogger audit,
         ILogger<CompanyAdminService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
@@ -22,8 +24,20 @@ public sealed class CompanyAdminService : ICompanyAdminService
         _registry = registry;
         _cache = cache;
         _editorMode = editorMode;
+        _audit = audit;
         _logger = logger;
     }
+
+    // Audit-safe projection of a CompanyRecord. Strips the logo blob (not
+    // useful in a diff and bloats the audit JSON) and converts the
+    // content-type to a bool so a logo-replace diffs cleanly as "had logo"
+    // → "had logo" instead of two opaque base64 strings.
+    private static object ForAudit(CompanyRecord c) => new
+    {
+        c.Id, c.Code, c.Name, c.WebsiteUrl, c.IsActive, c.IsHidden, c.DisplayOrder,
+        HasLogo = c.Logo is { Length: > 0 },
+        c.LogoContentType
+    };
 
     public Task<List<CompanyRecord>> GetAllAsync(CancellationToken ct = default) =>
         _cache.GetOrAddAsync(
@@ -95,6 +109,18 @@ public sealed class CompanyAdminService : ICompanyAdminService
         _registry.Invalidate();
         _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company display order updated: {Count} companies re-ordered", orderedIds.Count);
+
+        // One audit row for the whole reorder — the per-company display_order
+        // update isn't a security event, but the curated ordering IS a shared
+        // user-visible config change that auditors want recorded once.
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Reorder,
+            resourceType: AuditResources.Company,
+            resourceId: null,
+            resourceLabel: $"{orderedIds.Count} companies",
+            before: null,
+            after: new { OrderedIds = orderedIds.ToArray() });
     }
 
     public async Task<CompanyRecord> CreateAsync(string code, string name,
@@ -118,16 +144,28 @@ public sealed class CompanyAdminService : ICompanyAdminService
         _registry.Invalidate();
         _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company created: {Code} by {CreatedBy}", code, createdBy ?? "unknown");
-        return new CompanyRecord(id, code, name, true, now, now)
+        var created = new CompanyRecord(id, code, name, true, now, now)
         {
             WebsiteUrl = NormalizeUrl(websiteUrl)
         };
+        await _audit.LogAsync(
+            actorEmail: createdBy,
+            action: AuditActions.Create,
+            resourceType: AuditResources.Company,
+            resourceId: id.ToString(),
+            resourceLabel: $"{name} ({code})",
+            before: null,
+            after: ForAudit(created));
+        return created;
     }
 
     public async Task UpdateAsync(Guid id, string code, string name,
                                    string? websiteUrl, bool isActive, bool isHidden, CancellationToken ct = default)
     {
         Validate(code, name);
+
+        // Pre-read for audit-log before-state.
+        var existing = (await GetAllAsync(ct)).FirstOrDefault(c => c.Id == id);
 
         // Conditional UPDATE form: assigns is_hidden only when the column
         // exists, so this method works on envs that haven't yet applied
@@ -163,6 +201,16 @@ public sealed class CompanyAdminService : ICompanyAdminService
         _logger.LogInformation(
             "Company updated: {Id} ({Code}), active={IsActive}, hidden={IsHidden}",
             id, code, isActive, hasHiddenColumn ? isHidden.ToString() : "n/a (pre-migration)");
+
+        var afterRecord = (await GetAllAsync(ct)).FirstOrDefault(c => c.Id == id);
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Update,
+            resourceType: AuditResources.Company,
+            resourceId: id.ToString(),
+            resourceLabel: $"{name} ({code})",
+            before: existing is null ? null : ForAudit(existing),
+            after: afterRecord is null ? null : ForAudit(afterRecord));
     }
 
     private async Task<bool> ColumnExistsAsync(string fullTableName, string column, CancellationToken ct)
@@ -206,6 +254,15 @@ public sealed class CompanyAdminService : ICompanyAdminService
         _registry.Invalidate();
         _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company active-state changed: {Id} → {IsActive}", id, isActive);
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: isActive ? AuditActions.Enable : AuditActions.Disable,
+            resourceType: AuditResources.Company,
+            resourceId: id.ToString(),
+            resourceLabel: null,
+            before: null,
+            after: new { IsActive = isActive });
     }
 
     public async Task SetHiddenAsync(Guid id, bool isHidden, CancellationToken ct = default)
@@ -231,6 +288,15 @@ public sealed class CompanyAdminService : ICompanyAdminService
         _registry.Invalidate();
         _cache.Invalidate("CompanyAdminService:");
         _logger.LogInformation("Company hidden-state changed: {Id} → {IsHidden}", id, isHidden);
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: isHidden ? AuditActions.Hide : AuditActions.Show,
+            resourceType: AuditResources.Company,
+            resourceId: id.ToString(),
+            resourceLabel: null,
+            before: null,
+            after: new { IsHidden = isHidden });
     }
 
     public async Task UploadLogoAsync(Guid id, byte[] bytes, string contentType, CancellationToken ct = default)

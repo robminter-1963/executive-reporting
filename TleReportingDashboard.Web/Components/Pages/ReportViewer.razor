@@ -166,7 +166,12 @@
         }
         else if (!_isLoading && _error is not null)
         {
-            <MudAlert Severity="Severity.Error">@_error</MudAlert>
+            <FriendlyErrorPanel Message="@_error"
+                                Heading="Couldn't load this report"
+                                IsAdmin="@_isAdmin"
+                                Sql="@_errorSql"
+                                Parameters="@_errorParams"
+                                OnRetry="OnRetryFromError" />
         }
     </MudStack>
 </MudMainContent>
@@ -227,6 +232,12 @@
     private bool _isAdmin;
     private int _activeTab;
     private string? _error;
+    // Optional admin-only details that travel alongside _error when the
+    // failure was a QueryExecutionException. Surface them in the
+    // FriendlyErrorPanel's "Show details" expander; non-admins never see
+    // them. Both stay null for non-SQL errors (auth, missing fields, etc).
+    private string? _errorSql;
+    private Dictionary<string, object?>? _errorParams;
     private QueryResponse? _queryData;
     private DashboardView.DashboardConfig? _dashboardConfig;
     private List<TleReportingDashboard.Web.Models.TableCalcColumnDef>? _tableCalcColumns;
@@ -589,14 +600,39 @@
             request.Scoping = await ScopeResolver.ResolveAsync(_userEmail, _connectionId, _primaryTable);
             _queryData = await QueryService.ExecuteQueryAsync(request);
         }
+        catch (TleReportingDashboard.Web.Services.QueryPipeline.QueryExecutionException qex)
+        {
+            // SQL emitted, DB rejected it. Friendly copy for everyone;
+            // admins also get the failing SQL + parameters via the
+            // FriendlyErrorPanel expander.
+            _error = FriendlyError.FromException(qex, Logger, "running report query");
+            _errorSql = qex.Sql;
+            _errorParams = qex.Parameters;
+            Snackbar.Add(_error, Severity.Error);
+        }
         catch (Exception ex)
         {
-            Snackbar.Add(FriendlyError.FromException(ex, Logger, "running report query"), Severity.Error);
+            _error = FriendlyError.FromException(ex, Logger, "running report query");
+            _errorSql = null;
+            _errorParams = null;
+            Snackbar.Add(_error, Severity.Error);
         }
         finally
         {
             _isLoading = false;
         }
+    }
+
+    // "Retry" button on the error panel — clears the error state and
+    // re-runs the query. Lets a transient failure (deadlock, timeout,
+    // momentary network hiccup) recover in one click instead of a full
+    // page reload.
+    private async Task OnRetryFromError()
+    {
+        _error = null;
+        _errorSql = null;
+        _errorParams = null;
+        await RunReport();
     }
 
     private void BuildFilterChips()

@@ -63,6 +63,7 @@
                     var c = it.Clause;
                     <AdvancedFilterRow Clause="c"
                                        AvailableFields="AvailableFields"
+                                       ConnectionId="ConnectionId"
                                        OnChanged="HandleChildChanged"
                                        OnRemove="@(() => RemoveItem(it))" />
                 }
@@ -72,6 +73,7 @@
                     <div style="margin-left: 16px;">
                         <AdvancedFilterGroup Group="g"
                                              AvailableFields="AvailableFields"
+                                             ConnectionId="ConnectionId"
                                              IsRoot="false"
                                              OnChanged="HandleChildChanged"
                                              OnRemove="@(() => RemoveItem(it))" />
@@ -100,6 +102,10 @@
 @code {
     [Parameter, EditorRequired] public FilterGroup Group { get; set; } = default!;
     [Parameter, EditorRequired] public List<FieldConfig> AvailableFields { get; set; } = new();
+    // Threaded down to leaf rows so they can call ILookupValueService for
+    // fields that bind to a LookupType. Optional — when null, rows fall
+    // back to the free-text input for "is any of" / "is none of".
+    [Parameter] public Guid? ConnectionId { get; set; }
     [Parameter] public bool IsRoot { get; set; } = false;
     [Parameter] public EventCallback OnChanged { get; set; }
     [Parameter] public EventCallback OnRemove { get; set; }

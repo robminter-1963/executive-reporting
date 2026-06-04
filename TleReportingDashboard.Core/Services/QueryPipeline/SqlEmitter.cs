@@ -219,6 +219,33 @@ public sealed partial class SqlEmitter : IQueryPipeline
                 warnings: msg => _logger.LogWarning("JoinResolver: {Message}", msg));
         }
 
+        // Fields can carry explicit JoinIds when their SqlExpression
+        // references aliases that aren't otherwise reachable via the
+        // SourceTable-driven BFS in JoinResolver (e.g. a field with
+        // SqlExpression = "CAST(ev348.EVENTDATE AS DATE)" — the expression
+        // hides the dependency on ev348's join, but the admin declares it
+        // by ticking the join in the field editor's "JOINs (referenced)"
+        // multi-select). Without this pass, a Worker-emitted query (which
+        // bypasses QueryBuilder's equivalent secondary loop) hits
+        // "could not be bound" for those aliases at execute time.
+        var fieldJoinIds = allReferencedFields
+            .SelectMany(f =>
+            {
+                var ids = new List<string>();
+                if (!string.IsNullOrWhiteSpace(f.JoinId)) ids.Add(f.JoinId!);
+                if (f.JoinIds is not null) ids.AddRange(f.JoinIds.Where(id => !string.IsNullOrWhiteSpace(id)));
+                return ids;
+            })
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (fieldJoinIds.Count > 0)
+        {
+            joins = JoinResolver.AddJoins(joins,
+                fieldJoinIds,
+                schema.Joins, primaryName, primaryAlias,
+                warnings: msg => _logger.LogWarning("JoinResolver: {Message}", msg));
+        }
+
         // Diagnostic — always emitted at Error level so it bypasses the
         // default Serilog filter (which is set to "Error" in appsettings).
         // Lists the joins the resolver picked plus the primary so admins
@@ -267,7 +294,8 @@ public sealed partial class SqlEmitter : IQueryPipeline
         var (sql, parameters) = BuildSql(
             request, resolvedFields, joins, aggregation, dateFilter,
             guardrails, filterFields, advancedFilterFields,
-            schema.CustomFilters, schema.Lookups, dialect, request.PrimaryTable);
+            schema.CustomFilters, schema.Lookups, schema.LookupTypes,
+            dialect, request.PrimaryTable);
 
         List<Dictionary<string, object?>> rows;
         int totalCount;
@@ -340,6 +368,7 @@ public sealed partial class SqlEmitter : IQueryPipeline
         List<FieldDefinition> advancedFilterFields,
         List<CustomFilterDefinition> customFilters,
         List<LookupDefinition> lookups,
+        List<LookupTypeDefinition> lookupTypes,
         ISqlDialect dialect,
         string? primaryTableOverride)
     {
@@ -368,7 +397,12 @@ public sealed partial class SqlEmitter : IQueryPipeline
             foreach (var id in ids)
             {
                 if (!seenLookups.Add(id) || !lookupMap.TryGetValue(id, out var lu)) continue;
-                preambles.Add(lu.SqlPreamble);
+                // Simple-mode lookups (filter-pickable only) carry no CTE
+                // preamble — skip the WITH-block emission for those; they
+                // contribute nothing to the report query, only to the
+                // filter chip picker via ILookupValueService.
+                if (!string.IsNullOrWhiteSpace(lu.SqlPreamble))
+                    preambles.Add(lu.SqlPreamble);
                 if (!string.IsNullOrWhiteSpace(lu.SqlJoin))
                     lookupJoins.Add(lu.SqlJoin);
             }
@@ -443,7 +477,7 @@ public sealed partial class SqlEmitter : IQueryPipeline
         var whereClauses = new List<string>();
 
         // Filter-based WHERE clauses
-        BuildFilterWhereClauses(request.Filters, resolvedFields, filterFields, whereClauses, parameters, dialect);
+        BuildFilterWhereClauses(request.Filters, resolvedFields, filterFields, lookupTypes, whereClauses, parameters, dialect);
 
         // Date filter WHERE clause
         if (dateFilter.WhereClause is not null)
@@ -487,11 +521,15 @@ public sealed partial class SqlEmitter : IQueryPipeline
                         SourceColumn = fd.SourceColumn,
                         DataType = fd.DataType,
                         DisplayTimezone = fd.DisplayTimezone,
-                        ApplyTimezoneConversion = fd.ApplyTimezoneConversion
+                        ApplyTimezoneConversion = fd.ApplyTimezoneConversion,
+                        LookupTypeId = fd.LookupTypeId,
+                        FilterPredicateSql = fd.FilterPredicateSql,
+                        FilterColumn = fd.FilterColumn
                     }
                     : null,
                 dialect,
-                parameters);
+                parameters,
+                lookupTypes);
             if (!string.IsNullOrWhiteSpace(advExpr))
                 whereClauses.Add(advExpr);
         }
@@ -552,6 +590,7 @@ public sealed partial class SqlEmitter : IQueryPipeline
         Dictionary<string, object?> filters,
         IReadOnlyList<FieldDefinition> resolvedFields,
         List<FieldDefinition> filterFields,
+        List<LookupTypeDefinition> lookupTypes,
         List<string> whereClauses,
         List<System.Data.Common.DbParameter> parameters,
         ISqlDialect dialect)
@@ -564,6 +603,14 @@ public sealed partial class SqlEmitter : IQueryPipeline
             .Concat(filterFields)
             .DistinctBy(f => f.Id)
             .ToDictionary(f => f.Id, StringComparer.OrdinalIgnoreCase);
+
+        // Lookup-type index for FilterPredicateSql emission. A field can name
+        // a LookupTypeId — when it does, the admin's FilterPredicateSql
+        // fragment replaces the default "<col> IN (…)" emission so the
+        // values bind through the predicate's join/correlation instead.
+        var lookupTypeMap = lookupTypes
+            .GroupBy(lt => lt.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         var filterIndex = 0;
         foreach (var filter in filters)
@@ -618,7 +665,47 @@ public sealed partial class SqlEmitter : IQueryPipeline
                     inParams.Add(p);
                     parameters.Add(dialect.CreateParameter(p, valueList[i]));
                 }
-                whereClauses.Add($"{column} IN ({string.Join(", ", inParams)})");
+                var inList = $"({string.Join(", ", inParams)})";
+
+                // Precedence (highest first):
+                //   1. FilterColumn — explicit single-column shortcut.
+                //      Admin pointed at the column to compare against;
+                //      always honor it directly. Picker sent Codes.
+                //   2. FilterPredicateSql — joined-table escape hatch.
+                //      Only fires when FilterColumn is empty AND we can
+                //      actually substitute (placeholder OR SourceTableRef
+                //      + ValueColumn). Otherwise the predicate is
+                //      half-authored and we'd emit unjoinable SQL.
+                //   3. Plain "<column> IN (...)" against the field's own
+                //      expression — legacy / picker-sent-Descriptions.
+                if (!string.IsNullOrWhiteSpace(filterField.FilterColumn))
+                {
+                    whereClauses.Add($"{filterField.FilterColumn} IN {inList}");
+                }
+                else if (!string.IsNullOrWhiteSpace(filterField.LookupTypeId)
+                    && !string.IsNullOrWhiteSpace(filterField.FilterPredicateSql)
+                    && lookupTypeMap.TryGetValue(filterField.LookupTypeId!, out var lookupType))
+                {
+                    var predicate = filterField.FilterPredicateSql!;
+                    if (predicate.Contains("{values}", StringComparison.Ordinal))
+                    {
+                        whereClauses.Add($"({predicate.Replace("{values}", inList, StringComparison.Ordinal)})");
+                    }
+                    else if (!string.IsNullOrWhiteSpace(lookupType.SourceTableRef)
+                             && !string.IsNullOrWhiteSpace(lookupType.ValueColumn))
+                    {
+                        whereClauses.Add(
+                            $"({predicate} AND {lookupType.SourceTableRef}.{lookupType.ValueColumn} IN {inList})");
+                    }
+                    else
+                    {
+                        whereClauses.Add($"{column} IN {inList}");
+                    }
+                }
+                else
+                {
+                    whereClauses.Add($"{column} IN {inList}");
+                }
             }
             else
             {
@@ -735,6 +822,10 @@ public sealed partial class SqlEmitter : IQueryPipeline
             foreach (var id in field.LookupIds)
             {
                 if (!lookupMap.TryGetValue(id, out var lu)) continue;
+                // No CTE preamble = no LOOKUP(c1, c2, c3) signature to
+                // parse, so simple-mode-only lookups can't contribute a
+                // sort expression. Skip and let the next lookup try.
+                if (string.IsNullOrWhiteSpace(lu.SqlPreamble)) continue;
                 var match = System.Text.RegularExpressions.Regex.Match(lu.SqlPreamble.Trim(),
                     @"^(\w+)\s*\(\s*([^)]+?)\s*\)",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);

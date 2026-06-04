@@ -1,0 +1,118 @@
+@using TleReportingDashboard.Web.Components.Pages
+@inject IDialogService DialogService
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Outlined.PlaylistAddCheck" />
+            <MudText Typo="Typo.h6">@(IsNew ? "Add Lookup Type" : "Edit Lookup Type")</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudGrid Spacing="2" Style="min-width: 640px;">
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Id" Label="ID" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="Unique identifier (e.g. loan_status)" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.Label" Label="Label" Variant="Variant.Outlined" Margin="Margin.Dense"
+                              HelperText="Display name shown in the field editor (e.g. Loan Status)" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.SelectSql" Label="SELECT SQL"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="4" Style="font-family: monospace; font-size: 0.85rem;"
+                              Placeholder="SELECT CODENUM, CODEDESC FROM EMPOWER.SET_CODESETS WHERE CODEINT=1"
+                              HelperText="Returns the value list for the filter chip picker. Runs against the connection's data DB." />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.ValueColumn" Label="Value Column"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="font-family: monospace;"
+                              Placeholder="CODENUM"
+                              HelperText="Column from the SELECT used as the filter value." />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_edited.DisplayColumn" Label="Display Column"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="font-family: monospace;"
+                              Placeholder="CODEDESC"
+                              HelperText="Column from the SELECT shown in the picker." />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.SourceTableRef" Label="Source Table Reference (optional)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="font-family: monospace;"
+                              Placeholder="EMPOWER.SET_CODESETS"
+                              HelperText="How fields reference this lookup's table in their filter predicate. Used to auto-append the IN (...) when a field's predicate has no values placeholder." />
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="TryCancelAsync">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@(string.IsNullOrWhiteSpace(_edited.Id)
+                              || string.IsNullOrWhiteSpace(_edited.Label)
+                              || string.IsNullOrWhiteSpace(_edited.SelectSql)
+                              || string.IsNullOrWhiteSpace(_edited.ValueColumn)
+                              || string.IsNullOrWhiteSpace(_edited.DisplayColumn))">
+            OK
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public SchemaBuilder.LookupTypeEntry? LookupType { get; set; }
+    [Parameter] public bool IsNew { get; set; }
+
+    private SchemaBuilder.LookupTypeEntry _edited = new();
+
+    private string _initialSnapshot = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        if (LookupType is not null)
+        {
+            _edited = new SchemaBuilder.LookupTypeEntry
+            {
+                Id = LookupType.Id,
+                Label = LookupType.Label,
+                SelectSql = LookupType.SelectSql,
+                ValueColumn = LookupType.ValueColumn,
+                DisplayColumn = LookupType.DisplayColumn,
+                SourceTableRef = LookupType.SourceTableRef
+            };
+        }
+
+        _initialSnapshot = BuildSnapshot();
+    }
+
+    private string BuildSnapshot() =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            _edited.Id,
+            _edited.Label,
+            _edited.SelectSql,
+            _edited.ValueColumn,
+            _edited.DisplayColumn,
+            _edited.SourceTableRef
+        });
+
+    private bool IsDirty =>
+        !string.Equals(_initialSnapshot, BuildSnapshot(), StringComparison.Ordinal);
+
+    private async Task TryCancelAsync() =>
+        await UnsavedChangesPrompt.TryCancelAsync(DialogService, MudDialog, IsDirty,
+            saveAsync: () =>
+            {
+                if (!string.IsNullOrWhiteSpace(_edited.Id)
+                    && !string.IsNullOrWhiteSpace(_edited.Label)
+                    && !string.IsNullOrWhiteSpace(_edited.SelectSql)
+                    && !string.IsNullOrWhiteSpace(_edited.ValueColumn)
+                    && !string.IsNullOrWhiteSpace(_edited.DisplayColumn)) Ok();
+                return Task.CompletedTask;
+            });
+
+    private void Ok() => MudDialog?.Close(DialogResult.Ok(_edited));
+}

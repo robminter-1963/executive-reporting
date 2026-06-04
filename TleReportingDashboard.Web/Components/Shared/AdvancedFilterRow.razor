@@ -12,6 +12,9 @@
    version binds against real FieldConfig objects instead of the demo
    field list. *@
 
+@inject ICodeSetService CodeSetService
+@inject ILookupValueService LookupValueService
+
 <MudPaper Elevation="0" Class="pa-3"
           Style="border: 1px solid #E8EAED; border-radius: 4px;">
     <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
@@ -65,12 +68,27 @@
     // Fields the user can pick from (from SchemaService.GetFieldConfigsAsync).
     [Parameter, EditorRequired] public List<FieldConfig> AvailableFields { get; set; } = new();
 
+    // Required to resolve a field's LookupType to its admin-authored
+    // SELECT (LookupTypes are per-connection in SchemaConfig). When null,
+    // the "is any of" / "is none of" inputs fall back to free-text only —
+    // CodeSet-backed fields still load (CodeSetService is connection-
+    // agnostic via the SET_CODESETS default connection).
+    [Parameter] public Guid? ConnectionId { get; set; }
+
     // Fires after any field / operator / value change so the parent can
     // refresh a live preview or mark the report dirty.
     [Parameter] public EventCallback OnChanged { get; set; }
 
     // Fires when the row's delete icon is clicked.
     [Parameter] public EventCallback OnRemove { get; set; }
+
+    // Cached enumerated values per field id. Populated lazily on field
+    // pick (or on first render of an InList/NotInList operator) so the
+    // dropdown for an InList op can render checkboxes against the
+    // CodeSet / LookupType source instead of a comma-separated textbox.
+    // null = "haven't tried to load yet"; empty list = "field has no
+    // enumerated source — render the free-text fallback."
+    private readonly Dictionary<string, List<CodeSetValue>?> _enumCache = new(StringComparer.OrdinalIgnoreCase);
 
     private FieldConfig? CurrentField =>
         AvailableFields.FirstOrDefault(f => f.Id == Clause.FieldId);
@@ -154,7 +172,53 @@
         // value state so the dependent input renders blank.
         Clause.Op = OperatorsFor(CurrentField).FirstOrDefault()?.Id ?? string.Empty;
         Clause.Values = new List<string>();
+        // Preload enumerated values for the new field so the multi-pick
+        // dropdown is ready the moment the user switches to an InList op.
+        await LoadEnumValuesAsync(CurrentField);
         await OnChanged.InvokeAsync();
+    }
+
+    // Resolve the field's enumerated value source — Empower CodeSet wins
+    // when set; LookupType is the generic table-backed fallback. Mirrors
+    // HeaderFilters' precedence so picker behavior is consistent across
+    // the two filter surfaces.
+    private async Task LoadEnumValuesAsync(FieldConfig? field)
+    {
+        if (field is null || string.IsNullOrWhiteSpace(field.Id)) return;
+        if (_enumCache.ContainsKey(field.Id)) return;
+
+        try
+        {
+            if (field.CodeSetId.HasValue)
+            {
+                _enumCache[field.Id] = await CodeSetService.GetCodeSetValuesAsync(field.CodeSetId.Value);
+            }
+            else if (!string.IsNullOrWhiteSpace(field.LookupTypeId) && ConnectionId is Guid cid)
+            {
+                _enumCache[field.Id] = await LookupValueService.GetFilterValuesAsync(cid, field.LookupTypeId);
+            }
+            else
+            {
+                // Mark as "tried, none" so the InList renderer falls back
+                // to free-text without retrying every render pass.
+                _enumCache[field.Id] = new List<CodeSetValue>();
+            }
+        }
+        catch
+        {
+            // Service failure (bad CodeSetId, broken LookupType SELECT,
+            // connection down) — degrade to free-text rather than break
+            // the filter row. Same posture as HeaderFilters.
+            _enumCache[field.Id] = new List<CodeSetValue>();
+        }
+    }
+
+    // Lazy-load on first render so a saved filter that lands here
+    // already-bound to an InList op gets its values populated without
+    // requiring the user to re-pick the field.
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadEnumValuesAsync(CurrentField);
     }
 
     private async Task OnOperatorChanged(string? newOp)
@@ -291,6 +355,18 @@
 
     private void RenderTextValue(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, string op)
     {
+        // For InList/NotInList on a field with an enumerated source
+        // (CodeSetId or LookupTypeId), render a multi-select dropdown
+        // instead of a comma-separated textbox. Matches the header-filter
+        // chip picker so admins authoring an Advanced Filter see the same
+        // value set HeaderFilters shows for the same field.
+        if (op is FilterOperators.InList or FilterOperators.NotInList
+            && TryGetEnumValues(out var enumValues))
+        {
+            RenderEnumMultiSelect(builder, enumValues);
+            return;
+        }
+
         var placeholder = op is FilterOperators.InList or FilterOperators.NotInList
             ? "comma-separated" : null;
 
@@ -327,6 +403,61 @@
         builder.CloseComponent();
     }
 
+    // Returns true (with the cached list) when the current field has an
+    // enumerated source ready to render as a multi-select. False covers
+    // both "not loaded yet" and "field has no enum source".
+    private bool TryGetEnumValues(out List<CodeSetValue> values)
+    {
+        values = new List<CodeSetValue>();
+        var field = CurrentField;
+        if (field is null) return false;
+        if (!_enumCache.TryGetValue(field.Id, out var cached) || cached is null) return false;
+        if (cached.Count == 0) return false;
+        values = cached;
+        return true;
+    }
+
+    // MudSelect MultiSelection rendering for InList/NotInList. Stores the
+    // picked CodeSetValue.Code values into Clause.Values so SqlEmitter
+    // gets the same shape it gets from the comma-split path.
+    private void RenderEnumMultiSelect(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, List<CodeSetValue> values)
+    {
+        var selected = new HashSet<string>(Clause.Values ?? new(), StringComparer.OrdinalIgnoreCase);
+
+        builder.OpenComponent<MudSelect<string>>(0);
+        builder.AddAttribute(1, "T", typeof(string));
+        builder.AddAttribute(2, "MultiSelection", true);
+        builder.AddAttribute(3, "MultiSelectionTextFunc",
+            (Func<IReadOnlyList<string>, string>)(vals => $"{vals.Count} selected"));
+        builder.AddAttribute(4, "SelectedValues", (IReadOnlyCollection<string>)selected);
+        builder.AddAttribute(5, "SelectedValuesChanged",
+            Cb<IReadOnlyCollection<string>>(vals => Clause.Values = vals.ToList()));
+        builder.AddAttribute(6, "Label", "Value");
+        builder.AddAttribute(7, "Variant", Variant.Outlined);
+        builder.AddAttribute(8, "Margin", Margin.Dense);
+        builder.AddAttribute(9, "Dense", true);
+        builder.AddAttribute(10, "Style", "min-width: 260px; max-width: 320px;");
+        // When the field has a FilterColumn set, the admin wants the WHERE
+        // to compare against the lookup's value column (CODENUM) on an
+        // alternate column of the field's row — so send Code. Otherwise
+        // send Description so the WHERE matches the field's own column
+        // (which typically stores the description). Same rule HeaderFilters
+        // uses (UseCodeAsValue gate).
+        var useCode = !string.IsNullOrWhiteSpace(CurrentField?.FilterColumn);
+        builder.AddAttribute(11, "ChildContent", (RenderFragment)(cb =>
+        {
+            foreach (var csv in values.OrderBy(v => v.Description, StringComparer.OrdinalIgnoreCase))
+            {
+                cb.OpenComponent<MudSelectItem<string>>(0);
+                cb.AddAttribute(1, "Value", useCode ? csv.Code : csv.Description);
+                cb.AddAttribute(2, "ChildContent",
+                    (RenderFragment)(inner => inner.AddContent(0, csv.Description)));
+                cb.CloseComponent();
+            }
+        }));
+        builder.CloseComponent();
+    }
+
     private void RenderNumericValue(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, string op)
     {
         if (op == FilterOperators.Between)
@@ -353,6 +484,16 @@
 
         if (op == FilterOperators.InList)
         {
+            // Same enum-source short-circuit as the text path. Numeric
+            // CodeSets / LookupTypes (status codes, loan-type ids, etc.)
+            // are common enough that the dropdown beats a comma-typed
+            // textbox every time when the source is enumerable.
+            if (TryGetEnumValues(out var enumValues))
+            {
+                RenderEnumMultiSelect(builder, enumValues);
+                return;
+            }
+
             builder.OpenComponent<MudTextField<string>>(0);
             builder.AddAttribute(1, "Label", "Values");
             builder.AddAttribute(2, "Value", string.Join(", ", Clause.Values));

@@ -17,19 +17,28 @@ public class MasterDashboardService : IMasterDashboardService
     private readonly IAdminService _admins;
     private readonly ConfigDbCache _cache;
     private readonly EditorModeState _editorMode;
+    private readonly IAuditLogger _audit;
 
     public MasterDashboardService(
         IConfiguration configuration,
         IAdminService admins,
         ConfigDbCache cache,
-        EditorModeState editorMode)
+        EditorModeState editorMode,
+        IAuditLogger audit)
     {
         _connectionString = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required.");
         _admins = admins;
         _cache = cache;
         _editorMode = editorMode;
+        _audit = audit;
     }
+
+    // Resource-id format for dashboard audit rows. Tabs / sections / tiles
+    // are int identities; we prefix with the company guid so a reviewer
+    // filtering by resource_id sees a complete per-company history without
+    // needing to join.
+    private static string ResId(Guid companyId, int childId) => $"{companyId}#{childId}";
 
     // Throws on anything other than a global or company admin. Methods that
     // know their target companyId pass it; methods keyed only by tab/tile id
@@ -138,6 +147,14 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@Label", label));
         var newId = (int)(await cmd.ExecuteScalarAsync())!;
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Create,
+            resourceType: AuditResources.DashboardTab,
+            resourceId: ResId(companyId, newId),
+            resourceLabel: $"Tab '{label}' (company {companyId})",
+            before: null,
+            after: new { CompanyId = companyId, Id = newId, Label = label });
         return new MasterDashboardTab { Id = newId, CompanyId = companyId, Label = label };
     }
 
@@ -153,6 +170,14 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@Id", tab.Id));
         await cmd.ExecuteNonQueryAsync();
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Update,
+            resourceType: AuditResources.DashboardTab,
+            resourceId: ResId(tab.CompanyId, tab.Id),
+            resourceLabel: $"Tab '{tab.Label}'",
+            before: null,
+            after: new { tab.Id, tab.Label, tab.TitleAlign });
     }
 
     public async Task RemoveTabAsync(int tabId, string? userEmail)
@@ -174,6 +199,15 @@ public class MasterDashboardService : IMasterDashboardService
         cmd2.Parameters.Add(new SqlParameter("@Id", tabId));
         await cmd2.ExecuteNonQueryAsync();
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Delete,
+            resourceType: AuditResources.DashboardTab,
+            resourceId: ResId(companyId.Value, tabId),
+            resourceLabel: null,
+            before: new { CompanyId = companyId.Value, TabId = tabId },
+            after: null,
+            notes: "tab + child tiles deleted");
     }
 
     public async Task UpdateTabOrderAsync(List<MasterDashboardTab> tabs, string? userEmail)
@@ -196,6 +230,14 @@ public class MasterDashboardService : IMasterDashboardService
             await cmd.ExecuteNonQueryAsync();
         }
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Reorder,
+            resourceType: AuditResources.DashboardTab,
+            resourceId: tabs[0].CompanyId.ToString(),
+            resourceLabel: $"{tabs.Count} tabs (company {tabs[0].CompanyId})",
+            before: null,
+            after: new { Order = tabs.Select(t => new { t.Id, t.Label, t.SortOrder }).ToArray() });
     }
 
     // Single helper for write paths — drops every cache entry under this
@@ -360,6 +402,14 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@Label", label));
         var newId = (int)(await cmd.ExecuteScalarAsync())!;
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Create,
+            resourceType: AuditResources.DashboardSection,
+            resourceId: ResId(companyId, newId),
+            resourceLabel: $"Section '{label}' (tab {tabId})",
+            before: null,
+            after: new { TabId = tabId, Id = newId, Label = label });
         return new MasterDashboardSection { Id = newId, TabId = tabId, Label = label };
     }
 
@@ -377,6 +427,14 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@Id", sectionId));
         await cmd.ExecuteNonQueryAsync();
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Update,
+            resourceType: AuditResources.DashboardSection,
+            resourceId: ResId(companyId.Value, sectionId),
+            resourceLabel: $"Section renamed to '{label}'",
+            before: null,
+            after: new { Id = sectionId, Label = label });
     }
 
     public async Task UpdateSectionOrderAsync(List<MasterDashboardSection> sections, string? userEmail)
@@ -401,6 +459,14 @@ public class MasterDashboardService : IMasterDashboardService
             await cmd.ExecuteNonQueryAsync();
         }
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Reorder,
+            resourceType: AuditResources.DashboardSection,
+            resourceId: companyId.Value.ToString(),
+            resourceLabel: $"{sections.Count} sections",
+            before: null,
+            after: new { Order = sections.Select(s => new { s.Id, s.Label, s.SortOrder }).ToArray() });
     }
 
     public async Task RemoveSectionAsync(int sectionId, string? userEmail)
@@ -436,6 +502,15 @@ public class MasterDashboardService : IMasterDashboardService
 
         await tx.CommitAsync();
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Delete,
+            resourceType: AuditResources.DashboardSection,
+            resourceId: ResId(companyId.Value, sectionId),
+            resourceLabel: null,
+            before: new { Id = sectionId },
+            after: null,
+            notes: "tiles fell back to (no section)");
     }
 
     public async Task SetSectionCollapsedAsync(int sectionId, bool collapsed, string? userEmail)
@@ -548,6 +623,15 @@ public class MasterDashboardService : IMasterDashboardService
 
         await tx.CommitAsync();
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Update,
+            resourceType: AuditResources.DashboardSection,
+            resourceId: ResId(sourceCompanyId.Value, sectionId),
+            resourceLabel: $"Section moved to tab {targetTabId}",
+            before: null,
+            after: new { SectionId = sectionId, TargetTabId = targetTabId },
+            notes: "section + child tiles reseated");
     }
 
     public async Task MoveTileToSectionAsync(int tileId, int? sectionId, string? userEmail)
@@ -578,30 +662,78 @@ public class MasterDashboardService : IMasterDashboardService
         InvalidateLayoutCache();
     }
 
-    public Task<List<SavedReport>> GetAvailableReportsAsync(Guid companyId) =>
+    public Task<List<SavedReport>> GetAvailableReportsAsync(Guid companyId, string? userId = null) =>
         _cache.GetOrAddAsync(
-            ConfigDbCache.Key("MasterDashboardService", "AvailableReports", companyId),
+            // Cache key is per-(company, user) because the shared-with-me
+            // arm of the UNION is user-specific. Same user revisiting the
+            // picker hits the cache; share grants/revokes invalidate via
+            // the "MasterDashboardService:" prefix from the share service.
+            ConfigDbCache.Key("MasterDashboardService", "AvailableReports", companyId, userId ?? string.Empty),
             async () =>
             {
                 var reports = new List<SavedReport>();
                 await using var conn = new SqlConnection(_connectionString);
                 await conn.OpenAsync();
-                // Reports are company-scoped too (saved_reports.company_id). Only
-                // surface candidates that belong to the current company so tiles
-                // can't accidentally pull another company's data.
+                // Two-arm UNION, both scoped to the user's current company:
+                //  1) Company-scoped: any report whose company_id matches
+                //     the user's current company and has ShowOnMaster on.
+                //     Mirrors the original behavior — every user in the
+                //     company can pin any Power User's ShowOnMaster report.
+                //  2) Shared-with-me: a report explicitly shared to the
+                //     user via RPT_report_shares — STILL constrained to
+                //     the user's current company. Shares from reports in
+                //     other companies never surface here; pinning a
+                //     foreign-company report would let the user reach data
+                //     their company-access grants don't include.
+                // UNION dedupes so a report that's both owner-in-company
+                // AND shared with the user surfaces once. The ShowOnMaster
+                // filter applies to both arms — owner controls eligibility.
                 //
-                // Pull filters + updated_at so the AddTileDialog can show a per-row
-                // subtitle distinguishing reports that share a name (e.g. one
-                // "Active Pipeline" per loan type). Sort by name then most-recently-
-                // edited so duplicates cluster and the freshest copy is on top.
-                await using var cmd = new SqlCommand(@"
-                    SELECT id, name, internal_name, owner_id, filters, column_state, updated_at
-                    FROM EMPOWER.RPT_saved_reports
-                    WHERE company_id = @CompanyId
-                      AND (column_state LIKE '%""ShowOnMaster"":true%'
-                           OR column_state LIKE '%""ShowOnMaster"": true%')
-                    ORDER BY ISNULL(internal_name, name), updated_at DESC", conn);
+                // Pull filters + updated_at so the AddTileDialog can show a
+                // per-row subtitle distinguishing reports that share a name.
+                // Sort by name then most-recently-edited so duplicates
+                // cluster and the freshest copy is on top.
+                //
+                // When userId is null/empty the shared arm is skipped — keeps
+                // the legacy plan for callers that pass company only.
+                // owner_email is projected so the personal-pin picker can
+                // filter out reports authored by an admin (caller checks
+                // the email against the admin roster). The admin
+                // "Add Report" flow ignores the column.
+                // Wrap the UNION arms in a derived table so the ORDER BY can
+                // reference the ISNULL() expression. SQL Server otherwise
+                // rejects ORDER BY expressions against a UNION ("must appear
+                // in the select list") even though both source columns ARE
+                // in the SELECT — the restriction is about the expression
+                // shape, not the underlying columns.
+                var sql = string.IsNullOrEmpty(userId)
+                    ? @"SELECT id, name, internal_name, owner_id, owner_email, filters, column_state, updated_at
+                        FROM EMPOWER.RPT_saved_reports
+                        WHERE company_id = @CompanyId
+                          AND (column_state LIKE '%""ShowOnMaster"":true%'
+                               OR column_state LIKE '%""ShowOnMaster"": true%')
+                        ORDER BY ISNULL(internal_name, name), updated_at DESC"
+                    : @"SELECT id, name, internal_name, owner_id, owner_email, filters, column_state, updated_at
+                        FROM (
+                            SELECT id, name, internal_name, owner_id, owner_email, filters, column_state, updated_at
+                            FROM EMPOWER.RPT_saved_reports
+                            WHERE company_id = @CompanyId
+                              AND (column_state LIKE '%""ShowOnMaster"":true%'
+                                   OR column_state LIKE '%""ShowOnMaster"": true%')
+                            UNION
+                            SELECT r.id, r.name, r.internal_name, r.owner_id, r.owner_email, r.filters, r.column_state, r.updated_at
+                            FROM EMPOWER.RPT_saved_reports r
+                            INNER JOIN EMPOWER.RPT_report_shares s ON s.report_id = r.id
+                            WHERE s.shared_with_id = @UserId
+                              AND r.company_id = @CompanyId
+                              AND (r.column_state LIKE '%""ShowOnMaster"":true%'
+                                   OR r.column_state LIKE '%""ShowOnMaster"": true%')
+                        ) AS combined
+                        ORDER BY ISNULL(internal_name, name), updated_at DESC";
+                await using var cmd = new SqlCommand(sql, conn);
                 cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
+                if (!string.IsNullOrEmpty(userId))
+                    cmd.Parameters.Add(new SqlParameter("@UserId", userId));
 
                 await using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
@@ -612,9 +744,10 @@ public class MasterDashboardService : IMasterDashboardService
                         Name = reader.GetString(1),
                         InternalName = reader.IsDBNull(2) ? null : reader.GetString(2),
                         OwnerId = reader.GetString(3),
-                        Filters = reader.IsDBNull(4) ? null : reader.GetString(4),
-                        ColumnState = reader.IsDBNull(5) ? null : reader.GetString(5),
-                        UpdatedAt = reader.GetDateTime(6)
+                        OwnerEmail = reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                        Filters = reader.IsDBNull(5) ? null : reader.GetString(5),
+                        ColumnState = reader.IsDBNull(6) ? null : reader.GetString(6),
+                        UpdatedAt = reader.GetDateTime(7)
                     });
                 }
                 return reports;
@@ -664,6 +797,14 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@SectionId", (object?)sectionId ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync();
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Create,
+            resourceType: AuditResources.DashboardTile,
+            resourceId: $"{companyId}#tab{tabId}#report{reportId}",
+            resourceLabel: $"Tile for report {reportId} (tab {tabId})",
+            before: null,
+            after: new { CompanyId = companyId, TabId = tabId, ReportId = reportId, ColSpan = colSpan, SectionId = sectionId });
     }
 
     public async Task MoveTileToTabAsync(int tileId, int targetTabId, string? userEmail)
@@ -702,6 +843,15 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@TargetTabId", targetTabId));
         await cmd.ExecuteNonQueryAsync();
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Update,
+            resourceType: AuditResources.DashboardTile,
+            resourceId: ResId(companyId.Value, tileId),
+            resourceLabel: $"Tile moved to tab {targetTabId}",
+            before: null,
+            after: new { TileId = tileId, TargetTabId = targetTabId },
+            notes: "tile re-tabbed");
     }
 
     public async Task RemoveTileAsync(int tileId, string? userEmail)
@@ -717,6 +867,14 @@ public class MasterDashboardService : IMasterDashboardService
         cmd.Parameters.Add(new SqlParameter("@Id", tileId));
         await cmd.ExecuteNonQueryAsync();
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Delete,
+            resourceType: AuditResources.DashboardTile,
+            resourceId: ResId(companyId.Value, tileId),
+            resourceLabel: null,
+            before: new { TileId = tileId },
+            after: null);
     }
 
     public async Task UpdateLayoutAsync(List<MasterDashboardTile> tiles, string? userEmail)
@@ -742,6 +900,305 @@ public class MasterDashboardService : IMasterDashboardService
             await cmd.ExecuteNonQueryAsync();
         }
         InvalidateLayoutCache();
+        await _audit.LogAsync(
+            actorEmail: userEmail,
+            action: AuditActions.Reorder,
+            resourceType: AuditResources.DashboardTile,
+            resourceId: tiles[0].CompanyId.ToString(),
+            resourceLabel: $"{tiles.Count} tiles (layout)",
+            before: null,
+            after: new { Tiles = tiles.Select(t => new { t.Id, t.SortOrder, t.ColSpan, t.Height, t.TitleAlign }).ToArray() });
+    }
+
+    // ── Per-user personal tile pins ──
+    // Layered on top of the shared tiles; only the owning user sees them.
+    // No admin gate — every user can manage their own pins. The
+    // MasterDashboard loads shared + personal for the active tab and
+    // merges by sort_order at render time.
+    //
+    // Cache: not cached. Personal pin sets are small (single-digit rows
+    // typical), reads happen on tab activation, and adding a cache layer
+    // would need per-user key shapes that fragment the cache pool.
+
+    public async Task<List<MasterDashboardTile>> GetPersonalTilesAsync(string userId, Guid companyId, int tabId)
+    {
+        var tiles = new List<MasterDashboardTile>();
+        if (string.IsNullOrWhiteSpace(userId)) return tiles;
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        // Join RPT_saved_reports for ReportName (matches the shared-tile
+        // SELECT shape exactly so the in-memory model is identical apart
+        // from IsPersonal). Guard with TRY/CATCH on object-missing so an
+        // env that hasn't applied the 2026-06-02 migration yet just sees
+        // an empty personal layer instead of an exception.
+        try
+        {
+            await using var cmd = new SqlCommand(@"
+                SELECT t.id, t.company_id, t.tab_id, t.report_id, r.name,
+                       t.sort_order, t.col_span, t.height, t.title_align, t.section_id
+                FROM EMPOWER.RPT_master_dashboard_personal_tiles t
+                INNER JOIN EMPOWER.RPT_saved_reports r ON r.id = t.report_id
+                WHERE t.user_id = @UserId AND t.company_id = @CompanyId AND t.tab_id = @TabId
+                ORDER BY t.sort_order", conn);
+            cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+            cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
+            cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                tiles.Add(new MasterDashboardTile
+                {
+                    Id = reader.GetInt32(0),
+                    CompanyId = reader.GetGuid(1),
+                    TabId = reader.GetInt32(2),
+                    ReportId = reader.GetGuid(3),
+                    ReportName = reader.GetString(4),
+                    SortOrder = reader.GetInt32(5),
+                    ColSpan = reader.GetInt32(6),
+                    Height = reader.GetInt32(7),
+                    TitleAlign = reader.IsDBNull(8) ? "left" : reader.GetString(8),
+                    SectionId = reader.IsDBNull(9) ? null : reader.GetInt32(9),
+                    IsPersonal = true
+                });
+            }
+        }
+        catch (SqlException ex) when (ex.IsObjectMissing())
+        {
+            // Migration hasn't run on this DB yet — return empty so the
+            // dashboard renders the shared layer only. The exception text
+            // surfaces in the bound ILogger output if anyone tails it;
+            // MasterDashboardService doesn't carry its own ILogger field
+            // (consistent with the rest of the service's exception
+            // handling, e.g. RemoveTabAsync), so this is intentionally
+            // a silent swallow.
+            _ = ex;
+        }
+        return tiles;
+    }
+
+    public async Task<MasterDashboardTile> AddPersonalTileAsync(
+        string userId, Guid companyId, int tabId, Guid reportId,
+        int colSpan = 12, int? sectionId = null)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+            throw new ArgumentException("userId is required.", nameof(userId));
+
+        // Section sanity-check: when supplied, the section must belong to
+        // the same tab. Mirrors the guard on AddTileAsync — users picking
+        // a section from the active tab's section list shouldn't be able
+        // to slip in another tab's section id by API misuse.
+        if (sectionId is int sid)
+        {
+            await using var verifyConn = new SqlConnection(_connectionString);
+            await verifyConn.OpenAsync();
+            await using var verifyCmd = new SqlCommand(
+                "SELECT tab_id FROM EMPOWER.RPT_master_dashboard_sections WHERE id = @Id", verifyConn);
+            verifyCmd.Parameters.Add(new SqlParameter("@Id", sid));
+            var sectionTabIdObj = await verifyCmd.ExecuteScalarAsync();
+            var sectionTabId = sectionTabIdObj is int v ? (int?)v : null;
+            if (sectionTabId is null || sectionTabId.Value != tabId)
+                throw new InvalidOperationException(
+                    "Cannot pin under a section that doesn't belong to the chosen tab.");
+        }
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        // Cross-company guard: the report being pinned MUST belong to the
+        // same company the user is pinning under. Personal pins never
+        // cross company boundaries — even a report shared with the user
+        // has to live in their current company to be pinnable (the picker
+        // already enforces this on its SQL side; this is the defense-in-
+        // depth check so a bypassed UI can't slip a foreign-company
+        // report id through here).
+        await using (var ccCheck = new SqlCommand(
+            "SELECT company_id FROM EMPOWER.RPT_saved_reports WHERE id = @Id", conn))
+        {
+            ccCheck.Parameters.Add(new SqlParameter("@Id", reportId));
+            var reportCompanyObj = await ccCheck.ExecuteScalarAsync();
+            var reportCompanyId = reportCompanyObj is Guid rc ? (Guid?)rc : null;
+            if (reportCompanyId is null)
+                throw new InvalidOperationException("Report not found.");
+            if (reportCompanyId.Value != companyId)
+                throw new InvalidOperationException(
+                    "Personal pins must belong to the same company. " +
+                    "Cross-company pinning is not supported.");
+        }
+        // MERGE so re-adding the same report on the same tab is idempotent
+        // (the unique index would otherwise throw). On match, leave the
+        // existing row untouched — the user already had it pinned, no
+        // re-position. OUTPUT returns the id of the inserted (or matched)
+        // row so the caller can build the in-memory tile.
+        await using var cmd = new SqlCommand(@"
+            MERGE EMPOWER.RPT_master_dashboard_personal_tiles AS t
+            USING (SELECT @UserId AS user_id, @TabId AS tab_id, @ReportId AS report_id) AS s
+               ON t.user_id = s.user_id AND t.tab_id = s.tab_id AND t.report_id = s.report_id
+            WHEN NOT MATCHED THEN
+                INSERT (user_id, company_id, tab_id, report_id, sort_order, col_span, section_id)
+                VALUES (@UserId, @CompanyId, @TabId, @ReportId,
+                        ISNULL((SELECT MAX(sort_order) + 1
+                                  FROM EMPOWER.RPT_master_dashboard_personal_tiles
+                                 WHERE user_id = @UserId AND tab_id = @TabId), 0),
+                        @ColSpan, @SectionId)
+            OUTPUT INSERTED.id, INSERTED.sort_order, INSERTED.col_span,
+                   INSERTED.height, INSERTED.title_align, INSERTED.section_id;",
+            conn);
+        cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+        cmd.Parameters.Add(new SqlParameter("@CompanyId", companyId));
+        cmd.Parameters.Add(new SqlParameter("@TabId", tabId));
+        cmd.Parameters.Add(new SqlParameter("@ReportId", reportId));
+        cmd.Parameters.Add(new SqlParameter("@ColSpan", colSpan));
+        cmd.Parameters.Add(new SqlParameter("@SectionId", (object?)sectionId ?? DBNull.Value));
+
+        int newId = 0, sortOrder = 0, persistedColSpan = colSpan, height = 500;
+        string? titleAlign = null;
+        int? persistedSectionId = sectionId;
+        await using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            if (await reader.ReadAsync())
+            {
+                newId = reader.GetInt32(0);
+                sortOrder = reader.GetInt32(1);
+                persistedColSpan = reader.GetInt32(2);
+                height = reader.GetInt32(3);
+                titleAlign = reader.IsDBNull(4) ? null : reader.GetString(4);
+                persistedSectionId = reader.IsDBNull(5) ? null : reader.GetInt32(5);
+            }
+        }
+
+        // OUTPUT returns nothing for the WHEN MATCHED branch (we left the
+        // row alone). Re-query to surface the existing tile so the caller
+        // always gets a populated row.
+        if (newId == 0)
+        {
+            await using var rq = new SqlCommand(@"
+                SELECT id, sort_order, col_span, height, title_align, section_id
+                  FROM EMPOWER.RPT_master_dashboard_personal_tiles
+                 WHERE user_id = @UserId AND tab_id = @TabId AND report_id = @ReportId;",
+                conn);
+            rq.Parameters.Add(new SqlParameter("@UserId", userId));
+            rq.Parameters.Add(new SqlParameter("@TabId", tabId));
+            rq.Parameters.Add(new SqlParameter("@ReportId", reportId));
+            await using var rqReader = await rq.ExecuteReaderAsync();
+            if (await rqReader.ReadAsync())
+            {
+                newId = rqReader.GetInt32(0);
+                sortOrder = rqReader.GetInt32(1);
+                persistedColSpan = rqReader.GetInt32(2);
+                height = rqReader.GetInt32(3);
+                titleAlign = rqReader.IsDBNull(4) ? null : rqReader.GetString(4);
+                persistedSectionId = rqReader.IsDBNull(5) ? null : rqReader.GetInt32(5);
+            }
+        }
+
+        // Fetch report name in one extra round-trip so the caller doesn't
+        // have to re-resolve. Small cost on what's already an admin action.
+        string reportName = string.Empty;
+        await using (var nameCmd = new SqlCommand(
+            "SELECT name FROM EMPOWER.RPT_saved_reports WHERE id = @Id;", conn))
+        {
+            nameCmd.Parameters.Add(new SqlParameter("@Id", reportId));
+            var nm = await nameCmd.ExecuteScalarAsync();
+            reportName = nm as string ?? string.Empty;
+        }
+
+        return new MasterDashboardTile
+        {
+            Id = newId,
+            CompanyId = companyId,
+            TabId = tabId,
+            ReportId = reportId,
+            ReportName = reportName,
+            SortOrder = sortOrder,
+            ColSpan = persistedColSpan,
+            Height = height,
+            TitleAlign = string.IsNullOrEmpty(titleAlign) ? "left" : titleAlign!,
+            SectionId = persistedSectionId,
+            IsPersonal = true
+        };
+    }
+
+    public async Task<HashSet<Guid>> GetPersonalPlacedReportIdsAsync(string userId)
+    {
+        var result = new HashSet<Guid>();
+        if (string.IsNullOrWhiteSpace(userId)) return result;
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        try
+        {
+            // SELECT DISTINCT is cheap on the IX_personal_tiles_user_company_tab
+            // index — user_id is the leading column, so it's a focused range
+            // scan even at scale.
+            await using var cmd = new SqlCommand(@"
+                SELECT DISTINCT report_id
+                  FROM EMPOWER.RPT_master_dashboard_personal_tiles
+                 WHERE user_id = @UserId;", conn);
+            cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                result.Add(reader.GetGuid(0));
+        }
+        catch (SqlException ex) when (ex.IsObjectMissing())
+        {
+            // Migration not applied yet — no personal pins exist, so the
+            // empty set is the correct fallback. Consistent with the
+            // GetPersonalTilesAsync handler above.
+            _ = ex;
+        }
+        return result;
+    }
+
+    public async Task RemovePersonalTileAsync(string userId, int personalTileId)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return;
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        // user_id in the WHERE clause IS the authorization — a user can
+        // only remove their own pins. Calling with someone else's tile id
+        // matches zero rows and silently no-ops.
+        await using var cmd = new SqlCommand(@"
+            DELETE FROM EMPOWER.RPT_master_dashboard_personal_tiles
+             WHERE id = @Id AND user_id = @UserId;", conn);
+        cmd.Parameters.Add(new SqlParameter("@Id", personalTileId));
+        cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    // Persist personal-pin layout changes (size + title alignment). Unlike
+    // the shared/canonical path (UpdateLayoutAsync) which is admin-only and
+    // batches a whole tab's worth at once, this fires immediately on each
+    // resize/align mutation because personal pins have no "Save Layout"
+    // button — users aren't in edit mode when they tweak their own tiles.
+    // user_id in the WHERE is the authorization (same posture as the
+    // remove path); foreign tile ids silently no-op.
+    //
+    // titleAlign: pass "left", "center", "right" (or null to clear back to
+    // default). Any other string passes through verbatim — the rendering
+    // side falls back to "left" for unrecognized values.
+    public async Task UpdatePersonalTileLayoutAsync(string userId, int personalTileId,
+        int colSpan, int height, string? titleAlign)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return;
+
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand(@"
+            UPDATE EMPOWER.RPT_master_dashboard_personal_tiles
+               SET col_span    = @ColSpan,
+                   height      = @Height,
+                   title_align = @TitleAlign
+             WHERE id = @Id AND user_id = @UserId;", conn);
+        cmd.Parameters.Add(new SqlParameter("@Id", personalTileId));
+        cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+        cmd.Parameters.Add(new SqlParameter("@ColSpan", colSpan));
+        cmd.Parameters.Add(new SqlParameter("@Height", height));
+        cmd.Parameters.Add(new SqlParameter("@TitleAlign",
+            string.IsNullOrWhiteSpace(titleAlign) ? (object)DBNull.Value : titleAlign));
+        await cmd.ExecuteNonQueryAsync();
     }
 
     // ── Per-user tab visibility ──

@@ -1,0 +1,261 @@
+@using TleReportingDashboard.Web.Services
+@using System.Text.Json
+@inject IAuditLogger Audit
+
+@*
+    SOC-2 review surface — read-only listing of the RPT_audit_log table.
+    Filter by actor / resource type / action / date range; cursor-paginated
+    so the "Load more" stays stable under concurrent writes. Click a row to
+    expand the before/after JSON in place.
+
+    No write paths in this component on purpose. Auditors expect the review
+    surface to be observation-only — even an admin shouldn't be able to
+    "fix up" an audit entry from the UI.
+*@
+<MudStack Spacing="3" Class="pa-2">
+    <MudText Typo="Typo.body2" Color="Color.Secondary">
+        Read-only review of admin actions that affect security, access, or
+        shared configuration. End-user content (saved reports, personal
+        preferences) is intentionally out of scope and not recorded here.
+    </MudText>
+
+    <MudPaper Elevation="0" Class="pa-3" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+            <MudDateRangePicker @bind-DateRange="_dateRange"
+                                Label="Date range (UTC)"
+                                Variant="Variant.Outlined" Margin="Margin.Dense"
+                                Style="max-width: 240px;"
+                                PickerVariant="PickerVariant.Dialog" ShowToolbar="false" />
+            <MudSelect T="string" @bind-Value="_actor" Label="Actor"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense Clearable
+                       Style="min-width: 220px;">
+                <MudSelectItem T="string" Value="@(string.Empty)">(any)</MudSelectItem>
+                @foreach (var a in _knownActors)
+                {
+                    <MudSelectItem T="string" Value="@a">@a</MudSelectItem>
+                }
+            </MudSelect>
+            <MudSelect T="string" @bind-Value="_resourceType" Label="Resource type"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense Clearable
+                       Style="min-width: 180px;">
+                <MudSelectItem T="string" Value="@(string.Empty)">(any)</MudSelectItem>
+                @foreach (var r in AuditResources.All)
+                {
+                    <MudSelectItem T="string" Value="@r">@r</MudSelectItem>
+                }
+            </MudSelect>
+            <MudSelect T="string" @bind-Value="_action" Label="Action"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Dense Clearable
+                       Style="min-width: 160px;">
+                <MudSelectItem T="string" Value="@(string.Empty)">(any)</MudSelectItem>
+                @foreach (var a in AuditActions.All)
+                {
+                    <MudSelectItem T="string" Value="@a">@a</MudSelectItem>
+                }
+            </MudSelect>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Outlined.Search"
+                       OnClick="ApplyFiltersAsync">Apply</MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Default"
+                       OnClick="ResetFiltersAsync">Reset</MudButton>
+        </MudStack>
+    </MudPaper>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate Color="Color.Primary" />
+    }
+    else if (_entries.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Dense>
+            No audit entries match the current filters. The log starts collecting on the next admin action.
+        </MudAlert>
+    }
+    else
+    {
+        <MudTable Items="_entries" Dense Hover T="AuditEntry"
+                  OnRowClick="@((TableRowClickEventArgs<AuditEntry> args) => { if (args.Item is not null) ToggleExpand(args.Item); })">
+            <HeaderContent>
+                <MudTh Style="width: 170px;">When (UTC)</MudTh>
+                <MudTh Style="width: 220px;">Actor</MudTh>
+                <MudTh Style="width: 90px;">Action</MudTh>
+                <MudTh Style="width: 140px;">Resource</MudTh>
+                <MudTh>Label</MudTh>
+                <MudTh Style="width: 60px;"></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.OccurredAtUtc.ToString("yyyy-MM-dd HH:mm:ss")</MudTd>
+                <MudTd>@(string.IsNullOrWhiteSpace(context.ActorEmail) ? "(system)" : context.ActorEmail)</MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                             Color="@ActionColor(context.Action)">@context.Action</MudChip>
+                </MudTd>
+                <MudTd>@context.ResourceType</MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2" Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px;">
+                        @(context.ResourceLabel ?? context.ResourceId ?? "")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudIcon Icon="@(_expandedId == context.Id ? Icons.Material.Outlined.ExpandLess : Icons.Material.Outlined.ExpandMore)"
+                             Size="Size.Small" />
+                </MudTd>
+            </RowTemplate>
+            <ChildRowContent>
+                @if (_expandedId == context.Id)
+                {
+                    <MudTr>
+                        <td colspan="6" style="background: #FAFAFA; padding: 12px;">
+                            @if (!string.IsNullOrEmpty(context.Notes))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                                    <strong>Notes:</strong> @context.Notes
+                                </MudText>
+                            }
+                            <MudGrid Spacing="2">
+                                <MudItem xs="12" md="6">
+                                    <MudText Typo="Typo.overline" Color="Color.Secondary"
+                                             Style="letter-spacing: 0.5px;">Before</MudText>
+                                    <pre style="font-family: monospace; font-size: 0.75rem;
+                                                white-space: pre-wrap; background: #FFFFFF;
+                                                border: 1px solid #E8EAED; border-radius: 4px;
+                                                padding: 8px; margin: 4px 0 0; max-height: 320px; overflow: auto;">@FormatJson(context.BeforeJson)</pre>
+                                </MudItem>
+                                <MudItem xs="12" md="6">
+                                    <MudText Typo="Typo.overline" Color="Color.Secondary"
+                                             Style="letter-spacing: 0.5px;">After</MudText>
+                                    <pre style="font-family: monospace; font-size: 0.75rem;
+                                                white-space: pre-wrap; background: #FFFFFF;
+                                                border: 1px solid #E8EAED; border-radius: 4px;
+                                                padding: 8px; margin: 4px 0 0; max-height: 320px; overflow: auto;">@FormatJson(context.AfterJson)</pre>
+                                </MudItem>
+                            </MudGrid>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">
+                                Id #@context.Id
+                                @if (!string.IsNullOrEmpty(context.ResourceId))
+                                {
+                                    <span> · resource <code>@context.ResourceId</code></span>
+                                }
+                                @if (!string.IsNullOrEmpty(context.CorrelationId))
+                                {
+                                    <span> · correlation <code>@context.CorrelationId</code></span>
+                                }
+                            </MudText>
+                        </td>
+                    </MudTr>
+                }
+            </ChildRowContent>
+        </MudTable>
+
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mt-2">
+            @if (_canLoadMore)
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Outlined.Refresh"
+                           OnClick="LoadMoreAsync">Load older</MudButton>
+            }
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                Showing @_entries.Count entries.
+            </MudText>
+        </MudStack>
+    }
+</MudStack>
+
+@code {
+    private bool _loading = true;
+    private List<AuditEntry> _entries = new();
+    private List<string> _knownActors = new();
+
+    private DateRange? _dateRange;
+    private string _actor = string.Empty;
+    private string _resourceType = string.Empty;
+    private string _action = string.Empty;
+
+    private long? _expandedId;
+    private bool _canLoadMore;
+
+    private const int PageSize = 200;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { _knownActors = await Audit.GetDistinctActorsAsync(); }
+        catch { _knownActors = new(); /* non-fatal — the picker just shows the bare list */ }
+        await LoadFreshAsync();
+    }
+
+    private async Task LoadFreshAsync()
+    {
+        _loading = true;
+        try
+        {
+            var q = BuildQuery(beforeId: null);
+            _entries = await Audit.QueryAsync(q);
+            _canLoadMore = _entries.Count >= PageSize;
+            _expandedId = null;
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (_entries.Count == 0) return;
+        var olderThan = _entries[^1].Id;
+        var q = BuildQuery(beforeId: olderThan);
+        var more = await Audit.QueryAsync(q);
+        _entries.AddRange(more);
+        _canLoadMore = more.Count >= PageSize;
+    }
+
+    private AuditQuery BuildQuery(long? beforeId) => new()
+    {
+        // DateRangePicker hands back local dates at midnight; treat both as
+        // UTC bounds — auditors care about ordering more than tzoffsets,
+        // and the column is recorded UTC.
+        FromUtc      = _dateRange?.Start,
+        ToUtc        = _dateRange?.End?.AddDays(1),  // inclusive end-of-day
+        ActorEmail   = string.IsNullOrWhiteSpace(_actor) ? null : _actor,
+        ResourceType = string.IsNullOrWhiteSpace(_resourceType) ? null : _resourceType,
+        Action       = string.IsNullOrWhiteSpace(_action) ? null : _action,
+        Take         = PageSize,
+        BeforeId     = beforeId
+    };
+
+    private async Task ApplyFiltersAsync()    => await LoadFreshAsync();
+    private async Task ResetFiltersAsync()
+    {
+        _dateRange = null;
+        _actor = string.Empty;
+        _resourceType = string.Empty;
+        _action = string.Empty;
+        await LoadFreshAsync();
+    }
+
+    private void ToggleExpand(AuditEntry e) =>
+        _expandedId = _expandedId == e.Id ? null : e.Id;
+
+    // Pretty-print JSON for the drill-in panel. Tolerates non-JSON strings
+    // (older rows or fallbacks) by returning them as-is.
+    private static string FormatJson(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "(none)";
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch { return raw; }
+    }
+
+    private static Color ActionColor(string action) => action switch
+    {
+        AuditActions.Grant   => Color.Success,
+        AuditActions.Revoke  => Color.Error,
+        AuditActions.Create  => Color.Success,
+        AuditActions.Delete  => Color.Error,
+        AuditActions.Enable  => Color.Success,
+        AuditActions.Disable => Color.Warning,
+        AuditActions.Hide    => Color.Warning,
+        AuditActions.Show    => Color.Info,
+        _                    => Color.Default
+    };
+}

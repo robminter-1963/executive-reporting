@@ -68,6 +68,9 @@ public partial class SchemaService : ISchemaService
                 JoinIds = MergeJoinIds(field.JoinId, field.JoinIds),
                 SqlJoin = field.SqlJoin,
                 LookupIds = field.LookupIds,
+                LookupTypeId = field.LookupTypeId,
+                FilterPredicateSql = field.FilterPredicateSql,
+                FilterColumn = field.FilterColumn,
                 SortOrder = index,
                 MaxLength = field.MaxLength,
                 MinWidth = field.MinWidth,
@@ -129,6 +132,11 @@ public partial class SchemaService : ISchemaService
             foreach (var lookupId in fc.LookupIds)
             {
                 if (!lookupMap.TryGetValue(lookupId, out var lookup)) continue;
+
+                // Simple-mode lookups don't have a CTE preamble — they
+                // can't carry a sort expression / value-sort-order, only
+                // filter values. Skip the rest of this loop for those.
+                if (string.IsNullOrWhiteSpace(lookup.SqlPreamble)) continue;
 
                 // SortExpression first — independent of CodeSetId.
                 if (string.IsNullOrWhiteSpace(fc.SortExpression))
@@ -375,6 +383,12 @@ public partial class SchemaService : ISchemaService
             () => Task.FromResult(new List<LookupDefinition>(ResolveConfig(connectionId).Lookups)),
             bypass: _editorMode.IsActive);
 
+    public Task<List<LookupTypeDefinition>> GetLookupTypesAsync(Guid? connectionId = null) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("SchemaService", "LookupTypes", connectionId),
+            () => Task.FromResult(new List<LookupTypeDefinition>(ResolveConfig(connectionId).LookupTypes)),
+            bypass: _editorMode.IsActive);
+
     public Task<List<CustomFilterDefinition>> GetCustomFiltersAsync(Guid? connectionId = null) =>
         _cache.GetOrAddAsync(
             ConfigDbCache.Key("SchemaService", "CustomFilters", connectionId),
@@ -417,6 +431,8 @@ public partial class SchemaService : ISchemaService
                         Description = f.Description,
                         FieldType = f.FieldType,
                         CodeSetId = f.CodeSetId,
+                        LookupTypeId = f.LookupTypeId,
+                        FilterColumn = f.FilterColumn,
                         RolesRequired = f.RolesRequired,
                         DefaultRedactionValue = f.DefaultRedactionValue,
                         SqlExpression = f.SqlExpression,

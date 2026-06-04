@@ -685,6 +685,65 @@ CREATE TABLE EMPOWER.RPT_company_kpis (
 CREATE INDEX IX_company_kpis_company_sort
     ON EMPOWER.RPT_company_kpis (company_id, sort_order);
 
+-- ── master_dashboard_personal_tiles ──────────────────────────────────────
+-- Per-user pins layered on top of the shared canonical layout. Lets a
+-- non-admin report owner add their own reports to a tab without unlocking
+-- the shared layout. Visibility scoped to (user_id, company_id, tab_id);
+-- the dashboard merges shared + personal at render time. See migration
+-- 2026-06-02_10-00 for the rationale on FK cascade choices.
+CREATE TABLE EMPOWER.RPT_master_dashboard_personal_tiles (
+    id              INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    user_id         NVARCHAR(128)    NOT NULL,
+    company_id      UNIQUEIDENTIFIER NOT NULL
+                    REFERENCES EMPOWER.RPT_companies(id) ON DELETE CASCADE,
+    tab_id          INT              NOT NULL
+                    REFERENCES EMPOWER.RPT_master_dashboard_tabs(id) ON DELETE CASCADE,
+    report_id       UNIQUEIDENTIFIER NOT NULL
+                    REFERENCES EMPOWER.RPT_saved_reports(id) ON DELETE CASCADE,
+    sort_order      INT              NOT NULL DEFAULT 0,
+    col_span        INT              NOT NULL DEFAULT 12,
+    height          INT              NOT NULL DEFAULT 500,
+    title_align     NVARCHAR(10)     NULL,
+    section_id      INT              NULL
+                    REFERENCES EMPOWER.RPT_master_dashboard_sections(id) ON DELETE NO ACTION,
+    created_at      DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME()
+);
+CREATE INDEX IX_personal_tiles_user_company_tab
+    ON EMPOWER.RPT_master_dashboard_personal_tiles (user_id, company_id, tab_id, sort_order);
+CREATE UNIQUE INDEX UX_personal_tiles_user_tab_report
+    ON EMPOWER.RPT_master_dashboard_personal_tiles (user_id, tab_id, report_id);
+
+-- ── audit_log ────────────────────────────────────────────────────────────
+-- SOC-2 change-management trail for security-affecting admin actions.
+-- Append-only by convention (do not UPDATE or DELETE from app code).
+-- Scope explicitly EXCLUDES end-user content (saved reports, personal
+-- preferences, favorites). Records admin actions on admins, roles, users,
+-- companies, connections, library sections, table aliases, custom filters,
+-- and the shared per-company master dashboard layout.
+CREATE TABLE EMPOWER.RPT_audit_log (
+    id              BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    occurred_at     DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    actor_email     NVARCHAR(256)    NULL,
+    actor_user_id   NVARCHAR(128)    NULL,
+    -- 'create' | 'update' | 'delete' | 'grant' | 'revoke' | 'enable' |
+    -- 'disable' | 'reorder' (see AuditActions).
+    action          NVARCHAR(32)     NOT NULL,
+    -- See AuditResources for the resource-type vocabulary.
+    resource_type   NVARCHAR(64)     NOT NULL,
+    resource_id     NVARCHAR(128)    NULL,
+    resource_label  NVARCHAR(500)    NULL,
+    before_json     NVARCHAR(MAX)    NULL,
+    after_json      NVARCHAR(MAX)    NULL,
+    correlation_id  NVARCHAR(64)     NULL,
+    notes           NVARCHAR(500)    NULL
+);
+CREATE INDEX IX_audit_log_occurred_at
+    ON EMPOWER.RPT_audit_log (occurred_at DESC);
+CREATE INDEX IX_audit_log_actor
+    ON EMPOWER.RPT_audit_log (actor_email, occurred_at DESC);
+CREATE INDEX IX_audit_log_resource
+    ON EMPOWER.RPT_audit_log (resource_type, resource_id, occurred_at DESC);
+
 -- ============================================================================
 -- Seed data
 -- ============================================================================
@@ -728,7 +787,7 @@ VALUES (1, N'{"mode":"light","primary":"#4F46E5","accent":"#10B981"}', NULL, 'se
 INSERT INTO EMPOWER.RPT_roles (name, description, sort_order, scope_rule, admin_sections)
 VALUES
     ('Administrator',  'Full access to every admin section. Sees every active company.', 0, 'all',
-        N'["companies","db_connections","users","roles","team_builder","schedules","schema_history","schema_builder","promotion","theme","app_settings","column_widths"]'),
+        N'["companies","db_connections","users","roles","team_builder","schedules","schema_history","schema_builder","promotion","theme","app_settings","column_widths","audit_log"]'),
     ('System Support', 'Cross-company visibility with configurable admin-section access.', 1, 'all',
         N'["companies","db_connections","users","schedules"]');
 

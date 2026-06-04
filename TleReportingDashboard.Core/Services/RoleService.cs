@@ -7,20 +7,33 @@ public sealed class RoleService : IRoleService
     private readonly string _connStr;
     private readonly ConfigDbCache _cache;
     private readonly EditorModeState _editorMode;
+    private readonly IAuditLogger _audit;
     private readonly ILogger<RoleService> _logger;
 
     public RoleService(
         IConfiguration configuration,
         ConfigDbCache cache,
         EditorModeState editorMode,
+        IAuditLogger audit,
         ILogger<RoleService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required for RoleService.");
         _cache = cache;
         _editorMode = editorMode;
+        _audit = audit;
         _logger = logger;
     }
+
+    // Audit-safe projection. admin_sections is already a string column so
+    // travels as-is; everything else is a primitive. The Administrator
+    // pinning rule is reflected in the stored value so reviewers see what
+    // the row actually contains rather than a re-computed value.
+    private static object ForAudit(RoleRecord r) => new
+    {
+        r.Id, r.Name, r.Description, r.ScopeRule, r.IsActive, r.SortOrder,
+        r.AdminSections
+    };
 
     // Shared SELECT list — every reader pulls scope_rule + admin_sections.
     private const string RoleSelectSql =
@@ -114,7 +127,16 @@ public sealed class RoleService : IRoleService
         _cache.Invalidate("RoleService:");
 
         _logger.LogInformation("Role created: {Name} scope={Scope} by {CreatedBy}", name, scopeRule, createdBy ?? "unknown");
-        return (await GetByIdAsync(id, ct))!;
+        var created = (await GetByIdAsync(id, ct))!;
+        await _audit.LogAsync(
+            actorEmail: createdBy,
+            action: AuditActions.Create,
+            resourceType: AuditResources.Role,
+            resourceId: id.ToString(),
+            resourceLabel: $"{name} ({scopeRule})",
+            before: null,
+            after: ForAudit(created));
+        return created;
     }
 
     // Renumbers every role's sort_order to its alphabetic position with
@@ -231,6 +253,21 @@ public sealed class RoleService : IRoleService
 
         await tx.CommitAsync(ct);
         _cache.Invalidate("RoleService:");
+
+        // SOC-2: role updates are higher-risk than most config changes
+        // because they redefine what every assigned user can do. Diff
+        // before/after so a reviewer can see exactly which admin_sections
+        // or scope_rule moved.
+        var afterRecord = await GetByIdAsync(id, ct);
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Update,
+            resourceType: AuditResources.Role,
+            resourceId: id.ToString(),
+            resourceLabel: $"{name} ({scopeRule})",
+            before: existing is null ? null : ForAudit(existing),
+            after: afterRecord is null ? null : ForAudit(afterRecord));
+
         // UserManagementService.UserSelectSql LEFT-JOINs RPT_roles and
         // projects r.name AS role_name + r.admin_sections AS
         // role_admin_sections into every UserRecord. A role edit can
@@ -275,6 +312,14 @@ public sealed class RoleService : IRoleService
         _cache.Invalidate("UserManagementService:");
 
         _logger.LogInformation("Role deleted: {Id}", id);
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Delete,
+            resourceType: AuditResources.Role,
+            resourceId: id.ToString(),
+            resourceLabel: existing?.Name,
+            before: existing is null ? null : ForAudit(existing),
+            after: null);
     }
 
     public async Task UpdateSortOrderAsync(IReadOnlyList<Guid> orderedIds, CancellationToken ct = default)
@@ -300,6 +345,17 @@ public sealed class RoleService : IRoleService
         await tx.CommitAsync(ct);
         _cache.Invalidate("RoleService:");
         _logger.LogInformation("Role sort order updated: {Count} rows", orderedIds.Count);
+
+        // Reorder is cosmetic but it IS a curated shared change that
+        // affects every admin's UI. One audit row for the whole reorder.
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Reorder,
+            resourceType: AuditResources.Role,
+            resourceId: null,
+            resourceLabel: $"{orderedIds.Count} roles",
+            before: null,
+            after: new { OrderedIds = orderedIds.ToArray() });
     }
 
     private static RoleRecord Read(SqlDataReader r) => new(

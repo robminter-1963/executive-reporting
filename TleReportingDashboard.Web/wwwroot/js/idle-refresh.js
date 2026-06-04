@@ -1,10 +1,14 @@
 // Idle auto-refresh helper.
 //
-// Tracks user activity (mouse, keyboard, scroll, touch) and invokes a
-// .NET callback once `idleThresholdMs` passes with no activity. The
-// caller is expected to do the actual refresh — this module is just
-// the timer + activity listeners. Designed to be started/stopped from
-// a Blazor component's lifecycle (OnAfterRenderAsync / Dispose).
+// Tracks intentional user activity (clicks, keyboard, scroll, touch,
+// wheel) and invokes a .NET callback once `idleThresholdMs` passes
+// with none of those events. Mousemove is deliberately NOT tracked —
+// a mouse drifting across the screen (or just the OS reporting cursor
+// position) isn't engagement, and listening for it caused the watcher
+// to never fire in real-world use. The caller is expected to do the
+// actual refresh — this module is just the timer + activity listeners.
+// Designed to be started/stopped from a Blazor component's lifecycle
+// (OnAfterRenderAsync / Dispose).
 //
 // Usage from .NET:
 //     await JS.InvokeVoidAsync("startIdleWatcher", dotNetRef, 300000); // 5 min
@@ -34,7 +38,12 @@
         requestAnimationFrame(bump);
     };
 
-    const events = ['mousemove', 'mousedown', 'keydown', 'click', 'scroll', 'touchstart', 'wheel'];
+    // Intentional-engagement events only. `mousemove` is intentionally
+    // excluded — the cursor drifting across the page (or the OS reporting
+    // the cursor position on focus) shouldn't count as the user actively
+    // using the dashboard. Click / mousedown / wheel / scroll / touch /
+    // keydown all require a deliberate action.
+    const events = ['mousedown', 'keydown', 'click', 'scroll', 'touchstart', 'wheel'];
 
     const tick = () => {
         if (!dotNetRef || !thresholdMs) return;

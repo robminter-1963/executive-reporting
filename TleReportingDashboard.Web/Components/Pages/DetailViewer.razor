@@ -72,6 +72,21 @@
             font-family: var(--detail-group-header-font, inherit);
             font-size: var(--detail-group-header-size, inherit);
             padding: 6px 8px;
+            /* Sticky group label — stays visible at the top of the
+               scroll container as the user scans long groups. `top` clears
+               the sticky thead (whose effective height is ~28px at the
+               current 0.78rem font-size + 6px×2 padding + 1px border-bottom).
+               Tuned by feel: 32px left a 2px gap that body rows scrolled
+               through, 30px still showed a hair, 28px sits flush. A small
+               overlap with the thead is harmless since the thead has the
+               higher z-index and its own opaque background paints on top
+               of any seam.
+               z-index sits below the thead's z:1 so the column headers
+               stay on top when both overlap. The opaque background above
+               keeps body rows from bleeding through. */
+            position: sticky;
+            top: 28px;
+            z-index: 0;
         }
         .grouped-detail-table tr.detail-row td {
             border-top: 1px solid var(--border-subtle, #F1F3F4);
@@ -195,7 +210,12 @@
 
         @if (_error is not null)
         {
-            <MudAlert Severity="Severity.Error">@_error</MudAlert>
+            <FriendlyErrorPanel Message="@_error"
+                                Heading="Couldn't load this detail view"
+                                IsAdmin="@_isAdmin"
+                                Sql="@_errorSql"
+                                Parameters="@_errorParams"
+                                OnRetry="OnRetryFromError" />
         }
         else if (_isLoading && _detailData is null)
         {
@@ -330,6 +350,7 @@
             {
                 <ReportGrid Data="_detailData"
                             HonorFieldMinWidth="true"
+                            SizeColumnsToContent="true"
                             InitialColumnWidths="_columnWidths"
                             InitialColumnOrder="_columnOrder"
                             InitialHiddenColumns="_hiddenColumns"
@@ -381,6 +402,11 @@
     private string? _primaryTable;
     private string? _groupLabel;
     private string? _error;
+    // Admin-only SQL/parameters captured when a QueryExecutionException
+    // reaches the load path. Surfaced via the FriendlyErrorPanel's "Show
+    // details" expander; null for non-SQL errors (auth, missing fields).
+    private string? _errorSql;
+    private Dictionary<string, object?>? _errorParams;
     private bool _isLoading;
     // Admin-only Show SQL gate. Set during init so the action button
     // can hide for non-admins per the 2026-05-05 policy change.
@@ -798,14 +824,36 @@
                 ScopingForceNoMatch = fullData.ScopingForceNoMatch
             };
         }
+        catch (TleReportingDashboard.Web.Services.QueryPipeline.QueryExecutionException qex)
+        {
+            // SQL emitted but DB rejected it. Admins get the failing SQL +
+            // bound parameters via the FriendlyErrorPanel expander; viewers
+            // see only the plain-English copy.
+            _error = FriendlyError.FromException(qex, Logger, "loading drill-down detail");
+            _errorSql = qex.Sql;
+            _errorParams = qex.Parameters;
+        }
         catch (Exception ex)
         {
             _error = FriendlyError.FromException(ex, Logger, "loading drill-down detail");
+            _errorSql = null;
+            _errorParams = null;
         }
         finally
         {
             _isLoading = false;
         }
+    }
+
+    // Retry from the error panel — clears error state and re-runs the
+    // full OnInitializedAsync load. Cheaper than a navigation refresh
+    // and preserves any URL state the user came in with.
+    private async Task OnRetryFromError()
+    {
+        _error = null;
+        _errorSql = null;
+        _errorParams = null;
+        await OnInitializedAsync();
     }
 
     // Updates the sort indicator strip when the user clicks a header.
@@ -908,15 +956,26 @@
     // Effective column min-width for the grouped-detail-table header.
     // Field-level MinWidth is authoritative when set — it replaces the
     // type default outright (including the case where the override is
-    // smaller). Falls back to the admin-configured WideMin from
-    // ColumnWidthDefaults only when the field has no explicit MinWidth.
+    // smaller). When MinWidth is unset, MaxLength narrows the column
+    // below the type default if it implies a smaller width — mirroring
+    // the rule in ReportGrid.GetColumnWidths so the two viewer paths
+    // size narrow fields (3-char codes etc.) identically. Falls back to
+    // the admin-configured WideMin from ColumnWidthDefaults only when
+    // neither MinWidth nor MaxLength is set.
     // A field MinWidth of 0 is an explicit "no minimum" signal — different
     // from null (unset) and respected.
     private int EffectiveMinWidth(ColumnMeta col)
     {
         var defaults = _columnWidthDefaults ?? ColumnWidthDefaults.Seed();
         var entry = defaults.Resolve(col.DataType);
-        return col.MinWidth ?? entry.WideMin;
+        if (col.MinWidth.HasValue) return col.MinWidth.Value;
+        if (col.MaxLength is int ml && ml > 0)
+        {
+            // Matches ReportGrid's pxPerChar=6 + cellPadding=12.
+            var charWidth = ml * 6 + 12;
+            return Math.Min(charWidth, entry.WideMin);
+        }
+        return entry.WideMin;
     }
 
     // Right-align any numeric column, not just currency. Mirrors

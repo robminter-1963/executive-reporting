@@ -13,7 +13,7 @@
        MudDataGrid. Used by the Report Viewer where sort must stay locked
        to what was saved. MudDataGrid still re-sorts on header clicks even
        with SortMode.None + Sortable=false, so we sidestep it entirely here. *@
-    <div class="read-only-grid resizable-grid" style="@($"height: {GetGridHeight()}; overflow: auto;")">
+    <div class="read-only-grid resizable-grid @(SizeColumnsToContent ? "size-to-content" : "")" style="@($"height: {GetGridHeight()}; overflow: auto;")">
         <table>
             <thead>
                 <tr>
@@ -243,6 +243,31 @@ else
         .read-only-grid tbody tr:nth-child(odd) {
             background: #FAFBFC;
         }
+        /* size-to-content mode: each column floor = max(header, every row).
+           Switches the table off fixed layout and strips the inline width
+           caps that would otherwise clip content. white-space: nowrap on
+           cells (kept from the base rules above) forces columns to expand
+           horizontally; overflow-x on the wrapping div produces a scroll
+           bar when total width exceeds the viewport. !important is needed
+           because the per-cell width/max-width are inlined on every td. */
+        .read-only-grid.size-to-content table {
+            table-layout: auto !important;
+            width: auto !important;
+            min-width: 100%;
+        }
+        .read-only-grid.size-to-content th,
+        .read-only-grid.size-to-content td {
+            width: auto !important;
+            max-width: none !important;
+        }
+        .read-only-grid.size-to-content tbody td > span {
+            max-width: none !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+        }
+        .read-only-grid.size-to-content .grid-filler {
+            display: none;
+        }
         .read-only-grid tbody tr:hover {
             background: #E8F0FE !important;
         }
@@ -336,6 +361,16 @@ else
     // wrapping container's overflow-x: auto kicks in a horizontal
     // scrollbar when columns sum wider than the viewport.
     [Parameter] public bool HonorFieldMinWidth { get; set; }
+
+    // When true, every column's rendered width is at least max(header
+    // label width, longest cell content) — columns never clip. Switches
+    // the read-only table's layout to auto and removes the inline width
+    // clips so the browser sizes each column to its natural content
+    // extent. Total grid width grows accordingly; the wrapping div's
+    // overflow-x: auto kicks in a horizontal scrollbar when needed.
+    // Opted into by the Detail Viewer where data legibility wins over
+    // dense layouts.
+    [Parameter] public bool SizeColumnsToContent { get; set; }
     [Parameter] public Dictionary<string, int>? InitialColumnWidths { get; set; }
     [Parameter] public EventCallback<Dictionary<string, int>> OnColumnWidthsChanged { get; set; }
     [Parameter] public string? DefaultSortField { get; set; }
@@ -686,13 +721,14 @@ else
         if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
         {
             var charWidth = col.MaxLength.Value * pxPerChar + cellPadding;
-            var min = Math.Max(typeBased.min, Math.Min(charWidth, 100));
+            // Rule: when MaxLength translates to a smaller width than the
+            // type's default min, honor it — a 3-char status code should be
+            // ~30px, not padded up to the text floor. The CSS rule
+            // `min-width: max-content` on th still protects the header
+            // text from being clipped, so the declared min can drop below
+            // typeBased.min without losing the column label.
+            var min = Math.Min(charWidth, typeBased.min);
             var max = Math.Max(min, Math.Min(charWidth, 250));
-            // Floor by typeBased.min so a non-text column with a small
-            // MaxLength (e.g. date with MaxLength=10) still hits the
-            // readable minimum in wide mode.
-            min = Math.Max(min, typeBased.min);
-            max = Math.Max(max, typeBased.min);
             return honorFieldMinWidth ? ApplyMinWidthOverride(col.MinWidth, min, max) : (min, max);
         }
 

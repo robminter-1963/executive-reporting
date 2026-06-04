@@ -93,6 +93,17 @@ try
     builder.Services.AddScoped<LibraryNavState>();
     builder.Services.AddScoped<LandingGreetingState>();
 
+    // HttpContext access for the ICurrentUserAccessor — needed so services
+    // can resolve the signed-in user's email/oid without threading it
+    // through every method signature. Required by AuditLogger.
+    builder.Services.AddHttpContextAccessor();
+    // Singleton: HttpContextCurrentUserAccessor depends only on
+    // IHttpContextAccessor (which is Singleton-safe by design — uses
+    // AsyncLocal internally). Registering as Singleton lets the audit
+    // logger consume it from inside other Singleton services (AdminService,
+    // CompanyRegistry, etc.) without a captive-dependency violation.
+    builder.Services.AddSingleton<ICurrentUserAccessor, HttpContextCurrentUserAccessor>();
+
     // Admin allowlist (email-based; swap for claim-based later)
     builder.Services.Configure<AdminOptions>(builder.Configuration.GetSection("Admins"));
     builder.Services.AddSingleton<IAdminService, AdminService>();
@@ -170,9 +181,20 @@ try
     if (!string.IsNullOrEmpty(configConnStr))
     {
         Log.Information("ConfigDb connection string found — live query mode enabled");
+        // SOC-2 audit logger. Singleton — all dependencies (IConfiguration,
+        // ICurrentUserAccessor via IHttpContextAccessor, ILogger) are
+        // Singleton-safe, and SQL connections are short-lived per write
+        // anyway. Singleton lifetime is required so Singleton services
+        // (AdminService, CompanyRegistry-adjacent paths) can consume it
+        // without DI captive-dependency violations.
+        builder.Services.AddSingleton<IAuditLogger, AuditLogger>();
         builder.Services.AddScoped<IQueryPipeline, SqlEmitter>();
         builder.Services.AddScoped<IQueryService, QueryService>();
         builder.Services.AddScoped<ICodeSetService, CodeSetService>();
+        // Filter-pickable Lookup values — fetched from the connection's
+        // data DB, cached per (connectionId, lookupId). Scoped because
+        // it consumes the scoped CompanyConnectionAdminService.
+        builder.Services.AddScoped<ILookupValueService, LookupValueService>();
         builder.Services.AddScoped<INotificationService, NotificationService>();
         builder.Services.AddSingleton<IThemeService, ThemeService>();
 
@@ -192,9 +214,19 @@ try
     else
     {
         Log.Information("No ConfigDb connection string — using in-memory mocks for dev");
+        // Dev-mode audit logger keeps a bounded in-process ring (a static
+        // field inside the impl) so the Admin → Audit Log tab renders
+        // entries from any circuit. Singleton to match the SQL-mode
+        // lifetime — keeps the captive-dependency story consistent
+        // whether the app runs in mock or live mode.
+        builder.Services.AddSingleton<IAuditLogger, InMemoryAuditLogger>();
         builder.Services.AddSingleton<MockDataService>();
         builder.Services.AddSingleton<IQueryService>(sp => sp.GetRequiredService<MockDataService>());
         builder.Services.AddSingleton<ICodeSetService, MockCodeSetService>();
+        // Dev mode has no per-connection data DB to query — register a
+        // no-op so the lookup-backed filter UI just renders empty
+        // pickers instead of crashing on a null connection resolver.
+        builder.Services.AddSingleton<ILookupValueService, NoopLookupValueService>();
         builder.Services.AddSingleton<IReportService>(sp => sp.GetRequiredService<MockDataService>());
         builder.Services.AddSingleton<ISharingService>(sp => sp.GetRequiredService<MockDataService>());
         builder.Services.AddSingleton<IScheduleService>(sp => sp.GetRequiredService<MockDataService>());

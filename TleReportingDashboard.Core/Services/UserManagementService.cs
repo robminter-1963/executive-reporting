@@ -10,6 +10,7 @@ public sealed class UserManagementService : IUserManagementService
     private readonly ITeamSourceService _teamSources;
     private readonly ConfigDbCache _cache;
     private readonly EditorModeState _editorMode;
+    private readonly IAuditLogger _audit;
     private readonly ILogger<UserManagementService> _logger;
 
     public UserManagementService(IConfiguration configuration,
@@ -18,6 +19,7 @@ public sealed class UserManagementService : IUserManagementService
                                  ITeamSourceService teamSources,
                                  ConfigDbCache cache,
                                  EditorModeState editorMode,
+                                 IAuditLogger audit,
                                  ILogger<UserManagementService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
@@ -27,8 +29,19 @@ public sealed class UserManagementService : IUserManagementService
         _teamSources = teamSources;
         _cache = cache;
         _editorMode = editorMode;
+        _audit = audit;
         _logger = logger;
     }
+
+    // Audit-safe projection for a user. RoleAdminSections is included so a
+    // reviewer can see what privileges the user actually had at a point in
+    // time — surface_company_id and similar admin-only fields stay so the
+    // diff is meaningful.
+    private static object ForAudit(UserRecord u) => new
+    {
+        u.Email, u.UserId, u.DisplayName, u.IsAdmin, u.IsActive,
+        u.RoleId, u.RoleName, u.RoleAdminSections
+    };
 
     // ── Users ───────────────────────────────────────────────────────────────
 
@@ -116,7 +129,16 @@ public sealed class UserManagementService : IUserManagementService
         _logger.LogInformation("User created: {Email} role={RoleId} admin={IsAdmin} by {CreatedBy}",
             email, roleId, isAdmin, createdBy ?? "unknown");
 
-        return (await GetByEmailAsync(email, ct))!;
+        var created = (await GetByEmailAsync(email, ct))!;
+        await _audit.LogAsync(
+            actorEmail: createdBy,
+            action: AuditActions.Create,
+            resourceType: AuditResources.User,
+            resourceId: email,
+            resourceLabel: $"{email}{(isAdmin ? " (admin)" : "")}",
+            before: null,
+            after: ForAudit(created));
+        return created;
     }
 
     public async Task UpdateAsync(string email, string? displayName, Guid? roleId, bool isActive,
@@ -124,6 +146,11 @@ public sealed class UserManagementService : IUserManagementService
     {
         if (string.IsNullOrWhiteSpace(email))
             throw new ArgumentException("Email is required.", nameof(email));
+
+        // Snapshot pre-edit state for the audit diff. Done before the
+        // UPDATE so the cached "before" reflects the old role / admin
+        // flag, not the new one.
+        var existing = await GetByEmailAsync(email, forceRefresh: true, ct);
 
         var isAdmin = await ResolveAdminFromRoleAsync(roleId, ct);
 
@@ -162,6 +189,21 @@ public sealed class UserManagementService : IUserManagementService
 
         _logger.LogInformation("User updated: {Email} role={RoleId} admin={IsAdmin} active={IsActive}",
             email, roleId, isAdmin, isActive);
+
+        // SOC-2: user updates are weighty because role re-assignment
+        // changes both per-section access AND the derived global-admin
+        // flag. The mirrored RPT_admins grant/revoke also lands its own
+        // audit row via AdminService; pair them with the same correlation
+        // id so reviewers can see both halves of the change together.
+        var afterRecord = await GetByEmailAsync(email, forceRefresh: true, ct);
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Update,
+            resourceType: AuditResources.User,
+            resourceId: email,
+            resourceLabel: $"{email}{(isAdmin ? " (admin)" : "")}",
+            before: existing is null ? null : ForAudit(existing),
+            after: afterRecord is null ? null : ForAudit(afterRecord));
     }
 
     // Looks up the role and returns true if it's the Administrator row.
@@ -177,6 +219,13 @@ public sealed class UserManagementService : IUserManagementService
 
     public async Task DeleteAsync(string email, CancellationToken ct = default)
     {
+        // Snapshot the user row + company access before the cascade so
+        // the audit trail records what got removed.
+        var existing = await GetByEmailAsync(email, forceRefresh: true, ct);
+        List<UserCompanyAccess>? prevAccess = null;
+        try { prevAccess = await GetCompanyAccessAsync(email, ct); }
+        catch { /* non-fatal — best-effort capture */ }
+
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
 
@@ -211,6 +260,19 @@ public sealed class UserManagementService : IUserManagementService
         _admins.Invalidate();
         _cache.Invalidate("UserManagementService:");
         _logger.LogInformation("User deleted: {Email}", email);
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Delete,
+            resourceType: AuditResources.User,
+            resourceId: email,
+            resourceLabel: email,
+            before: existing is null ? null : new
+            {
+                User = ForAudit(existing),
+                CompanyAccess = prevAccess
+            },
+            after: null);
     }
 
     public async Task BindSignedInUserAsync(string email, string userId, string? displayName,
@@ -489,6 +551,25 @@ public sealed class UserManagementService : IUserManagementService
 
         _logger.LogInformation("Company access upserted: {Email} → {CompanyId} role={Role} companyEmailSet={Set}",
             email, companyId, role, updateEmail);
+
+        // SOC-2: per-company access is the single biggest authorization
+        // decision in the app — it controls who can see which company's
+        // data at all. Log every upsert as a grant action.
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Grant,
+            resourceType: AuditResources.CompanyAccess,
+            resourceId: $"{email}|{companyId}",
+            resourceLabel: $"{email} → {companyId} ({role})",
+            before: null,
+            after: new
+            {
+                Email = email,
+                CompanyId = companyId,
+                Role = role,
+                CompanyEmail = updateEmail ? trimmedCompanyEmail : null,
+                CompanyEmailTouched = updateEmail
+            });
     }
 
     // ── Per-connection logins (row-level scoping inputs) ───────────────────
@@ -642,6 +723,15 @@ public sealed class UserManagementService : IUserManagementService
         _cache.Invalidate("UserManagementService:CompanyAccess:");
 
         _logger.LogInformation("Company access revoked: {Email} → {CompanyId}", email, companyId);
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Revoke,
+            resourceType: AuditResources.CompanyAccess,
+            resourceId: $"{email}|{companyId}",
+            resourceLabel: $"{email} → {companyId}",
+            before: new { Email = email, CompanyId = companyId },
+            after: null);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

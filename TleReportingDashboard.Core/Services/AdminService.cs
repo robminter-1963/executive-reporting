@@ -17,6 +17,7 @@ public class AdminService : IAdminService
 {
     private readonly string _connStr;
     private readonly IOptionsMonitor<AdminOptions> _options;
+    private readonly IAuditLogger _audit;
     private readonly ILogger<AdminService> _logger;
     private readonly object _lock = new();
 
@@ -25,11 +26,13 @@ public class AdminService : IAdminService
     public AdminService(
         IConfiguration configuration,
         IOptionsMonitor<AdminOptions> options,
+        IAuditLogger audit,
         ILogger<AdminService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required for AdminService.");
         _options = options;
+        _audit = audit;
         _logger = logger;
     }
 
@@ -90,7 +93,7 @@ public class AdminService : IAdminService
         _logger.LogInformation("Admin assigned: {Email} scope={Scope} company={CompanyId} by {CreatedBy}",
             email, scope, companyId, createdBy ?? "unknown");
 
-        return new AdminEntry
+        var entry = new AdminEntry
         {
             Id = id,
             Email = email,
@@ -99,10 +102,27 @@ public class AdminService : IAdminService
             CreatedAt = DateTime.UtcNow,
             CreatedBy = createdBy
         };
+        // SOC-2: every admin grant lands in the audit log. Action is
+        // "grant" rather than "create" — granting privilege is the verb
+        // a reviewer will scan for.
+        await _audit.LogAsync(
+            actorEmail: createdBy,
+            action: AuditActions.Grant,
+            resourceType: AuditResources.Admin,
+            resourceId: id.ToString(),
+            resourceLabel: $"{email} ({(scope == AdminScope.Global ? "global" : "company")})",
+            before: null,
+            after: new { entry.Email, Scope = entry.Scope.ToString(), entry.CompanyId });
+        return entry;
     }
 
     public async Task RevokeAsync(Guid adminId)
     {
+        // Snapshot the row BEFORE deleting so the audit log has a "before"
+        // record. After the DELETE the row is gone and there'd be nothing
+        // for the review UI to display besides the bare id.
+        var existing = GetCache().FirstOrDefault(a => a.Id == adminId);
+
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync();
         await using var cmd = new SqlCommand(
@@ -112,6 +132,26 @@ public class AdminService : IAdminService
 
         Invalidate();
         _logger.LogInformation("Admin revoked: {Id}", adminId);
+
+        // SOC-2: every admin revoke lands in the audit log. Captures the
+        // pre-revoke shape so reviewers see who lost what scope, even
+        // after the row is gone.
+        await _audit.LogAsync(
+            actorEmail: null, // accessor pulls from HttpContext
+            action: AuditActions.Revoke,
+            resourceType: AuditResources.Admin,
+            resourceId: adminId.ToString(),
+            resourceLabel: existing is null
+                ? adminId.ToString()
+                : $"{existing.Email} ({(existing.Scope == AdminScope.Global ? "global" : "company")})",
+            before: existing is null ? null : new
+            {
+                existing.Email,
+                Scope = existing.Scope.ToString(),
+                existing.CompanyId,
+                existing.CreatedAt
+            },
+            after: null);
     }
 
     public void Invalidate()

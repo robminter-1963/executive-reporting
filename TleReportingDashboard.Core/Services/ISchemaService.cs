@@ -14,4 +14,5 @@ public interface ISchemaService
     Task<List<JoinConfig>> GetJoinConfigsAsync(Guid? connectionId = null);
     Task<List<CustomFilterDefinition>> GetCustomFiltersAsync(Guid? connectionId = null);
     Task<List<LookupDefinition>> GetLookupsAsync(Guid? connectionId = null);
+    Task<List<LookupTypeDefinition>> GetLookupTypesAsync(Guid? connectionId = null);
 }

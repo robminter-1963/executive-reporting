@@ -41,6 +41,52 @@ public sealed class FieldDefinition
     /// CTE and JOIN are required when this field is in the query.
     /// </summary>
     public List<string>? LookupIds { get; init; }
+
+    /// <summary>
+    /// Optional id of a LookupTypeDefinition that drives the header-filter
+    /// chip picker for this field. The lookup type carries its own SELECT
+    /// SQL (returning value/display pairs) which the picker runs once;
+    /// the user's selections then feed the field's <see cref="FilterPredicateSql"/>.
+    ///
+    /// Distinct from CodeSetId (Empower's SET_CODESETS specifically) and
+    /// from <see cref="LookupIds"/> (CTE-style lookups for sort/join uses
+    /// in the report query itself).
+    /// </summary>
+    public string? LookupTypeId { get; init; }
+
+    /// <summary>
+    /// Admin-authored SQL fragment that becomes the WHERE predicate when
+    /// the user filters on this field via the LookupType chip picker.
+    /// Two substitution modes:
+    ///   • Placeholder mode: the predicate contains "{values}" — the
+    ///     system replaces it with a parameterized list like
+    ///     "(@p0, @p1, @p2)" bound to the user's selections.
+    ///   • Implicit mode: no placeholder — the system AND-appends
+    ///     "AND &lt;LookupType.SourceTableRef&gt;.&lt;ValueColumn&gt;
+    ///     IN (@p0, @p1, ...)" after the admin's predicate.
+    /// Nothing about the predicate or its references is hardcoded —
+    /// admins author it freely against the lookup's source table and
+    /// the field's data tables.
+    /// </summary>
+    public string? FilterPredicateSql { get; init; }
+
+    /// <summary>
+    /// Optional alternate column expression used for filter comparison
+    /// when this field is bound to a LookupType. Lets a field display one
+    /// column (e.g. <c>c_30.CODEDESC</c>) but filter on another from the
+    /// same row (e.g. <c>c_30.CODEINT</c>) without needing a joined
+    /// lookup table or a <see cref="FilterPredicateSql"/>.
+    ///
+    /// When set, the LookupType picker emits the lookup's value column
+    /// (CODENUM) instead of the display column (CODEDESC), and the WHERE
+    /// becomes <c>{FilterColumn} IN (@p0, @p1, ...)</c>.
+    ///
+    /// Precedence: <see cref="FilterPredicateSql"/> wins when both are set
+    /// — the predicate path handles correlated joins / lookup-table
+    /// references that this single-column shortcut can't express.
+    /// </summary>
+    public string? FilterColumn { get; init; }
+
     public int? MaxLength { get; init; }
     /// <summary>
     /// Optional column min-width hint (px) applied in the report grid. When

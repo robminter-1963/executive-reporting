@@ -82,6 +82,74 @@
                 <MudNumericField @bind-Value="_edited.CodeSetId" Label="CodeSetId"
                                  Variant="Variant.Outlined" Margin="Margin.Dense" />
             </MudItem>
+            @* Lookup Type picker — drives the header-filter chip picker.
+               The selected LookupType supplies the SELECT that populates
+               the chips; the field's FilterPredicateSql (textarea below)
+               supplies the WHERE fragment emitted when the user filters.
+               Distinct from CodeSetId (Empower SET_CODESETS) and from
+               LookupIds below (CTE-join lookups). *@
+            <MudItem xs="12" sm="6">
+                <MudSelect T="string" Value="@(_edited.LookupTypeId ?? string.Empty)"
+                           ValueChanged="@((string v) => _edited.LookupTypeId = string.IsNullOrEmpty(v) ? null : v)"
+                           Label="Lookup Type"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                           HelperText="Optional. Drives this field's filter chip picker.">
+                    <MudSelectItem T="string" Value="@string.Empty">(none)</MudSelectItem>
+                    @* Orphan: the currently-bound id isn't in the catalog
+                       anymore (typically: the Lookup Type was renamed or
+                       deleted after this field was authored). Surface it
+                       with a "(missing)" marker so the admin can see and
+                       clear it; without this item the select shows the raw
+                       id but offers no way to deselect. *@
+                    @if (!string.IsNullOrEmpty(_edited.LookupTypeId)
+                         && (AvailableLookupTypes is null
+                             || !AvailableLookupTypes.Any(l => string.Equals(l.Id, _edited.LookupTypeId, StringComparison.OrdinalIgnoreCase))))
+                    {
+                        <MudSelectItem T="string" Value="@_edited.LookupTypeId">@_edited.LookupTypeId (missing)</MudSelectItem>
+                    }
+                    @if (AvailableLookupTypes is not null)
+                    {
+                        @foreach (var lt in AvailableLookupTypes.OrderBy(l => l.Label, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <MudSelectItem T="string" Value="@lt.Id">@lt.Label</MudSelectItem>
+                        }
+                    }
+                </MudSelect>
+            </MudItem>
+
+            @* Filter predicate SQL — only meaningful when a Lookup Type is
+               selected (without it, the chip picker has no values to
+               filter on). Admin-authored WHERE fragment with two modes:
+                 • {values} placeholder — system substitutes the parameterized
+                   IN list at query time.
+                 • No placeholder — system appends "AND <SourceTableRef>.
+                   <ValueColumn> IN (@p0, @p1, ...)" after the predicate. *@
+            @* Filter column — single-column shortcut for the common case
+               where a field displays one column (e.g. c_30.CODEDESC) but
+               needs to filter on another from the same row (e.g.
+               c_30.CODEINT). When set, the picker sends the LookupType's
+               value column (CODENUM) and the WHERE becomes
+               "{FilterColumn} IN (@p0, @p1, ...)" — no separate join
+               required. Skip this and write a Filter predicate SQL below
+               for cases that actually need a joined lookup table. *@
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.FilterColumn"
+                              Label="Filter column (optional)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Style="font-family: monospace; font-size: 0.85rem;"
+                              Placeholder="c_30.CODEINT"
+                              HelperText="Alternate column for the WHERE comparison when filtering via this Lookup Type. Picker sends the lookup's value column (e.g. CODENUM); WHERE compares it against this column. Leave blank to compare against the field's display expression."
+                              Disabled="@(string.IsNullOrEmpty(_edited.LookupTypeId))" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_edited.FilterPredicateSql"
+                              Label="Filter predicate SQL"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Lines="2" Style="font-family: monospace; font-size: 0.85rem;"
+                              Placeholder="IDX = SET_CODESETS.CODEID AND CODEINT = SET_CODESETS.CODENUM"
+                              HelperText="WHERE fragment emitted when this filter applies. Use {values} where the IN-list goes, or omit and the system appends AND <source>.<valueColumn> IN (...). Only fires when Filter column above is blank."
+                              Disabled="@(string.IsNullOrEmpty(_edited.LookupTypeId))" />
+            </MudItem>
             <MudItem xs="12" sm="6">
                 <MudTextField @bind-Value="_edited.AllowedAggregationsStr" Label="Aggregations"
                               Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -212,7 +280,7 @@
                reference). Useful when an inline SqlExpression spans multiple joined
                tables. The inline JOIN textbox below is additive — it's emitted on
                top of whatever joins are selected here. *@
-            @if (AvailableJoins is not null && AvailableJoins.Count > 0)
+            @if ((AvailableJoins is not null && AvailableJoins.Count > 0) || _selectedJoinIds.Count > 0)
             {
                 <MudItem xs="12">
                     <MudSelect T="string" Label="JOINs (referenced)" MultiSelection
@@ -220,9 +288,23 @@
                                SelectedValuesChanged="OnJoinsSelected"
                                Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                                HelperText="Referenced JOINs — the SQL lives in the Joins tab. Pick all joins your field needs.">
-                        @foreach (var j in AvailableJoins)
+                        @* Orphans: any selected join id no longer in the
+                           catalog (rename/delete in the Joins tab) gets a
+                           "(missing)" item so the admin can deselect it.
+                           Without this the selected-values display shows
+                           the raw id but offers no element to click. *@
+                        @foreach (var orphan in _selectedJoinIds.Where(id =>
+                            AvailableJoins is null
+                            || !AvailableJoins.Any(j => string.Equals(j.Id, id, StringComparison.OrdinalIgnoreCase))))
                         {
-                            <MudSelectItem T="string" Value="@j.Id">@FormatJoinLabel(j)</MudSelectItem>
+                            <MudSelectItem T="string" Value="@orphan">@orphan (missing)</MudSelectItem>
+                        }
+                        @if (AvailableJoins is not null)
+                        {
+                            @foreach (var j in AvailableJoins)
+                            {
+                                <MudSelectItem T="string" Value="@j.Id">@FormatJoinLabel(j)</MudSelectItem>
+                            }
                         }
                     </MudSelect>
                 </MudItem>
@@ -234,7 +316,11 @@
                               HelperText="Additive: emitted on top of the referenced JOINs above. Only needed for one-off JOINs not in the Joins tab." />
             </MudItem>
 
-            @if (AvailableLookups.Any())
+            @* Render the picker if there are lookups to pick from OR if
+               this field has orphaned selections to clear out. The second
+               case shows up after every available lookup was renamed and
+               the field still carries the old ids. *@
+            @if (AvailableLookups.Any() || _selectedLookupIds.Count > 0)
             {
                 <MudItem xs="12">
                     <MudSelect T="string" Label="Lookups" MultiSelection
@@ -242,6 +328,16 @@
                                SelectedValuesChanged="v => _selectedLookupIds = v.ToHashSet()"
                                Variant="Variant.Outlined" Margin="Margin.Dense" Dense
                                HelperText="Named CTEs included in the query when this field is selected in a report">
+                        @* Orphans: any selected lookup id no longer in the
+                           catalog (renamed/deleted in the Lookups tab) gets
+                           a "(missing)" item so the admin can deselect it.
+                           Without this the selected-values display shows
+                           the stale id permanently with no UI to clear. *@
+                        @foreach (var orphan in _selectedLookupIds.Where(id =>
+                            !AvailableLookups.Any(l => string.Equals(l.Id, id, StringComparison.OrdinalIgnoreCase))))
+                        {
+                            <MudSelectItem T="string" Value="@orphan">@orphan (missing)</MudSelectItem>
+                        }
                         @foreach (var lu in AvailableLookups)
                         {
                             <MudSelectItem T="string" Value="@lu.Id">@lu.Label (@lu.Id)</MudSelectItem>
@@ -280,6 +376,11 @@
     // lives on the parent so subsequent edits reuse it.
     [Parameter] public Func<string, Task<List<DbColumnInfo>>>? LoadColumnsAsync { get; set; }
     [Parameter] public IEnumerable<SchemaBuilder.LookupEntry> AvailableLookups { get; set; } = Array.Empty<SchemaBuilder.LookupEntry>();
+    // Lookup Types for the per-field filter chip picker. Distinct from
+    // AvailableLookups (CTE-style lookups for sort/join). When present,
+    // the Lookup Type dropdown above lets the admin bind this field to
+    // one for its filter chip values.
+    [Parameter] public IEnumerable<SchemaBuilder.LookupTypeEntry> AvailableLookupTypes { get; set; } = Array.Empty<SchemaBuilder.LookupTypeEntry>();
     [Parameter] public List<SchemaBuilder.JoinEntry>? AvailableJoins { get; set; }
     [Parameter] public IEnumerable<string>? AvailableDomains { get; set; }
     [Parameter] public string? ConnectionType { get; set; }
@@ -398,6 +499,9 @@
                 JoinIds = Field.JoinIds is not null ? new List<string>(Field.JoinIds) : null,
                 SqlJoin = Field.SqlJoin,
                 LookupIds = Field.LookupIds is not null ? new List<string>(Field.LookupIds) : null,
+                LookupTypeId = Field.LookupTypeId,
+                FilterPredicateSql = Field.FilterPredicateSql,
+                FilterColumn = Field.FilterColumn,
                 RolesRequired = Field.RolesRequired,
                 ValueSortOrder = Field.ValueSortOrder,
                 Format = Field.Format,
@@ -445,6 +549,9 @@
             _edited.Format,
             _edited.ApplyTimezoneConversion,
             _edited.IsUnique,
+            _edited.LookupTypeId,
+            _edited.FilterPredicateSql,
+            _edited.FilterColumn,
             UseSqlExpression = _useSqlExpression,
             LookupIds = _selectedLookupIds.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
             JoinIds = _selectedJoinIds.OrderBy(s => s, StringComparer.Ordinal).ToArray()

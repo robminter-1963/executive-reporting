@@ -14,6 +14,7 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
     private readonly ConfigDbCache _cache;
     private readonly EditorModeState _editorMode;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IAuditLogger _audit;
     private readonly ILogger<CompanyConnectionAdminService> _logger;
 
     public CompanyConnectionAdminService(
@@ -22,6 +23,7 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         ConfigDbCache cache,
         EditorModeState editorMode,
         IHttpClientFactory httpClientFactory,
+        IAuditLogger audit,
         ILogger<CompanyConnectionAdminService> logger)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
@@ -30,8 +32,28 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         _cache = cache;
         _editorMode = editorMode;
         _httpClientFactory = httpClientFactory;
+        _audit = audit;
         _logger = logger;
     }
+
+    // Audit-safe projection of a connection row. Strips secrets (passwords,
+    // client secrets) — recording the actual credential value into the
+    // audit log would be a secrets-handling regression. "[redacted]" is
+    // written when the field was non-empty so the diff still shows
+    // "credential changed" without leaking the value.
+    private static object Redact(CompanyConnectionRecord r) => new
+    {
+        r.Id, r.CompanyId, r.Name, r.ConnectionType, r.IsDefault, r.IsActive,
+        r.SsDataSource, r.SsInitialCatalog, r.SsIntegratedSecurity, r.SsUserId,
+        SsPassword                = string.IsNullOrEmpty(r.SsPassword) ? null : "[redacted]",
+        r.SsApplicationIntent, r.SsEncrypt, r.SsTrustServerCertificate, r.SsMultipleActiveResultSets,
+        r.PgHost, r.PgPort, r.PgDatabase, r.PgUsername,
+        PgPassword                = string.IsNullOrEmpty(r.PgPassword) ? null : "[redacted]",
+        r.PgSslMode, r.PgCommandTimeout, r.PgTimeout, r.PgDisplayTimezone,
+        r.DvEnvironmentUrl, r.DvTenantId, r.DvClientId,
+        DvClientSecret            = string.IsNullOrEmpty(r.DvClientSecret) ? null : "[redacted]",
+        r.SchemaFilterSql, r.TableFilterSql
+    };
 
     public Task<List<CompanyConnectionRecord>> GetByCompanyAsync(Guid companyId, CancellationToken ct = default) =>
         _cache.GetOrAddAsync(
@@ -174,12 +196,28 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         _cache.Invalidate("CompanyConnectionAdminService:");
         _cache.Invalidate("SchemaService:");
         _logger.LogInformation("Connection created: company={CompanyId} name={Name} type={Type}", r.CompanyId, r.Name, r.ConnectionType);
+
+        // SOC-2: audit every connection create. Credentials are redacted
+        // in the after-snapshot (Redact strips Ss/Pg/Dv password fields).
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Create,
+            resourceType: AuditResources.Connection,
+            resourceId: r.Id.ToString(),
+            resourceLabel: $"{r.Name} ({r.ConnectionType})",
+            before: null,
+            after: Redact(r));
         return r;
     }
 
     public async Task UpdateAsync(CompanyConnectionRecord r, CancellationToken ct = default)
     {
         Validate(r);
+        // Pre-read the existing row for the audit-log before-snapshot.
+        // Best-effort: if it returns null (row was deleted between calls),
+        // the audit entry just records the new state without a diff.
+        var existing = await GetByIdAsync(r.Id, ct);
+
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var tx = (SqlTransaction)await conn.BeginTransactionAsync(ct);
@@ -197,18 +235,37 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         _cache.Invalidate("CompanyConnectionAdminService:");
         _cache.Invalidate("SchemaService:");
         _logger.LogInformation("Connection updated: {Id} ({Name})", r.Id, r.Name);
+
+        // SOC-2: audit every connection update. Both before / after are
+        // redacted — the diff still surfaces "credential changed" because
+        // a missing-vs-present "[redacted]" string differs between the
+        // snapshots when the field flips.
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Update,
+            resourceType: AuditResources.Connection,
+            resourceId: r.Id.ToString(),
+            resourceLabel: $"{r.Name} ({r.ConnectionType})",
+            before: existing is null ? null : Redact(existing),
+            after: Redact(r));
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
+        // Snapshot the full row before deletion for the audit log's
+        // before-state. Loses cascade-children info (history rows etc.)
+        // but the row itself is the audit-worthy thing.
+        var existing = await GetByIdAsync(id, ct);
+
         // Capture companyId before deleting so we can invalidate the resolver's cache.
-        Guid? companyId = null;
+        Guid? companyId = existing?.CompanyId;
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
 
-        await using (var lookup = new SqlCommand(
-            "SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @id", conn))
+        if (companyId is null)
         {
+            await using var lookup = new SqlCommand(
+                "SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @id", conn);
             lookup.Parameters.Add(new SqlParameter("@id", id));
             var val = await lookup.ExecuteScalarAsync(ct);
             if (val is Guid g) companyId = g;
@@ -225,6 +282,15 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         _cache.Invalidate("CompanyConnectionAdminService:");
         _cache.Invalidate("SchemaService:");
         _logger.LogInformation("Connection deleted: {Id}", id);
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Delete,
+            resourceType: AuditResources.Connection,
+            resourceId: id.ToString(),
+            resourceLabel: existing is null ? id.ToString() : $"{existing.Name} ({existing.ConnectionType})",
+            before: existing is null ? null : Redact(existing),
+            after: null);
     }
 
     public async Task<ConnectionTestResult> TestAsync(CompanyConnectionRecord r, CancellationToken ct = default)
@@ -378,6 +444,25 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         _logger.LogInformation(
             "Connections copied: {Rows} rows ({SourceCount} requested) → {Target} (prefix='{Prefix}')",
             rows, sourceConnectionIds.Count, targetCompanyId, namePrefix);
+
+        // One audit row for the whole copy operation. Lists the source ids
+        // + how many landed in the target so a reviewer can trace back to
+        // the source rows without reading every per-row insert.
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Create,
+            resourceType: AuditResources.Connection,
+            resourceId: targetCompanyId.ToString(),
+            resourceLabel: $"Copy → company {targetCompanyId} ({rows} rows)",
+            before: null,
+            after: new
+            {
+                SourceConnectionIds = sourceConnectionIds.ToArray(),
+                TargetCompanyId = targetCompanyId,
+                NamePrefix = namePrefix,
+                RowsCopied = rows
+            },
+            notes: "copy-connections");
         return rows;
     }
 
@@ -401,6 +486,16 @@ public sealed class CompanyConnectionAdminService : ICompanyConnectionAdminServi
         _resolver.Invalidate(companyId);
         _cache.Invalidate("CompanyConnectionAdminService:");
         _logger.LogInformation("Connection default set: company={CompanyId} connection={ConnectionId}", companyId, connectionId);
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Update,
+            resourceType: AuditResources.Connection,
+            resourceId: connectionId.ToString(),
+            resourceLabel: $"Set default for company {companyId}",
+            before: null,
+            after: new { CompanyId = companyId, IsDefault = true },
+            notes: "set-default");
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────

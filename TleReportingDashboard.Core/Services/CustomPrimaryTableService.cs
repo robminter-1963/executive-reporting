@@ -7,17 +7,32 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
     private readonly string _connStr;
     private readonly ConfigDbCache _cache;
     private readonly EditorModeState _editorMode;
+    private readonly IAuditLogger _audit;
 
     public CustomPrimaryTableService(
         IConfiguration configuration,
         ConfigDbCache cache,
-        EditorModeState editorMode)
+        EditorModeState editorMode,
+        IAuditLogger audit)
     {
         _connStr = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required.");
         _cache = cache;
         _editorMode = editorMode;
+        _audit = audit;
     }
+
+    // Audit-safe projection. The full record is already non-secret data
+    // (no credentials); this method exists for shape consistency with the
+    // other services and to keep the audit-log JSON compact (omit timestamps
+    // / created-by since those are already on the audit row itself).
+    private static object ForAudit(CustomPrimaryTableRecord r) => new
+    {
+        r.Id, r.ConnectionId, r.TableName, r.Alias,
+        r.IsPrimary, r.IsDefaultPrimary,
+        r.TableType, r.PrimaryColumn, r.AdditionalKeyColumns,
+        r.Description
+    };
 
     public Task<List<CustomPrimaryTableRecord>> GetByConnectionAsync(
         Guid connectionId, CancellationToken ct = default) =>
@@ -168,7 +183,7 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         await insert.ExecuteNonQueryAsync(ct);
         _cache.Invalidate("CustomPrimaryTableService:");
 
-        return new CustomPrimaryTableRecord
+        var created = new CustomPrimaryTableRecord
         {
             Id = id,
             ConnectionId = connectionId,
@@ -184,6 +199,17 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             AdditionalKeyColumns = normalizedAdditionalKeys,
             Description = normalizedDescription
         };
+        // PrimaryColumn / AdditionalKeyColumns drive row-level scoping —
+        // changes here directly affect what data self-scoped users see.
+        await _audit.LogAsync(
+            actorEmail: createdByEmail,
+            action: AuditActions.Create,
+            resourceType: AuditResources.TableAlias,
+            resourceId: id.ToString(),
+            resourceLabel: string.IsNullOrEmpty(alias) ? tableName : $"{tableName} AS {alias}",
+            before: null,
+            after: ForAudit(created));
+        return created;
     }
 
     public async Task UpdateAsync(
@@ -211,6 +237,11 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
             : description.Trim()[..Math.Min(description.Trim().Length, 500)];
 
         if (isDefaultPrimary) isPrimary = true;
+
+        // Pre-read for the audit-log diff. Captures the existing values so
+        // a reviewer can see exactly which scoping-critical field moved
+        // (PrimaryColumn / AdditionalKeyColumns most often).
+        var existing = await GetByIdAsync(id, ct);
 
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
@@ -269,10 +300,23 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         cmd.Parameters.Add(new SqlParameter("@desc", (object?)normalizedDescription ?? DBNull.Value));
         await cmd.ExecuteNonQueryAsync(ct);
         _cache.Invalidate("CustomPrimaryTableService:");
+
+        var afterRecord = await GetByIdAsync(id, ct);
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Update,
+            resourceType: AuditResources.TableAlias,
+            resourceId: id.ToString(),
+            resourceLabel: string.IsNullOrEmpty(normalizedAlias) ? tableName : $"{tableName} AS {normalizedAlias}",
+            before: existing is null ? null : ForAudit(existing),
+            after: afterRecord is null ? null : ForAudit(afterRecord));
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
+        // Snapshot pre-delete so the audit trail records the row's shape.
+        var existing = await GetByIdAsync(id, ct);
+
         await using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
         await using var cmd = new SqlCommand(
@@ -280,6 +324,17 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         cmd.Parameters.Add(new SqlParameter("@id", id));
         await cmd.ExecuteNonQueryAsync(ct);
         _cache.Invalidate("CustomPrimaryTableService:");
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Delete,
+            resourceType: AuditResources.TableAlias,
+            resourceId: id.ToString(),
+            resourceLabel: existing is null
+                ? id.ToString()
+                : (string.IsNullOrEmpty(existing.Alias) ? existing.TableName : $"{existing.TableName} AS {existing.Alias}"),
+            before: existing is null ? null : ForAudit(existing),
+            after: null);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
@@ -417,6 +472,19 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         cmd.Parameters.Add(new SqlParameter("@fid", ownerFieldId.Trim()));
         await cmd.ExecuteNonQueryAsync(ct);
         _cache.Invalidate("CustomPrimaryTableService:RoleOwners:");
+
+        // SOC-2: role-owner mappings drive row-level scoping for self-scoped
+        // users. Every set / clear is recorded as a grant / revoke under
+        // table_alias so reviewers see the scoping decisions over time.
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Grant,
+            resourceType: AuditResources.TableAlias,
+            resourceId: $"{primaryTableId}|role={roleId}",
+            resourceLabel: $"Role owner field for primary {primaryTableId}",
+            before: null,
+            after: new { PrimaryTableId = primaryTableId, RoleId = roleId, OwnerFieldId = ownerFieldId.Trim() },
+            notes: "role-owner mapping");
     }
 
     public async Task ClearRoleOwnerAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default)
@@ -430,6 +498,16 @@ public sealed class CustomPrimaryTableService : ICustomPrimaryTableService
         cmd.Parameters.Add(new SqlParameter("@rid", roleId));
         await cmd.ExecuteNonQueryAsync(ct);
         _cache.Invalidate("CustomPrimaryTableService:RoleOwners:");
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Revoke,
+            resourceType: AuditResources.TableAlias,
+            resourceId: $"{primaryTableId}|role={roleId}",
+            resourceLabel: $"Role owner field for primary {primaryTableId}",
+            before: new { PrimaryTableId = primaryTableId, RoleId = roleId },
+            after: null,
+            notes: "role-owner mapping");
     }
 
     public Task<string?> ResolveOwnerFieldForRoleAsync(Guid primaryTableId, Guid roleId, CancellationToken ct = default) =>

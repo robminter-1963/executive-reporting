@@ -85,14 +85,21 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         // callers don't have to plumb it in explicitly. The Master Dashboard's
         // "Add Report" picker filters on this column — without it set, a
         // ShowOnMaster-flagged report would be invisible there.
+        // OUTPUT INSERTED.company_id flows the server-computed value back
+        // to the caller's in-memory instance, otherwise CompanyId stays at
+        // Guid.Empty client-side and any list filtered on company drops
+        // the freshly-saved report. Bit the Clone path before this fix.
         await using var cmd = new SqlCommand(
             @"INSERT INTO EMPOWER.RPT_saved_reports
               (id, name, internal_name, category, library_section_id, owner_id, owner_email, field_ids, filters, aggregations, column_state, grid_template_id, connection_id, company_id, primary_table, last_run_at, created_at, updated_at)
+              OUTPUT INSERTED.company_id
               VALUES (@Id, @Name, @InternalName, @Category, @LibrarySectionId, @OwnerId, @OwnerEmail, @FieldIds, @Filters, @Aggregations, @ColumnState, @GridTemplateId, @ConnectionId,
                       (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
                       @PrimaryTable, @LastRunAt, @CreatedAt, @UpdatedAt)", conn);
         AddReportParams(cmd, report);
-        await cmd.ExecuteNonQueryAsync();
+        var insertedCompanyIdRaw = await cmd.ExecuteScalarAsync();
+        if (insertedCompanyIdRaw is Guid insertedCompanyId)
+            report.CompanyId = insertedCompanyId;
         _cache.Invalidate("ReportDbService:Reports:");
         _cache.Invalidate("ReportDbService:Shares:");
         _cache.Invalidate("MasterDashboardService:");
@@ -100,7 +107,18 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         return report;
     }
 
-    public async Task<SavedReport> UpdateReportAsync(SavedReport report)
+    public Task<SavedReport> UpdateReportAsync(SavedReport report) =>
+        UpdateReportInternalAsync(report, asAdmin: false);
+
+    public Task<SavedReport> UpdateReportAsAdminAsync(SavedReport report) =>
+        UpdateReportInternalAsync(report, asAdmin: true);
+
+    // Shared update path. `asAdmin` drops the owner_id check from the WHERE
+    // so a global admin can edit on behalf of any user. OwnerId on the
+    // record is still bound in the UPDATE's SET? No — owner_id isn't in
+    // the SET list at all, so admin edits don't change ownership. The
+    // caller is responsible for the IsAdmin gate; we don't re-check here.
+    private async Task<SavedReport> UpdateReportInternalAsync(SavedReport report, bool asAdmin)
     {
         report.UpdatedAt = DateTime.UtcNow;
 
@@ -108,17 +126,23 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         // Refresh company_id on every update so a connection swap (rare but
         // possible via Schema Builder admin ops) flows through to the report
         // without a separate maintenance step.
+        var whereOwner = asAdmin ? string.Empty : " AND owner_id = @OwnerId";
         await using var cmd = new SqlCommand(
-            @"UPDATE EMPOWER.RPT_saved_reports SET
+            $@"UPDATE EMPOWER.RPT_saved_reports SET
               name = @Name, internal_name = @InternalName, category = @Category, library_section_id = @LibrarySectionId, field_ids = @FieldIds, filters = @Filters, aggregations = @Aggregations,
               column_state = @ColumnState, grid_template_id = @GridTemplateId, connection_id = @ConnectionId,
               company_id = (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
               primary_table = @PrimaryTable,
               last_run_at = @LastRunAt, updated_at = @UpdatedAt
-              WHERE id = @Id AND owner_id = @OwnerId", conn);
+              WHERE id = @Id{whereOwner}", conn);
         AddReportParams(cmd, report);
         var rows = await cmd.ExecuteNonQueryAsync();
-        if (rows == 0) throw new UnauthorizedAccessException("Report not found or not owned by user.");
+        if (rows == 0)
+        {
+            throw new UnauthorizedAccessException(asAdmin
+                ? "Report not found."
+                : "Report not found or not owned by user.");
+        }
         _cache.Invalidate("ReportDbService:Reports:");
         // Renaming or any other report mutation has to invalidate the
         // shared-with-me caches too — those keys (Shares:SharedWith:<userId>)
@@ -165,6 +189,22 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
     public async Task DeleteReportAsync(Guid id, string userId)
     {
         await using var conn = await OpenConnectionAsync();
+
+        // Pre-clean the shared master-dashboard tiles that reference this
+        // report. RPT_master_dashboard_tiles.report_id has no FK to
+        // RPT_saved_reports (the column was added before the FK pattern
+        // standardized), so deleting the report would otherwise leave
+        // dangling tiles that render "report not found" errors on every
+        // viewer's master dashboard. Personal-pin tiles in
+        // RPT_master_dashboard_personal_tiles DO cascade via their FK
+        // — no explicit cleanup needed for those.
+        await using (var tileCleanup = new SqlCommand(
+            "DELETE FROM EMPOWER.RPT_master_dashboard_tiles WHERE report_id = @Id", conn))
+        {
+            tileCleanup.Parameters.Add(new SqlParameter("@Id", id));
+            await tileCleanup.ExecuteNonQueryAsync();
+        }
+
         await using var cmd = new SqlCommand(
             "DELETE FROM EMPOWER.RPT_saved_reports WHERE id = @Id AND owner_id = @UserId", conn);
         cmd.Parameters.Add(new SqlParameter("@Id", id));
@@ -186,8 +226,18 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         // departed and an admin is removing their orphaned reports. Calling
         // sites MUST verify IsAdmin before invoking this; the service trusts
         // the caller. Cascade behavior matches the owner-scoped DeleteReportAsync
-        // (FK ON DELETE CASCADE on RPT_report_shares).
+        // (FK ON DELETE CASCADE on RPT_report_shares + the explicit
+        // master-dashboard-tile cleanup below; personal tiles cascade via
+        // their own FK).
         await using var conn = await OpenConnectionAsync();
+
+        await using (var tileCleanup = new SqlCommand(
+            "DELETE FROM EMPOWER.RPT_master_dashboard_tiles WHERE report_id = @Id", conn))
+        {
+            tileCleanup.Parameters.Add(new SqlParameter("@Id", id));
+            await tileCleanup.ExecuteNonQueryAsync();
+        }
+
         await using var cmd = new SqlCommand(
             "DELETE FROM EMPOWER.RPT_saved_reports WHERE id = @Id", conn);
         cmd.Parameters.Add(new SqlParameter("@Id", id));
@@ -250,6 +300,11 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@CreatedAt", share.CreatedAt));
         await cmd.ExecuteNonQueryAsync();
         _cache.Invalidate("ReportDbService:Shares:");
+        // MasterDashboardService.GetAvailableReportsAsync includes a UNION
+        // arm for reports shared with the current user, so a new share
+        // would otherwise stay invisible in the "Pin to my view" picker
+        // until the per-(company, user) cache entry naturally evicts.
+        _cache.Invalidate("MasterDashboardService:AvailableReports");
         return share;
     }
 
@@ -262,6 +317,11 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@RequesterId", requesterId));
         await cmd.ExecuteNonQueryAsync();
         _cache.Invalidate("ReportDbService:Shares:");
+        // Same as ShareReportAsync — keep the picker's per-user candidate
+        // list honest after a revoke. Without this, a recipient who lost
+        // share access would still see the report in their picker until
+        // the entry evicted naturally.
+        _cache.Invalidate("MasterDashboardService:AvailableReports");
     }
 
     // ════════════════════════════════════════════════════════════════════════

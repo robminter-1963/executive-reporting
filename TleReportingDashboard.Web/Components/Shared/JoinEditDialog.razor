@@ -97,11 +97,75 @@
                     <MudTextField @bind-Value="_edited.OnClause" Label="ON clause"
                                   Variant="Variant.Outlined" Margin="Margin.Dense"
                                   Placeholder="@OnClausePlaceholder" />
+                    @* Declared-key hint + one-click fill. Reads the source
+                       and target's PrimaryColumn from the Table Aliases
+                       catalog and either confirms the current ON clause
+                       references both, or offers a "Use declared keys"
+                       button that writes the suggested clause. Hidden when
+                       either side hasn't declared a primary column. *@
+                    @if (SuggestedOnClause is not null)
+                    {
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mt-1"
+                                  Style="flex-wrap: wrap;">
+                            <MudIcon Icon="@OnClauseValidationIcon"
+                                     Color="@OnClauseValidationColor"
+                                     Size="Size.Small" />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                     Style="line-height: 1.3;">
+                                @OnClauseValidationMessage
+                            </MudText>
+                            @* Always shown when both sides have a declared
+                               primary column — even when the current ON
+                               clause already matches. Clicking overwrites
+                               whatever's in the field with the suggested
+                               clause, so admins can re-seed if they've
+                               edited it manually. *@
+                            @* No title= here: a title attribute on a MudBlazor
+                               component inside this dialog reintroduces the
+                               input-freeze bug. The suggested clause is already
+                               shown in the caption to the left, so the tooltip
+                               was redundant anyway. *@
+                            <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                       Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Outlined.AutoFixHigh"
+                                       OnClick="FillSuggestedOnClause">
+                                Use declared keys
+                            </MudButton>
+                        </MudStack>
+                    }
                 </MudItem>
                 <MudItem xs="12">
                     <MudTextField @bind-Value="_edited.ExtraCondition" Label="AND condition (optional)"
                                   Variant="Variant.Outlined" Margin="Margin.Dense"
                                   Placeholder="@ExtraPlaceholder" />
+                    @* Quick-pick chip row for the target's declared
+                       AdditionalKeyColumns. Each chip appends a starter
+                       "<targetAlias>.<col> = " token to the AND field so
+                       admins finish with the value. Hidden when the target
+                       has no additional keys declared. *@
+                    @if (TargetAdditionalKeys.Count > 0)
+                    {
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="mt-1"
+                                  Style="flex-wrap: wrap;">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Target additional keys:
+                            </MudText>
+                            @* MudButton instead of MudChip — standalone MudChips
+                               with OnClick (outside a MudChipSet) were freezing
+                               input on the rest of the dialog. Small outlined
+                               buttons read the same visually for this use case. *@
+                            @foreach (var col in TargetAdditionalKeys)
+                            {
+                                var c = col;
+                                <MudButton Size="Size.Small"
+                                           Variant="Variant.Outlined"
+                                           Color="Color.Default"
+                                           OnClick="@(() => AppendExtraConditionToken(c))">
+                                    @c
+                                </MudButton>
+                            }
+                        </MudStack>
+                    }
                 </MudItem>
             }
             else
@@ -254,6 +318,128 @@
         {
             _edited.PrimaryTable = match.TableName;
             _edited.PrimaryAlias = match.Alias ?? string.Empty;
+        }
+    }
+
+    // ── Declared-key validator + suggester ─────────────────────────────
+    // Pulls the source/target Table-Aliases records (which carry the
+    // admin-declared PrimaryColumn + AdditionalKeyColumns) and uses them
+    // to validate and pre-fill the ON clause / AND condition. The intent
+    // is to make the Join editor "dummy-proof": admins who already typed
+    // their keys once on the Table Aliases tab shouldn't have to retype
+    // them here.
+
+    // The source-side and target-side records (when found in the catalog).
+    private CustomPrimaryTableRecord? CurrentSourceRecord =>
+        FindAliasRecord(_edited.SourceAlias, _effectiveSourceAliases);
+    private CustomPrimaryTableRecord? CurrentTargetRecord =>
+        FindAliasRecord(_edited.Alias, _effectiveAliases);
+
+    private static CustomPrimaryTableRecord? FindAliasRecord(
+        string? alias, IEnumerable<CustomPrimaryTableRecord> pool)
+    {
+        if (string.IsNullOrWhiteSpace(alias)) return null;
+        return pool.FirstOrDefault(r =>
+            !string.IsNullOrWhiteSpace(r.Alias)
+            && string.Equals(r.Alias, alias, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // The natural "<target>.<targetPK> = <source>.<sourcePK>" clause when
+    // both sides have a primary column declared. Null when either side is
+    // missing the data — we don't guess.
+    private string? SuggestedOnClause
+    {
+        get
+        {
+            var src = CurrentSourceRecord;
+            var tgt = CurrentTargetRecord;
+            if (src is null || tgt is null) return null;
+            if (string.IsNullOrWhiteSpace(src.PrimaryColumn) ||
+                string.IsNullOrWhiteSpace(tgt.PrimaryColumn))
+                return null;
+            // Prefer alias prefixes when both rows have an alias — they're
+            // the tokens that actually appear in the emitted SQL and the
+            // resolver's adjacency map.
+            var srcRef = !string.IsNullOrWhiteSpace(src.Alias) ? src.Alias! : src.TableName;
+            var tgtRef = !string.IsNullOrWhiteSpace(tgt.Alias) ? tgt.Alias! : tgt.TableName;
+            return $"{tgtRef}.{tgt.PrimaryColumn} = {srcRef}.{src.PrimaryColumn}";
+        }
+    }
+
+    // True when the user's ON clause already contains references to both
+    // sides' declared primary columns. Case-insensitive substring check
+    // (rather than tokenized SQL parsing) keeps it cheap and tolerant of
+    // whitespace / qualifier styles.
+    private bool OnClauseUsesDeclaredKeys
+    {
+        get
+        {
+            var src = CurrentSourceRecord;
+            var tgt = CurrentTargetRecord;
+            if (src is null || tgt is null) return false;
+            if (string.IsNullOrWhiteSpace(src.PrimaryColumn) ||
+                string.IsNullOrWhiteSpace(tgt.PrimaryColumn))
+                return false;
+            var sql = _edited.OnClause ?? string.Empty;
+            return sql.Contains(src.PrimaryColumn, StringComparison.OrdinalIgnoreCase)
+                && sql.Contains(tgt.PrimaryColumn, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private string OnClauseValidationMessage =>
+        OnClauseUsesDeclaredKeys
+            ? "ON clause references the declared primary columns."
+            : $"Suggested from declared keys: {SuggestedOnClause}";
+
+    private string OnClauseValidationIcon =>
+        OnClauseUsesDeclaredKeys
+            ? Icons.Material.Outlined.CheckCircle
+            : Icons.Material.Outlined.Lightbulb;
+
+    private Color OnClauseValidationColor =>
+        OnClauseUsesDeclaredKeys ? Color.Success : Color.Info;
+
+    // Writes the suggested ON clause into the input. Trim-replaces; admins
+    // can still edit further. Snackbar not needed since the input changes
+    // live.
+    private void FillSuggestedOnClause()
+    {
+        if (SuggestedOnClause is null) return;
+        _edited.OnClause = SuggestedOnClause;
+    }
+
+    // Target's AdditionalKeyColumnsList — drives the chip row under the
+    // AND condition input. Returns empty when the target isn't declared
+    // or has no additional keys.
+    private IReadOnlyList<string> TargetAdditionalKeys =>
+        CurrentTargetRecord?.AdditionalKeyColumnsList ?? Array.Empty<string>();
+
+    private string ResolveTargetAliasOrTable()
+    {
+        var t = CurrentTargetRecord;
+        if (t is null) return _edited.Alias ?? _edited.TargetTable ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(t.Alias) ? t.Alias! : t.TableName;
+    }
+
+    // Appends a "<targetAlias>.<col> = " starter to the AND condition.
+    // If the field already has content, ANDs the new starter on; if it's
+    // empty, just writes the bare starter.
+    private void AppendExtraConditionToken(string column)
+    {
+        if (string.IsNullOrWhiteSpace(column)) return;
+        var prefix = ResolveTargetAliasOrTable();
+        var starter = $"{prefix}.{column} = ";
+        if (string.IsNullOrWhiteSpace(_edited.ExtraCondition))
+        {
+            _edited.ExtraCondition = starter;
+        }
+        else
+        {
+            // Avoid double-AND or stray whitespace mishaps when admins
+            // chain a few keys together (e.g. IDX + WHICHBORR).
+            var existing = _edited.ExtraCondition!.TrimEnd();
+            var sep = existing.EndsWith("AND", StringComparison.OrdinalIgnoreCase) ? " " : " AND ";
+            _edited.ExtraCondition = existing + sep + starter;
         }
     }
 

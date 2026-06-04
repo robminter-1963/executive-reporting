@@ -1,0 +1,122 @@
+@using MudBlazor
+
+@*
+    Viewer-friendly error card. Replaces raw "<MudAlert>@ex.Message</MudAlert>"
+    surfaces that used to leak SQL, schema names, or stack traces. The
+    Message comes from FriendlyError.FromException — short, plain-English,
+    safe to show every user.
+
+    Admins (IsAdmin=true) get an extra "Show details" expander that reveals
+    the underlying SQL + bound parameters + stack so they can diagnose
+    without having to fish in the server log. Non-admins never see those —
+    not for security per se (the server log has everything), but because
+    "FROM EMPOWER.LN_BORRINFO WHERE …" in front of an executive is the
+    classic "broke the magic" moment a reporting product should avoid.
+
+    OnRetry is optional. When set, a Retry button appears next to the
+    Show-details toggle so a transient failure (deadlock, timeout) is one
+    click to retry, not a full page reload.
+*@
+<MudPaper Elevation="0"
+          Style="border: 1px solid #F4C7C3; background: #FCE8E6;
+                 border-radius: 6px; padding: 16px;">
+    <MudStack Spacing="2">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Outlined.ErrorOutline"
+                     Color="Color.Error" Size="Size.Medium" />
+            <MudText Typo="Typo.subtitle1" Style="font-weight: 600; color: #B71C1C;">
+                @Heading
+            </MudText>
+        </MudStack>
+        <MudText Typo="Typo.body2" Color="Color.Secondary">@Message</MudText>
+
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            @if (OnRetry.HasDelegate)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Outlined.Refresh"
+                           OnClick="OnRetry">
+                    Retry
+                </MudButton>
+            }
+            @if (IsAdmin && HasDetails)
+            {
+                <MudButton Variant="Variant.Text" Size="Size.Small"
+                           Color="Color.Default"
+                           StartIcon="@(_detailsOpen ? Icons.Material.Outlined.ExpandLess : Icons.Material.Outlined.ExpandMore)"
+                           OnClick="@(() => _detailsOpen = !_detailsOpen)">
+                    @(_detailsOpen ? "Hide details" : "Show details")
+                </MudButton>
+            }
+        </MudStack>
+
+        @if (IsAdmin && HasDetails && _detailsOpen)
+        {
+            <MudPaper Elevation="0"
+                      Style="background: #FFF; border: 1px solid #E8EAED; border-radius: 4px; padding: 12px;">
+                @if (!string.IsNullOrWhiteSpace(Sql))
+                {
+                    <MudText Typo="Typo.overline" Color="Color.Secondary"
+                             Style="letter-spacing: 0.5px;">Emitted SQL</MudText>
+                    <pre style="font-family: monospace; font-size: 0.78rem; white-space: pre-wrap;
+                                margin: 4px 0 12px; color: #1F1F1F;">@Sql</pre>
+                }
+                @if (Parameters is { Count: > 0 })
+                {
+                    <MudText Typo="Typo.overline" Color="Color.Secondary"
+                             Style="letter-spacing: 0.5px;">Parameters</MudText>
+                    <pre style="font-family: monospace; font-size: 0.78rem; white-space: pre-wrap;
+                                margin: 4px 0 12px; color: #1F1F1F;">@FormatParameters()</pre>
+                }
+                @if (!string.IsNullOrWhiteSpace(StackTrace))
+                {
+                    <MudText Typo="Typo.overline" Color="Color.Secondary"
+                             Style="letter-spacing: 0.5px;">Underlying error</MudText>
+                    <pre style="font-family: monospace; font-size: 0.72rem; white-space: pre-wrap;
+                                margin: 4px 0 0; color: #5F6368;">@StackTrace</pre>
+                }
+            </MudPaper>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    // Plain-English error copy, typically produced by FriendlyError.FromException.
+    [Parameter, EditorRequired] public string Message { get; set; } = string.Empty;
+
+    // Card heading. Defaults to the standard "Couldn't load this report" line
+    // so callers usually don't pass it — but the detail viewer / dashboard
+    // tile pass their own ("Couldn't load this tile") to match the surface.
+    [Parameter] public string Heading { get; set; } = "Couldn't load this report";
+
+    // Drives whether the Show-details expander appears at all. Callers
+    // resolve via AdminService.IsAdmin(_userEmail).
+    [Parameter] public bool IsAdmin { get; set; }
+
+    // Optional details surfaced under the expander. All three are admin-only.
+    // Sql + Parameters come from QueryExecutionException; StackTrace from
+    // any other Exception's .ToString() when the caller wants to expose it.
+    [Parameter] public string? Sql { get; set; }
+    [Parameter] public Dictionary<string, object?>? Parameters { get; set; }
+    [Parameter] public string? StackTrace { get; set; }
+
+    [Parameter] public EventCallback OnRetry { get; set; }
+
+    private bool _detailsOpen;
+
+    private bool HasDetails =>
+        !string.IsNullOrWhiteSpace(Sql)
+        || Parameters is { Count: > 0 }
+        || !string.IsNullOrWhiteSpace(StackTrace);
+
+    // One key=value per line so admins can copy/paste into a SQL Server
+    // session without reformatting. NULLs render as `NULL` to match SQL
+    // semantics; everything else uses the invariant ToString.
+    private string FormatParameters()
+    {
+        if (Parameters is null || Parameters.Count == 0) return string.Empty;
+        return string.Join("\n", Parameters
+            .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(kv => $"{kv.Key} = {(kv.Value is null ? "NULL" : System.Convert.ToString(kv.Value, System.Globalization.CultureInfo.InvariantCulture))}"));
+    }
+}

@@ -93,6 +93,25 @@
                     }
                 </MudSelect>
             }
+
+            @* Personal-vs-shared destination picker. Renders only when
+               the caller passes AllowPersonalPin=true (the master dashboard
+               does for everyone). Non-admins see the checkbox pre-checked
+               and disabled — personal pins are their only option. Admins
+               see it unchecked by default so the standard add-to-shared
+               workflow is unchanged. *@
+            @if (AllowPersonalPin)
+            {
+                <MudCheckBox T="bool" @bind-Value="_pinToMyView"
+                             Disabled="@ForcePersonalPin"
+                             Color="Color.Primary" Dense
+                             Label="Pin to my view only (don't add to the shared dashboard)" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="margin-left: 32px; margin-top: -8px;">
+                    @(_pinToMyView
+                        ? "Only you will see this tile on this tab."
+                        : "Every viewer of this company will see this tile.")
+                </MudText>
+            }
         </MudStack>
     </DialogContent>
     <DialogActions>
@@ -112,12 +131,34 @@
     // group. Empty list = picker is hidden, exactly the pre-sections UX.
     [Parameter] public List<MasterDashboardSection> Sections { get; set; } = new();
 
+    // Renders the "Pin to my view only" toggle when true. Lets the same
+    // picker serve both flows: admins choose shared-vs-personal; non-admins
+    // are restricted to personal-only (see ForcePersonalPin). When false,
+    // the dialog hides the toggle entirely and always returns IsPersonal=false.
+    [Parameter] public bool AllowPersonalPin { get; set; }
+
+    // Locks the toggle on AND disables it when true. Used for non-admins
+    // who can only create personal pins; the checkbox renders for clarity
+    // but they can't switch it off.
+    [Parameter] public bool ForcePersonalPin { get; set; }
+
     private SavedReport? _selected;
     // null = "(no section)" — tile lands in the un-grouped bucket.
     private int? _selectedSectionId;
+    // Backing field for the personal-pin checkbox. Initialized from
+    // ForcePersonalPin so non-admins see it pre-checked the moment the
+    // dialog opens. OnInitialized runs the assignment so the parameter
+    // is available.
+    private bool _pinToMyView;
+
+    protected override void OnInitialized()
+    {
+        _pinToMyView = ForcePersonalPin;
+    }
 
     private void Select(SavedReport report) => _selected = report;
-    private void Ok() => MudDialog?.Close(DialogResult.Ok(new AddTileResult(_selected!.Id, _selectedSectionId)));
+    private void Ok() => MudDialog?.Close(DialogResult.Ok(
+        new AddTileResult(_selected!.Id, _selectedSectionId, AllowPersonalPin && _pinToMyView)));
 
     // No initial value — dirty when a report has been picked or a
     // non-default section was chosen. Either signal means the user has
@@ -138,7 +179,9 @@
 
     // Returned to the caller via DialogResult.Data so adding a tile can
     // carry both the picked report and the chosen section in one round-trip.
-    public sealed record AddTileResult(Guid ReportId, int? SectionId);
+    // IsPersonal=true routes the caller to AddPersonalTileAsync (per-user pin)
+    // instead of AddTileAsync (shared); false is the historical default.
+    public sealed record AddTileResult(Guid ReportId, int? SectionId, bool IsPersonal = false);
 
     // Compact one-line summary of a saved report's filter dict so users can
     // distinguish two reports that share a name. JsonDocument streaming

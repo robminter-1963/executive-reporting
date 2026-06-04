@@ -8,6 +8,17 @@ public class FieldDefinition
     public string Description { get; set; } = string.Empty;
     public string FieldType { get; set; } = string.Empty; // "Dimension" or "Measure"
     public int? CodeSetId { get; set; }
+    // FK to a LookupTypeDefinition. When set, the header-filter chip
+    // picker for this field fetches its values via the lookup type's
+    // admin-authored SELECT (through ILookupValueService) and the
+    // user's selections feed the field's FilterPredicateSql at query
+    // time. Distinct from CodeSetId (Empower-specific SET_CODESETS).
+    public string? LookupTypeId { get; set; }
+    // Optional alternate column expression for the WHERE comparison when
+    // this field is filtered via its LookupType. The picker uses this
+    // signal to decide whether to send Code (when set) vs Description
+    // (when blank). See Configuration.FieldDefinition.FilterColumn.
+    public string? FilterColumn { get; set; }
     public string? RolesRequired { get; set; }
     public string? DefaultRedactionValue { get; set; }
     // Surfaced so the UI can detect aggregate fields (SUM/COUNT/AVG/...) and

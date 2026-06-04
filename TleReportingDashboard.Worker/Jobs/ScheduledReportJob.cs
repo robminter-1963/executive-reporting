@@ -205,7 +205,7 @@ public sealed class ScheduledReportJob
             var (bytes, fileName) = FormatAttachment(
                 BuildExportData(response, savedReport.ColumnState),
                 savedReport.Name, schedule.AttachmentFormat);
-            var html = BuildEmailBody(savedReport.Name, response.TotalCount, schedule.IncludePreview);
+            var html = BuildEmailBody(savedReport.Name, response.TotalCount, schedule.IncludePreview, response.Sql);
 
             await _emailService.SendReportEmailAsync(target, subject, html, bytes, fileName);
 
@@ -420,6 +420,18 @@ public sealed class ScheduledReportJob
         catch (Exception ex)
         {
             _logger.LogError(ex, "Single-pass query failed for ScheduleId={ScheduleId}", scheduleId);
+
+            // Debug: emit the failing SQL into a notification email to the
+            // schedule owner so they can see the exact query the pipeline
+            // tried. QueryExecutionException carries Sql + Parameters
+            // alongside the inner message; non-QEE exceptions only have
+            // the message. Temporary; remove when the team-scope SQL gap
+            // is fully diagnosed.
+            var debugSql = ex is TleReportingDashboard.Web.Services.QueryPipeline.QueryExecutionException qex
+                ? qex.Sql
+                : null;
+            await TrySendDebugFailureEmailAsync(scheduleId, schedule, $"team {teamId}", ex.Message, debugSql);
+
             outcomes.Add(new($"team {teamId}", "Failed", null,
                 $"Query failed: {ex.Message}"));
             return outcomes;
@@ -513,7 +525,7 @@ public sealed class ScheduledReportJob
                 var (bytes, fileName) = FormatAttachment(
                     BuildExportData(partial, savedReport.ColumnState),
                     savedReport.Name, schedule.AttachmentFormat);
-                var html = BuildEmailBody(savedReport.Name, partial.TotalCount, schedule.IncludePreview);
+                var html = BuildEmailBody(savedReport.Name, partial.TotalCount, schedule.IncludePreview, response.Sql);
 
                 await _emailService.SendReportEmailAsync(recipientEmail, subject, html, bytes, fileName);
 
@@ -604,7 +616,7 @@ public sealed class ScheduledReportJob
             var (bytes, fileName) = FormatAttachment(
                 BuildExportData(outboundResponse, savedReport.ColumnState),
                 savedReport.Name, schedule.AttachmentFormat);
-            var html = BuildEmailBody(savedReport.Name, outboundResponse.TotalCount, schedule.IncludePreview);
+            var html = BuildEmailBody(savedReport.Name, outboundResponse.TotalCount, schedule.IncludePreview, outboundResponse.Sql);
 
             await _emailService.SendReportEmailAsync(managerEmail, subject, html, bytes, fileName);
 
@@ -935,7 +947,7 @@ public sealed class ScheduledReportJob
         return (excelBytes, $"{safeReportName}_{timestamp}.xlsx");
     }
 
-    private static string BuildEmailBody(string reportName, int rowCount, bool includePreview)
+    private static string BuildEmailBody(string reportName, int rowCount, bool includePreview, string? debugSql = null)
     {
         var html = $"""
             <h2>Scheduled Report: {System.Net.WebUtility.HtmlEncode(reportName)}</h2>
@@ -952,7 +964,68 @@ public sealed class ScheduledReportJob
             html += "<p><em>Preview was not included per your schedule settings.</em></p>";
         }
 
+        // Debug — append the executed SQL so recipients can verify the
+        // exact query that produced the attachment. Temporary; remove
+        // once the team-scope SQL discrepancy is resolved.
+        if (!string.IsNullOrWhiteSpace(debugSql))
+        {
+            html += $"""
+                <hr />
+                <h3>Debug: Executed SQL</h3>
+                <pre style="background:#F5F5F5;border:1px solid #DADCE0;padding:8px;font-size:11px;white-space:pre-wrap;word-break:break-word;">{System.Net.WebUtility.HtmlEncode(debugSql)}</pre>
+                """;
+        }
+
         return html;
+    }
+
+    // Debug helper — fires from a failed query catch with the executed
+    // SQL captured. Sends to the schedule's owner so the admin running
+    // the test can see exactly what the pipeline produced. Errors
+    // sending the debug email are swallowed (we don't want to mask the
+    // original failure with a secondary email problem).
+    private async Task TrySendDebugFailureEmailAsync(
+        Guid scheduleId,
+        ReportSchedule schedule,
+        string recipientContext,
+        string errorMessage,
+        string? failingSql)
+    {
+        if (string.IsNullOrWhiteSpace(schedule.OwnerEmail)) return;
+
+        try
+        {
+            var sqlBlock = string.IsNullOrWhiteSpace(failingSql)
+                ? "<p><em>No SQL was captured — the failure happened before the query reached the database.</em></p>"
+                : $"""
+                    <h3>Failing SQL</h3>
+                    <pre style="background:#FFF3E0;border:1px solid #FFB300;padding:8px;font-size:11px;white-space:pre-wrap;word-break:break-word;">{System.Net.WebUtility.HtmlEncode(failingSql)}</pre>
+                    """;
+
+            var html = $"""
+                <h2>Scheduled Run Failed — Debug</h2>
+                <ul>
+                    <li><strong>Schedule:</strong> {System.Net.WebUtility.HtmlEncode(schedule.Subject ?? scheduleId.ToString())}</li>
+                    <li><strong>Recipient context:</strong> {System.Net.WebUtility.HtmlEncode(recipientContext)}</li>
+                    <li><strong>Error:</strong> {System.Net.WebUtility.HtmlEncode(errorMessage)}</li>
+                    <li><strong>Time:</strong> {DateTime.Now:MMMM dd, yyyy h:mm tt}</li>
+                </ul>
+                {sqlBlock}
+                <p><em>This is a debug message; no attachment was generated because the query failed.</em></p>
+                """;
+
+            await _emailService.SendReportEmailAsync(
+                schedule.OwnerEmail,
+                $"[DEBUG] Schedule failed: {schedule.Subject ?? scheduleId.ToString()}",
+                html,
+                attachment: null,
+                attachmentFileName: string.Empty);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to send debug failure email for ScheduleId={ScheduleId}", scheduleId);
+        }
     }
 
     private async Task SendFailureNotificationAsync(ReportSchedule schedule, int failures)

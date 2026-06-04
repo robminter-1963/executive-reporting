@@ -22,6 +22,32 @@ public class FieldConfig
     public List<string> JoinIds { get; set; } = new();
     public string? SqlJoin { get; set; }
     public List<string>? LookupIds { get; set; }
+
+    /// <summary>
+    /// FK to a LookupTypeDefinition that drives this field's chip picker.
+    /// See Configuration.FieldDefinition.LookupTypeId for semantics. Mirrored
+    /// to FieldConfig so the filter UI doesn't have to consult the raw
+    /// schema config per render.
+    /// </summary>
+    public string? LookupTypeId { get; set; }
+
+    /// <summary>
+    /// Admin-authored WHERE fragment emitted when this field is filtered
+    /// (with the LookupType's selections substituted). See
+    /// Configuration.FieldDefinition.FilterPredicateSql for the two
+    /// substitution modes (placeholder vs implicit IN-append).
+    /// </summary>
+    public string? FilterPredicateSql { get; set; }
+
+    /// <summary>
+    /// Optional alternate column expression for the WHERE comparison when
+    /// this field is filtered via its LookupType. See
+    /// Configuration.FieldDefinition.FilterColumn for full semantics.
+    /// When set, the picker emits the LookupType's value column (CODENUM)
+    /// and the WHERE becomes <c>{FilterColumn} IN (...)</c>.
+    /// </summary>
+    public string? FilterColumn { get; set; }
+
     public int SortOrder { get; set; }
     public int? MaxLength { get; set; }
     // Optional column min-width hint (px) for the report grid. Mirrors

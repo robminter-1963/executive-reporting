@@ -7,16 +7,19 @@ public class LibrarySectionService : ILibrarySectionService
 {
     private readonly string _connectionString;
     private readonly ConfigDbCache _cache;
+    private readonly IAuditLogger _audit;
     private readonly ILogger<LibrarySectionService> _logger;
 
     public LibrarySectionService(
         IConfiguration configuration,
         ConfigDbCache cache,
+        IAuditLogger audit,
         ILogger<LibrarySectionService> logger)
     {
         _connectionString = configuration.GetConnectionString("ConfigDb")
             ?? throw new InvalidOperationException("ConfigDb connection string is required.");
         _cache = cache;
+        _audit = audit;
         _logger = logger;
     }
 
@@ -99,6 +102,14 @@ public class LibrarySectionService : ILibrarySectionService
         _cache.Invalidate("LibrarySectionService:");
         _logger.LogInformation("Library section created: {Id} {Name} for company {CompanyId}",
             section.Id, section.Name, section.CompanyId);
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Create,
+            resourceType: AuditResources.LibrarySection,
+            resourceId: section.Id.ToString(),
+            resourceLabel: $"{section.Name} (company {section.CompanyId})",
+            before: null,
+            after: new { section.Id, section.CompanyId, section.Name, section.SortOrder });
         return section;
     }
 
@@ -106,6 +117,19 @@ public class LibrarySectionService : ILibrarySectionService
     {
         if (string.IsNullOrWhiteSpace(newName))
             throw new ArgumentException("Section name is required.", nameof(newName));
+        // Capture the old name for the diff — the audit log needs both sides
+        // even though the UPDATE only writes the new value.
+        string? oldName = null;
+        await using (var lookup = new SqlConnection(_connectionString))
+        {
+            await lookup.OpenAsync();
+            await using var sel = new SqlCommand(
+                "SELECT name FROM EMPOWER.RPT_library_sections WHERE id = @Id;", lookup);
+            sel.Parameters.Add(new SqlParameter("@Id", sectionId));
+            var val = await sel.ExecuteScalarAsync();
+            oldName = val as string;
+        }
+
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
         await using var cmd = new SqlCommand(@"
@@ -124,6 +148,15 @@ public class LibrarySectionService : ILibrarySectionService
                 $"A section named \"{newName.Trim()}\" already exists for this company.");
         }
         _cache.Invalidate("LibrarySectionService:");
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Update,
+            resourceType: AuditResources.LibrarySection,
+            resourceId: sectionId.ToString(),
+            resourceLabel: newName.Trim(),
+            before: oldName is null ? null : new { Name = oldName },
+            after: new { Name = newName.Trim() });
     }
 
     public async Task ReorderSectionsAsync(Guid companyId, IList<Guid> orderedIds)
@@ -153,6 +186,15 @@ public class LibrarySectionService : ILibrarySectionService
             throw;
         }
         _cache.Invalidate("LibrarySectionService:");
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Reorder,
+            resourceType: AuditResources.LibrarySection,
+            resourceId: companyId.ToString(),
+            resourceLabel: $"{orderedIds.Count} sections (company {companyId})",
+            before: null,
+            after: new { OrderedIds = orderedIds.ToArray() });
     }
 
     public async Task DeleteSectionAsync(Guid sectionId)
@@ -190,5 +232,15 @@ public class LibrarySectionService : ILibrarySectionService
         }
         _cache.Invalidate("LibrarySectionService:");
         _cache.Invalidate("ReportDbService:Reports:");
+
+        await _audit.LogAsync(
+            actorEmail: null,
+            action: AuditActions.Delete,
+            resourceType: AuditResources.LibrarySection,
+            resourceId: sectionId.ToString(),
+            resourceLabel: null,
+            before: new { Id = sectionId, IsActive = true },
+            after: new { Id = sectionId, IsActive = false },
+            notes: "soft-delete + report FK cleared");
     }
 }

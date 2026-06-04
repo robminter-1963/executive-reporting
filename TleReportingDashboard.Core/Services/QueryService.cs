@@ -51,6 +51,7 @@ public class QueryService : IQueryService
         var joinConfigs = await _schemaService.GetJoinConfigsAsync(request.ConnectionId);
         var customFilters = await _schemaService.GetCustomFiltersAsync(request.ConnectionId);
         var lookups = await _schemaService.GetLookupsAsync(request.ConnectionId);
+        var lookupTypes = await _schemaService.GetLookupTypesAsync(request.ConnectionId);
 
         // Primary table is required per-report. No schema-default fallback —
         // each report must explicitly set the root table its joins hang off.
@@ -61,7 +62,8 @@ public class QueryService : IQueryService
         }
 
         var (sql, parameters) = QueryBuilder.BuildQuery(
-            request, fieldConfigs, joinConfigs, customFilters, lookups, dialect, request.PrimaryTable);
+            request, fieldConfigs, joinConfigs, customFilters, lookups, dialect, request.PrimaryTable,
+            lookupTypes);
 
         // Resolve columns metadata. First-wins dedupe matches the source
         // (SchemaService.GetFieldConfigsAsync) — guards against any path
@@ -171,6 +173,7 @@ public class QueryService : IQueryService
         var joinConfigs = await _schemaService.GetJoinConfigsAsync(request.ConnectionId);
         var customFilters = await _schemaService.GetCustomFiltersAsync(request.ConnectionId);
         var lookups = await _schemaService.GetLookupsAsync(request.ConnectionId);
+        var lookupTypes = await _schemaService.GetLookupTypesAsync(request.ConnectionId);
 
         if (string.IsNullOrWhiteSpace(request.PrimaryTable))
         {
@@ -179,7 +182,8 @@ public class QueryService : IQueryService
         }
 
         var (sql, parameters) = QueryBuilder.BuildQuery(
-            request, fieldConfigs, joinConfigs, customFilters, lookups, dialect, request.PrimaryTable);
+            request, fieldConfigs, joinConfigs, customFilters, lookups, dialect, request.PrimaryTable,
+            lookupTypes);
 
         return (sql, parameters.ToDictionary(
             p => p.ParameterName,

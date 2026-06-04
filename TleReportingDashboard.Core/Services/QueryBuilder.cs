@@ -191,7 +191,8 @@ public static class QueryBuilder
         List<CustomFilterDefinition>? customFilters = null,
         List<LookupDefinition>? lookups = null,
         TleReportingDashboard.Web.Services.QueryPipeline.ISqlDialect? dialect = null,
-        string? primaryTableOverride = null)
+        string? primaryTableOverride = null,
+        List<LookupTypeDefinition>? lookupTypes = null)
     {
         // Per-report SQL-mode calc columns ride on the request so every call
         // site (QueryService, ReportBuilder preview, detail viewer, tests)
@@ -384,7 +385,11 @@ public static class QueryBuilder
             foreach (var id in ids)
             {
                 if (!seenLookups.Add(id) || !lookupMap.TryGetValue(id, out var lu)) continue;
-                preambles.Add(lu.SqlPreamble);
+                // Simple-mode-only lookups (filter-pickable) contribute no
+                // CTE — skip the preamble add for those; they only feed
+                // the filter chip picker via ILookupValueService.
+                if (!string.IsNullOrWhiteSpace(lu.SqlPreamble))
+                    preambles.Add(lu.SqlPreamble);
                 if (!string.IsNullOrWhiteSpace(lu.SqlJoin))
                     lookupJoins.Add(lu.SqlJoin);
             }
@@ -502,6 +507,59 @@ public static class QueryBuilder
                 selectColumns.Add($"{sortExpr} AS {dialect.QuoteIdentifier(alias)}");
                 existingSelectExprs.Add(sortExpr);
                 existingSelectExprs.Add(dialect.QuoteIdentifier(alias));
+            }
+        }
+
+        // Same idea for the GROUP BY path: when the report aggregates (so
+        // willGroupBy is true and the DISTINCT injector above is skipped),
+        // a lookup-typed sort field's SortExpression (e.g. LOOKUP.ORDERBY)
+        // is neither in the SELECT nor in the GROUP BY. The inner query
+        // itself can still ORDER BY the raw expression — SQL Server / PG
+        // both allow non-grouped aggregable columns in ORDER BY when wrapped
+        // — but the dashboard's early-return branch (BuildDashboardPreviewSql)
+        // can't reach the lookup ordering without a projected alias to point
+        // at. Inject `MIN(<sortExpr>) AS __sort_N` so the alias exists; MIN
+        // is safe because every row in a group shares the same lookup
+        // sequence value when the dim is keyed to the same lookup. The `__`
+        // prefix keeps these columns out of the viewer's grid (see
+        // ReportGrid.VisibleColumns).
+        if (willGroupBy)
+        {
+            var existingSelectExprsGrouped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var col in selectColumns)
+            {
+                var asIdx = col.LastIndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+                if (asIdx > 0)
+                {
+                    existingSelectExprsGrouped.Add(col[..asIdx].Trim());
+                    existingSelectExprsGrouped.Add(col[(asIdx + 4)..].Trim());
+                }
+                else
+                {
+                    existingSelectExprsGrouped.Add(col.Trim());
+                }
+            }
+
+            string? ResolveSortExpressionForGroup(string fid)
+            {
+                if (fieldLookup.TryGetValue(fid, out var f)) return f.GetSortExpression();
+                return null;
+            }
+
+            var groupSortInjectIdx = 0;
+            foreach (var fid in new[] { request.SortField, request.SecondarySortField })
+            {
+                if (string.IsNullOrWhiteSpace(fid)) continue;
+                var sortExpr = ResolveSortExpressionForGroup(fid);
+                if (string.IsNullOrWhiteSpace(sortExpr)) continue;
+                // Skip when the sort expression matches an existing SELECT
+                // entry (same field, no separate lookup column) — MIN-wrapping
+                // a dim column that's already grouped is redundant.
+                if (existingSelectExprsGrouped.Contains(sortExpr)) continue;
+                var alias = $"__sort_{groupSortInjectIdx++}";
+                selectColumns.Add($"MIN({sortExpr}) AS {dialect.QuoteIdentifier(alias)}");
+                existingSelectExprsGrouped.Add(sortExpr);
+                existingSelectExprsGrouped.Add(dialect.QuoteIdentifier(alias));
             }
         }
 
@@ -960,11 +1018,15 @@ public static class QueryBuilder
                                 SourceColumn = fc.SourceColumn,
                                 DataType = fc.DataType,
                                 DisplayTimezone = fc.DisplayTimezone,
-                                ApplyTimezoneConversion = fc.ApplyTimezoneConversion
+                                ApplyTimezoneConversion = fc.ApplyTimezoneConversion,
+                                LookupTypeId = fc.LookupTypeId,
+                                FilterPredicateSql = fc.FilterPredicateSql,
+                                FilterColumn = fc.FilterColumn
                             }
                             : null,
                         dialect,
-                        parameters);
+                        parameters,
+                        lookupTypes);
                 if (!string.IsNullOrWhiteSpace(advExpr))
                     whereClauses.Add(advExpr);
             }
@@ -1283,6 +1345,26 @@ public static class QueryBuilder
         {
             string orderBy;
             var dirInner = string.Equals(defaultSortDir, "desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
+
+            // Phase 2 of the lookup-sort fix: same rule as the wrap branch
+            // below, but the inner is already aggregated so we ORDER BY the
+            // projected alias directly (no outer MIN needed). BuildQuery's
+            // willGroupBy injector emits `MIN(<sortExpr>) AS __sort_0` when
+            // the report's sort field has a SortExpression (typical for
+            // lookup-driven status fields). Without this, the default
+            // ORDER BY here sorts alphabetically on the dim column and the
+            // lookup-defined ordering is lost.
+            var innerHasSort0Inner = HasSortAlias(innerSql, "__sort_0", dialect);
+            string? sortedDimFieldIdInner = null;
+            if (defaultSortColumn == "groupBy" && dimensionFieldIds.Count > 0)
+                sortedDimFieldIdInner = dimensionFieldIds[0];
+            else if (defaultSortColumn is { } sInner && sInner.StartsWith("dim:"))
+                sortedDimFieldIdInner = sInner[4..];
+            var dimensionHasCustomSortInner = sortedDimFieldIdInner is not null
+                && fieldLookup.TryGetValue(sortedDimFieldIdInner, out var dimFieldInner)
+                && !string.IsNullOrWhiteSpace(dimFieldInner.SortExpression);
+            var useLookupSortInner = innerHasSort0Inner && dimensionHasCustomSortInner;
+
             if (string.IsNullOrWhiteSpace(defaultSortColumn))
             {
                 orderBy = dimensionFieldIds.Count > 0
@@ -1291,11 +1373,15 @@ public static class QueryBuilder
             }
             else if (defaultSortColumn == "groupBy" && dimensionFieldIds.Count > 0)
             {
-                orderBy = $"ORDER BY {dialect.QuoteIdentifier(dimensionFieldIds[0])} {dirInner}";
+                orderBy = useLookupSortInner
+                    ? $"ORDER BY {dialect.QuoteIdentifier("__sort_0")} {dirInner}"
+                    : $"ORDER BY {dialect.QuoteIdentifier(dimensionFieldIds[0])} {dirInner}";
             }
             else if (defaultSortColumn.StartsWith("dim:"))
             {
-                orderBy = $"ORDER BY {dialect.QuoteIdentifier(defaultSortColumn[4..])} {dirInner}";
+                orderBy = useLookupSortInner
+                    ? $"ORDER BY {dialect.QuoteIdentifier("__sort_0")} {dirInner}"
+                    : $"ORDER BY {dialect.QuoteIdentifier(defaultSortColumn[4..])} {dirInner}";
             }
             else if (defaultSortColumn == "count")
             {
@@ -1345,6 +1431,34 @@ public static class QueryBuilder
         // Outer ORDER BY: default sort column if set, otherwise descending count.
         string outerOrderBy;
         var dir = string.Equals(defaultSortDir, "desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
+
+        // When the inner SELECT projects a synthetic "__sort_0" column (the
+        // DISTINCT path injects one for the report's primary sort field, and
+        // that injection is the lookup-aware ORDERBY column when the field
+        // has a SortExpression configured), the outer GROUP BY can sort by
+        // MIN("__sort_0") to inherit the lookup's defined sequence instead
+        // of the alphabetical text order of the dimension. Without this the
+        // dashboard collapse re-sorts statuses alphabetically and the
+        // user-defined lookup ordering (e.g. Signed/Enrolled, Filed, Granted)
+        // is lost. Functionally __sort_0 is constant per group when the
+        // dimension is keyed to the same lookup, so MIN() is just a way of
+        // surfacing that value through the aggregation.
+        var innerHasSort0 = HasSortAlias(innerSql, "__sort_0", dialect);
+
+        // Resolve the dimension field id this outer sort targets, if any.
+        // Either explicit "dim:<id>" or implicit "groupBy" → first dim.
+        string? sortedDimFieldId = null;
+        if (defaultSortColumn == "groupBy" && dimensionFieldIds.Count > 0)
+            sortedDimFieldId = dimensionFieldIds[0];
+        else if (defaultSortColumn is { } s && s.StartsWith("dim:"))
+            sortedDimFieldId = s[4..];
+
+        var dimensionHasCustomSort = sortedDimFieldId is not null
+            && fieldLookup.TryGetValue(sortedDimFieldId, out var dimField)
+            && !string.IsNullOrWhiteSpace(dimField.SortExpression);
+
+        var useLookupSortForDimension = innerHasSort0 && dimensionHasCustomSort;
+
         if (string.IsNullOrWhiteSpace(defaultSortColumn))
         {
             outerOrderBy = $"ORDER BY {dialect.QuoteIdentifier("count")} DESC";
@@ -1355,12 +1469,17 @@ public static class QueryBuilder
         }
         else if (defaultSortColumn == "groupBy" && dimensionFieldIds.Count > 0)
         {
-            outerOrderBy = $"ORDER BY {dialect.QuoteIdentifier(dimensionFieldIds[0])} {dir}";
+            outerOrderBy = useLookupSortForDimension
+                ? $"ORDER BY MIN({dialect.QuoteIdentifier("__sort_0")}) {dir}"
+                : $"ORDER BY {dialect.QuoteIdentifier(dimensionFieldIds[0])} {dir}";
         }
         else if (defaultSortColumn.StartsWith("dim:"))
         {
-            // Dimension column — outer alias is the field id itself.
-            outerOrderBy = $"ORDER BY {dialect.QuoteIdentifier(defaultSortColumn[4..])} {dir}";
+            // Dimension column — outer alias is the field id itself. Same
+            // lookup-aware swap as the groupBy branch when applicable.
+            outerOrderBy = useLookupSortForDimension
+                ? $"ORDER BY MIN({dialect.QuoteIdentifier("__sort_0")}) {dir}"
+                : $"ORDER BY {dialect.QuoteIdentifier(defaultSortColumn[4..])} {dir}";
         }
         else if (defaultSortColumn.StartsWith("extra:"))
         {
@@ -1407,6 +1526,36 @@ public static class QueryBuilder
             sb.AppendLine($"GROUP BY {string.Join(", ", groupByCols)}");
         sb.AppendLine(outerOrderBy);
         return sb.ToString();
+    }
+
+    // Returns true if the inner SQL projects a column with the given alias
+    // (case-insensitive on the AS keyword, exact on the alias text). Used
+    // by BuildDashboardPreviewSql to detect whether the inner SELECT
+    // already surfaces a synthetic sort column like "__sort_0".
+    //
+    // Matches `AS <quoted-alias>` only — relying on the alias quoting that
+    // the emitter actually uses means we don't false-match on substrings
+    // appearing inside expressions or string literals.
+    private static bool HasSortAlias(string sql, string aliasName, TleReportingDashboard.Web.Services.QueryPipeline.ISqlDialect dialect)
+    {
+        if (string.IsNullOrEmpty(sql)) return false;
+        var quoted = dialect.QuoteIdentifier(aliasName);
+        var idx = sql.IndexOf(quoted, StringComparison.Ordinal);
+        while (idx >= 0)
+        {
+            // Walk left over whitespace to find the preceding token.
+            var j = idx - 1;
+            while (j >= 0 && char.IsWhiteSpace(sql[j])) j--;
+            if (j >= 1
+                && (sql[j] == 'S' || sql[j] == 's')
+                && (sql[j - 1] == 'A' || sql[j - 1] == 'a')
+                && (j - 2 < 0 || char.IsWhiteSpace(sql[j - 2]) || sql[j - 2] == ',' || sql[j - 2] == ')'))
+            {
+                return true;
+            }
+            idx = sql.IndexOf(quoted, idx + quoted.Length, StringComparison.Ordinal);
+        }
+        return false;
     }
 
     // Splits a query string into its leading `WITH ... AS (...)` preamble

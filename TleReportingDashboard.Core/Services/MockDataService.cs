@@ -94,6 +94,11 @@ public class MockDataService : ISchemaService, IQueryService, IReportService, IS
         return Task.FromResult(new List<Configuration.CustomFilterDefinition>());
     }
 
+    public Task<List<Configuration.LookupTypeDefinition>> GetLookupTypesAsync(Guid? connectionId = null)
+    {
+        return Task.FromResult(new List<Configuration.LookupTypeDefinition>());
+    }
+
     #endregion
 
     #region IQueryService
@@ -272,6 +277,24 @@ public class MockDataService : ISchemaService, IQueryService, IReportService, IS
 
             _savedReports.Remove(existing);
             return Task.CompletedTask;
+        }
+    }
+
+    public Task<SavedReport> UpdateReportAsAdminAsync(SavedReport report)
+    {
+        lock (_reportLock)
+        {
+            var existing = _savedReports.FirstOrDefault(r => r.Id == report.Id);
+            if (existing is null) throw new KeyNotFoundException($"Report {report.Id} not found.");
+            // Admin path: don't enforce owner match. Preserve the original
+            // OwnerId so admin edits don't change ownership.
+            existing.Name = report.Name;
+            existing.FieldIds = report.FieldIds;
+            existing.Filters = report.Filters;
+            existing.Aggregations = report.Aggregations;
+            existing.ColumnState = report.ColumnState;
+            existing.UpdatedAt = DateTime.UtcNow;
+            return Task.FromResult(existing);
         }
     }
 

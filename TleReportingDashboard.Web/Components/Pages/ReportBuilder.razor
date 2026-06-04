@@ -395,6 +395,7 @@
                 }
             }
             <HeaderFilters Filters="_currentConfig.Filters" Domains="_domains"
+                           ConnectionId="_currentConfig.ConnectionId"
                            OnFiltersChanged="HandleFiltersChanged" />
         </MudStack>
 
@@ -436,6 +437,7 @@
                         {
                             <AdvancedFilterGroup Group="_filterRoot"
                                                  AvailableFields="_advancedFilterFields"
+                                                 ConnectionId="_currentConfig.ConnectionId"
                                                  IsRoot="true"
                                                  OnChanged="MarkDirty" />
                         }
@@ -956,6 +958,10 @@
     private string _userId = "anonymous";
     private string _userEmail = string.Empty;
     private bool _isAdmin;
+    // True for global admins AND admin-section role holders. Gates the
+    // "edit any user's report" save path so company-scoped admin roles
+    // can also save changes on someone else's report.
+    private bool _hasAnyAdminAccess;
 
     // ── Schema & data ──
     private List<DomainGroup> _domains = new();
@@ -1216,7 +1222,15 @@
             // — they have cross-company visibility everywhere else, this
             // surface needs to match.
             var hasAdminAccess = await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
-            if (!_isAdmin && !hasAdminAccess && !string.IsNullOrEmpty(_userEmail))
+            // Also consult the user record directly — Administrator role
+            // (UserRecord.IsAdmin) should grant the admin-save path even if
+            // other layers miss it.
+            UserRecord? userRecordForAdmin = null;
+            try { userRecordForAdmin = await UserManagement.GetByEmailAsync(_userEmail); } catch { /* non-fatal */ }
+            var userIsAdminRole = userRecordForAdmin?.IsAdmin == true
+                || (userRecordForAdmin?.RoleAdminSections is { Count: > 0 });
+            _hasAnyAdminAccess = _isAdmin || hasAdminAccess || userIsAdminRole;
+            if (!_isAdmin && !hasAdminAccess && !userIsAdminRole && !string.IsNullOrEmpty(_userEmail))
             {
                 var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
                 var allowed = access.Select(a => a.CompanyId).ToHashSet();
@@ -3089,10 +3103,13 @@
         {
             if (_loadedReportId.HasValue)
             {
-                // Direct by-id fetch (Phase 3). UpdateReportAsync still
-                // enforces owner_id match at the SQL layer — admins editing
-                // someone else's report hit the "not owned" guard and see a
-                // clear error instead of a silent no-op.
+                // Direct by-id fetch (Phase 3). When the current user is
+                // the owner, UpdateReportAsync enforces owner_id match at
+                // the SQL layer. When the current user is a global admin
+                // editing on behalf of someone else, route through
+                // UpdateReportAsAdminAsync — same UPDATE shape, owner_id
+                // check dropped. OwnerId on the record is preserved so the
+                // report stays attributed to the original user.
                 var existing = await ReportService.GetReportByIdAsync(_loadedReportId.Value);
                 if (existing is not null)
                 {
@@ -3114,7 +3131,24 @@
                     existing.PrimaryTable = _currentConfig.PrimaryTable;
                     existing.UpdatedAt = DateTime.UtcNow;
                     existing.LastRunAt = DateTime.UtcNow;
-                    await ReportService.UpdateReportAsync(existing);
+
+                    var ownedByMe = string.Equals(existing.OwnerId, _userId, StringComparison.OrdinalIgnoreCase);
+                    if (ownedByMe)
+                    {
+                        await ReportService.UpdateReportAsync(existing);
+                    }
+                    else if (_hasAnyAdminAccess)
+                    {
+                        await ReportService.UpdateReportAsAdminAsync(existing);
+                    }
+                    else
+                    {
+                        // UI shouldn't even surface Save in this state, but
+                        // guard anyway so we never silently downgrade a
+                        // non-admin's save into a no-op.
+                        Snackbar.Add("You don't have permission to edit this report.", Severity.Error);
+                        return;
+                    }
                     _guard?.MarkClean();
                     Snackbar.Add($"Report \"{existing.Name}\" saved.", Severity.Success);
                     return;

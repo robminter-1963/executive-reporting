@@ -1,4 +1,5 @@
 @inject ISharingService SharingService
+@inject IUserManagementService UserManagement
 @inject INotificationService Notifications
 @inject ISnackbar Snackbar
 @inject ILogger<ShareDialog> Logger
@@ -28,12 +29,25 @@
                 </MudText>
             }
 
-            @* Add new share *@
+            @* Add new share — picker bound to the RPT_users roster so
+               sharing is restricted to users who actually have access to
+               the website. Free-text was dropped because typos previously
+               created shares against non-existent emails that silently
+               failed at notification dispatch and confused owners.
+               Autocomplete handles large user lists; we filter to active
+               users and exclude the current user (self-share is a no-op)
+               and users already in the shares list (de-dupe). *@
             <MudStack Row AlignItems="AlignItems.End" Spacing="2">
-                <MudTextField @bind-Value="_newShareEmail" Label="User email or name"
-                              Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Style="flex: 1;"
-                              Placeholder="Enter email address..." />
+                <MudAutocomplete T="UserRecord" @bind-Value="_selectedUser"
+                                 Label="Share with"
+                                 SearchFunc="SearchUsers"
+                                 ToStringFunc="@(u => u is null ? string.Empty : FormatUser(u))"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                 Style="flex: 1;"
+                                 Placeholder="Start typing a name or email..."
+                                 CoerceText="true" ResetValueOnEmptyText="true"
+                                 ShowProgressIndicator="@_loadingUsers"
+                                 Clearable />
                 <MudSelect T="string" @bind-Value="_newSharePermission" Label="Permission"
                            Variant="Variant.Outlined" Margin="Margin.Dense"
                            Style="max-width: 130px;" Dense>
@@ -42,7 +56,7 @@
                 </MudSelect>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Medium"
                            OnClick="AddShare"
-                           Disabled="@(string.IsNullOrWhiteSpace(_newShareEmail) || _isSaving)">
+                           Disabled="@(_selectedUser is null || _isSaving)">
                     @if (_isSaving)
                     {
                         <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
@@ -109,10 +123,15 @@
     [Parameter] public List<ReportShare> ExistingShares { get; set; } = new();
 
     private List<ReportShare> _shares = new();
-    private string _newShareEmail = string.Empty;
+    private UserRecord? _selectedUser;
     private string _newSharePermission = "viewer";
     private bool _isLoadingShares;
     private bool _isSaving;
+
+    // Cached user roster for the share picker. Loaded once on dialog open
+    // so SearchUsers can filter against it without re-querying per keystroke.
+    private List<UserRecord> _users = new();
+    private bool _loadingUsers;
 
     protected override async Task OnInitializedAsync()
     {
@@ -145,14 +164,77 @@
                 _isLoadingShares = false;
             }
         }
+
+        // Load the user roster so the picker can offer onboarded users.
+        // Lookup failure isn't fatal — the picker just shows empty and the
+        // admin can retry. We don't fail-closed to free-text because that
+        // would re-introduce the typo-share problem the picker was added
+        // to solve.
+        _loadingUsers = true;
+        try
+        {
+            _users = await UserManagement.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load user roster for share picker.");
+            _users = new();
+        }
+        finally
+        {
+            _loadingUsers = false;
+        }
+    }
+
+    // Display label for a user row in the picker. Prefer display name;
+    // fall back to email when name isn't set. Email always shown alongside
+    // (as a hint) so two users with the same display name can be told
+    // apart at a glance.
+    private static string FormatUser(UserRecord u) =>
+        string.IsNullOrWhiteSpace(u.DisplayName)
+            ? u.Email
+            : $"{u.DisplayName} ({u.Email})";
+
+    // Autocomplete search. Filters the cached roster to active users
+    // whose email or display name contains the typed substring. Excludes
+    // the report owner (no point sharing with yourself) and anyone
+    // already in the shares list (prevents duplicate-share clicks).
+    private Task<IEnumerable<UserRecord>> SearchUsers(string? value, CancellationToken ct)
+    {
+        var sharedIds = _shares
+            .Select(s => s.SharedWithId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var pool = _users
+            .Where(u => u.IsActive
+                && !string.IsNullOrWhiteSpace(u.Email)
+                && !string.Equals(u.UserId, CurrentUserId, StringComparison.OrdinalIgnoreCase)
+                && !sharedIds.Contains(u.Email));
+
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            pool = pool.Where(u =>
+                (u.Email?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (u.DisplayName?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+
+        return Task.FromResult(pool
+            .OrderBy(u => u.DisplayName ?? u.Email, StringComparer.OrdinalIgnoreCase)
+            .Take(50)
+            .AsEnumerable());
     }
 
     private async Task AddShare()
     {
-        if (string.IsNullOrWhiteSpace(_newShareEmail)) return;
+        if (_selectedUser is null || string.IsNullOrWhiteSpace(_selectedUser.Email)) return;
 
-        // Prevent duplicate shares for the same user
-        if (_shares.Any(s => s.SharedWithId.Equals(_newShareEmail, StringComparison.OrdinalIgnoreCase)))
+        var targetEmail = _selectedUser.Email.Trim();
+
+        // Prevent duplicate shares for the same user (SearchUsers already
+        // hides shared users from the picker; this is the belt-and-suspenders
+        // server-side equivalent).
+        if (_shares.Any(s => s.SharedWithId.Equals(targetEmail, StringComparison.OrdinalIgnoreCase)))
             return;
 
         _isSaving = true;
@@ -162,7 +244,7 @@
             {
                 Id = Guid.NewGuid(),
                 ReportId = ReportId,
-                SharedWithId = _newShareEmail.Trim(),
+                SharedWithId = targetEmail,
                 SharedWithType = "user",
                 Permission = _newSharePermission,
                 SharedById = CurrentUserId,
@@ -178,7 +260,7 @@
             try
             {
                 await Notifications.CreateAsync(
-                    userEmail:          _newShareEmail.Trim(),
+                    userEmail:          targetEmail,
                     kind:               NotificationKinds.ReportShared,
                     title:              $"\"{ReportName}\" was shared with you",
                     body:               $"You now have {_newSharePermission} access. Open it from the Report Library or follow the link.",
@@ -188,10 +270,10 @@
             }
             catch (Exception nex)
             {
-                Logger.LogWarning(nex, "Share saved but notification dispatch failed for {Email}", _newShareEmail);
+                Logger.LogWarning(nex, "Share saved but notification dispatch failed for {Email}", targetEmail);
             }
 
-            _newShareEmail = string.Empty;
+            _selectedUser = null;
             _newSharePermission = "viewer";
         }
         catch (Exception ex)
@@ -222,10 +304,9 @@
 
     // Adds and revokes persist immediately to the service, so the only
     // genuinely unsaved state in this dialog is whatever the user has
-    // typed into the new-share email field but not yet clicked "Share"
-    // on. Treating that as the dirty signal lets the prompt fire when
-    // it actually matters.
-    private bool IsDirty => !string.IsNullOrWhiteSpace(_newShareEmail);
+    // selected in the picker but not yet clicked "Share" on. Treating
+    // that as the dirty signal lets the prompt fire when it actually matters.
+    private bool IsDirty => _selectedUser is not null;
 
     // Routes every dismiss path (Cancel button, Esc, backdrop click)
     // through the unsaved-changes prompt. "Save" here means "add the

@@ -25,6 +25,10 @@ public static class AdminSections
     public const string Theme         = "theme";
     public const string AppSettings   = "app_settings";
     public const string ColumnWidths  = "column_widths";
+    // SOC-2 change-management trail for security-affecting admin actions.
+    // Lives at the end of the strip because it's a review surface, not an
+    // authoring surface — separating it visually helps reinforce that.
+    public const string AuditLog      = "audit_log";
 
     // Ordered as they appear in the Admin tab strip; the Roles tab editor
     // uses the same order so the checkbox grid mirrors the live UI.
@@ -42,6 +46,7 @@ public static class AdminSections
         (Theme,         "Theme"),
         (AppSettings,   "App Settings"),
         (ColumnWidths,  "Column Widths"),
+        (AuditLog,      "Audit Log"),
     };
 
     public static bool IsValid(string? key) =>

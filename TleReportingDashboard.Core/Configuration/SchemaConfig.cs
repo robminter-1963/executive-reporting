@@ -6,6 +6,11 @@ public sealed class SchemaConfig
     public List<JoinDefinition> Joins { get; init; } = [];
     public List<FieldDefinition> Fields { get; init; } = [];
     public List<LookupDefinition> Lookups { get; init; } = [];
+    // Admin-authored sources for filter chip pickers, distinct from the
+    // CTE-style Lookups above. A field can bind to a LookupType via
+    // FieldDefinition.LookupTypeId. See LookupTypeDefinition for the
+    // shape and semantics.
+    public List<LookupTypeDefinition> LookupTypes { get; init; } = [];
     public List<CustomFilterDefinition> CustomFilters { get; init; } = [];
     // Admin-curated list of field domain names (e.g. Loan, Borrower, Dates).
     // Used to drive the Domain dropdown in the Field editor. Seeded on first

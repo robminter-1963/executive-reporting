@@ -210,6 +210,7 @@ try
         builder.Services.AddScoped<ICustomPrimaryTableService, CustomPrimaryTableService>();
         builder.Services.AddScoped<ISchemaConfigHistoryService, SchemaConfigHistoryService>();
         builder.Services.AddScoped<IFavoriteService, FavoriteService>();
+        builder.Services.AddScoped<IBatchService, BatchService>();
     }
     else
     {
@@ -243,6 +244,7 @@ try
         // Admin → Schema History tab from crashing in dev-without-DB mode.
         builder.Services.AddSingleton<ISchemaConfigHistoryService, NoopSchemaConfigHistoryService>();
         builder.Services.AddSingleton<IFavoriteService, InMemoryFavoriteService>();
+        builder.Services.AddSingleton<IBatchService, InMemoryBatchService>();
     }
 
     // Auth auto-detect: Entra ID or stub

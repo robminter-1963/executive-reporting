@@ -9,6 +9,16 @@ public interface IReportService
     // must gate this behind an IsAdmin check; nothing in the service layer
     // re-validates, since the UI shell owns the auth story.
     Task<List<SavedReport>> GetAllReportsAsync();
+    // Visibility for a non-admin user. Returns reports the user can see
+    // under the system's three-tier rule:
+    //   1. Reports they own (owner_id = @userId).
+    //   2. Reports shared with them — directly or via 'everyone' wildcard.
+    //   3. Reports owned by an admin — admin-authored content is
+    //      implicitly visible to everyone (no explicit share required).
+    // Unshared user-owned reports stay invisible. Admins should call
+    // GetAllReportsAsync — this method's purpose is the broader visibility
+    // for non-admin authors (e.g., the batch report picker).
+    Task<List<SavedReport>> GetVisibleToUserAsync(string userId);
     // Direct by-id lookup, unscoped by owner / share. Intended for the
     // master dashboard's tile loader where the caller has already verified
     // the user's right to view the tile (membership on the shared per-company

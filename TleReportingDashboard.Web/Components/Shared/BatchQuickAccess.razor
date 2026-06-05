@@ -1,0 +1,269 @@
+@inject IBatchService BatchSvc
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject ILogger<BatchQuickAccess> Logger
+
+@* Reusable "Batches" dropdown for header surfaces (Master Dashboard,
+   Company Picker, Report Library). Lists batches the current user can
+   run — every batch when they're an admin, owned + granted otherwise.
+   Clicking a batch runs it and downloads the resulting .xlsx via the
+   shared downloadFile JS interop. Authors (admin OR CanCreateBatches)
+   also see a "+ New batch" entry at the top so they can author without
+   needing Report Library access — important for Viewer-role users with
+   the batch-author permission who don't see the Library link at all.
+   Hidden entirely when the user has nothing to run AND can't author. *@
+
+@if (_batches.Count > 0 || _canAuthor)
+{
+    <MudMenu Label="Batches" Icon="@Icons.Material.Outlined.PlaylistPlay"
+             Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+             Dense MaxHeight="420"
+             AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft"
+             title="Run a batch and download the Excel">
+        @if (_canAuthor)
+        {
+            <MudMenuItem OnClick="OpenCreateBatchDialog">
+                <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Style="min-width: 260px;">
+                    <MudIcon Icon="@Icons.Material.Outlined.Add" Size="Size.Small" Color="Color.Primary" />
+                    <MudText Typo="Typo.body2" Style="font-weight: 500;">New batch</MudText>
+                </MudStack>
+            </MudMenuItem>
+            @if (_batches.Count > 0)
+            {
+                <MudDivider />
+            }
+        }
+        @foreach (var batch in _batches)
+        {
+            var batchLocal = batch;
+            var ownedByMe = string.Equals(batchLocal.CreatedBy, UserEmail, StringComparison.OrdinalIgnoreCase);
+            var canEdit = HasAnyAdminAccess || ownedByMe;
+            <MudMenuItem OnClick="@(() => RunBatch(batchLocal))"
+                         Disabled="@(_runningBatchId is not null)">
+                <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="min-width: 320px;">
+                    <MudStack Row Spacing="1" AlignItems="AlignItems.Center" Style="min-width: 0; flex: 1;">
+                        @if (_runningBatchId == batchLocal.Id)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                        }
+                        else
+                        {
+                            <MudIcon Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small" Style="color: #5F6368;" />
+                        }
+                        <MudStack Spacing="0" Style="min-width: 0;">
+                            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                @batchLocal.Name
+                            </span>
+                            @if (!string.IsNullOrWhiteSpace(batchLocal.Description))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                         Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;">
+                                    @batchLocal.Description
+                                </MudText>
+                            }
+                        </MudStack>
+                    </MudStack>
+                    @* Edit + Delete: only when the user owns this batch (or is
+                       admin). stopPropagation so clicking these doesn't also
+                       fire the row's Run handler. The menu still closes on
+                       click — fine, the dialog overlays the page anyway. *@
+                    @if (canEdit)
+                    {
+                        @* Span wrappers carry the stopPropagation attribute —
+                           can't apply it directly to MudIconButton because
+                           its OnClick parameter would clash with the directive. *@
+                        <MudStack Row Spacing="0">
+                            <span @onclick:stopPropagation="true">
+                                <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                               Color="Color.Default" title="Edit batch"
+                                               OnClick="@(() => OpenEditBatchDialog(batchLocal))" />
+                            </span>
+                            <span @onclick:stopPropagation="true">
+                                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                               Color="Color.Error" title="Delete batch"
+                                               OnClick="@(() => ConfirmDeleteBatch(batchLocal))" />
+                            </span>
+                        </MudStack>
+                    }
+                </MudStack>
+            </MudMenuItem>
+        }
+    </MudMenu>
+}
+
+@code {
+    // Email of the signed-in user — drives the grants lookup for non-admin
+    // surfaces. Empty/null = nothing to load.
+    [Parameter] public string UserEmail { get; set; } = string.Empty;
+
+    // Entra OID — forwarded to BatchEditDialog so the report picker can
+    // load the user's owned reports via ReportService.GetReportsAsync(oid).
+    // Empty means non-admin authors see only their shared reports (which
+    // is OK as a fallback, just narrower than usual).
+    [Parameter] public string UserId { get; set; } = string.Empty;
+
+    // Any admin authority (Global admin OR Administrator role OR admin-
+    // section role). When true, loads every batch in the system instead
+    // of just the user's grants. Caller computes this once and passes it
+    // in so we don't re-fetch admin status here.
+    [Parameter] public bool HasAnyAdminAccess { get; set; }
+
+    // Per-user batch-authoring permission (RPT_users.can_create_batches).
+    // When true (or HasAnyAdminAccess is true), the dropdown surfaces a
+    // "+ New batch" entry and stays visible even with zero batches —
+    // gives authors a path to author without going through Report Library
+    // (which Viewer-role users may not see at all).
+    [Parameter] public bool CanCreateBatches { get; set; }
+
+    private List<BatchRecord> _batches = new();
+    private Guid? _runningBatchId;
+    private bool _canAuthor => HasAnyAdminAccess || CanCreateBatches;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            if (HasAnyAdminAccess)
+                _batches = await BatchSvc.GetAllAsync();
+            else if (!string.IsNullOrWhiteSpace(UserEmail))
+                _batches = await BatchSvc.GetForUserAsync(UserEmail);
+            else
+                _batches = new();
+        }
+        catch (Exception ex)
+        {
+            // Service down / dev-mode stub / DB hiccup — fail silent (the
+            // menu just hides). The Report Library Batches tab has a more
+            // visible surface for diagnosing if needed.
+            Logger.LogWarning(ex, "BatchQuickAccess: failed to load batches.");
+            _batches = new();
+        }
+    }
+
+    private async Task OpenCreateBatchDialog()
+    {
+        var parameters = new DialogParameters<BatchEditDialog>
+        {
+            { x => x.ExistingBatch, null },
+            { x => x.CurrentUserEmail, UserEmail },
+            { x => x.CurrentUserId, UserId },
+            { x => x.HasAnyAdminAccess, HasAnyAdminAccess }
+        };
+        var dialog = await DialogService.ShowAsync<BatchEditDialog>(
+            "New Batch", parameters, DialogPresets.Locked(MaxWidth.Large));
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        await LoadAsync();
+        StateHasChanged();
+    }
+
+    private async Task OpenEditBatchDialog(BatchRecord batch)
+    {
+        // Re-fetch the hydrated batch (items + access) — the dropdown's
+        // list view only loads header rows. The editor needs the full
+        // shape to render its items and access sections.
+        BatchRecord? full;
+        try { full = await BatchSvc.GetByIdAsync(batch.Id); }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load batch {Id} for edit.", batch.Id);
+            Snackbar.Add($"Couldn't load batch: {ex.Message}", Severity.Error);
+            return;
+        }
+        if (full is null)
+        {
+            Snackbar.Add("Batch not found — it may have been deleted.", Severity.Warning);
+            await LoadAsync();
+            StateHasChanged();
+            return;
+        }
+        var parameters = new DialogParameters<BatchEditDialog>
+        {
+            { x => x.ExistingBatch, full },
+            { x => x.CurrentUserEmail, UserEmail },
+            { x => x.CurrentUserId, UserId },
+            { x => x.HasAnyAdminAccess, HasAnyAdminAccess }
+        };
+        var dialog = await DialogService.ShowAsync<BatchEditDialog>(
+            "Edit Batch", parameters, DialogPresets.Locked(MaxWidth.Large));
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        await LoadAsync();
+        StateHasChanged();
+    }
+
+    private async Task ConfirmDeleteBatch(BatchRecord batch)
+    {
+        var ok = await DialogService.ShowMessageBoxAsync(
+            "Delete Batch",
+            $"Are you sure you want to delete \"{batch.Name}\"? Users granted access will lose it.",
+            yesText: "Delete", cancelText: "Cancel");
+        if (ok != true) return;
+        try
+        {
+            await BatchSvc.DeleteAsync(batch.Id);
+            _batches.RemoveAll(b => b.Id == batch.Id);
+            Snackbar.Add($"Batch \"{batch.Name}\" deleted.", Severity.Info);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to delete batch {Id}.", batch.Id);
+            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RunBatch(BatchRecord batch)
+    {
+        if (_runningBatchId is not null) return;
+        _runningBatchId = batch.Id;
+        StateHasChanged();
+
+        // Persistent "running" notification — RequireInteraction keeps it
+        // on-screen for the entire run (default 2-second auto-dismiss is
+        // shorter than most batches). Removed in the finally block once
+        // execution settles, so the success / failure snackbar isn't
+        // competing with it. Without this the dropdown closes the moment
+        // the user clicks an item and the only feedback is the small
+        // spinner inside the now-closed menu — easy to miss.
+        var notification = Snackbar.Add(
+            $"Running \"{batch.Name}\"… your download will start when ready.",
+            Severity.Info,
+            config =>
+            {
+                config.RequireInteraction = true;
+                config.ShowCloseIcon = false;
+            });
+
+        try
+        {
+            var (bytes, fileName) = await BatchSvc.ExecuteAsync(batch.Id, UserEmail, HasAnyAdminAccess);
+            var base64 = Convert.ToBase64String(bytes);
+            await JS.InvokeVoidAsync("downloadFile", fileName, base64,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            Snackbar.Add($"Downloaded \"{fileName}\" ({bytes.Length / 1024:N0} KB).", Severity.Success);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Snackbar.Add("You don't have permission to run this batch.", Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Batch run failed for {Id}.", batch.Id);
+            Snackbar.Add($"Batch run failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            if (notification is not null)
+                Snackbar.Remove(notification);
+            _runningBatchId = null;
+            StateHasChanged();
+        }
+    }
+}

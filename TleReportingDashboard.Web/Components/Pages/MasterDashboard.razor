@@ -175,6 +175,14 @@
                         }
                     </MudMenu>
                 }
+                @* Batches dropdown — every batch this user can run
+                   (admin authority OR explicit grants). Self-hides when
+                   the list is empty so non-granted users see nothing. *@
+                <BatchQuickAccess UserEmail="@_userEmail"
+                                  UserId="@_userId"
+                                  HasAnyAdminAccess="@_hasAnyAdminAccess"
+                                  CanCreateBatches="@_canCreateBatches" />
+
                 @* Report Library shortcut. Visible to every role
                    except viewers with no shared reports — those would
                    land on an empty Library and have nothing to do
@@ -1062,6 +1070,16 @@
 
     private string _userId = "anonymous";
     private string _userEmail = string.Empty;
+    // Any admin authority (Global admin OR Administrator role OR admin-
+    // section role). Captured from the existing `hasAdminAccess` local
+    // computed during company-access resolution. Fed to BatchQuickAccess
+    // so the header dropdown lists every batch for admins and only the
+    // user's grants for everyone else.
+    private bool _hasAnyAdminAccess;
+    // Per-user batch-authoring permission. Surfaces "+ New batch" in the
+    // header dropdown so Viewer-role authors (who don't see the Report
+    // Library link) can still author from any dashboard.
+    private bool _canCreateBatches;
     private string _userName = string.Empty;
     // Last time the user landed on this Master Dashboard, read from
     // RPT_user_preferences. Drives the LandingGreeting strip's "X reports
@@ -1432,6 +1450,7 @@
         // Same model as the picker; keeps the two surfaces consistent.
         var hasAdminAccess = isAdmin
             || await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
+        _hasAnyAdminAccess = hasAdminAccess;
         if (isAdmin)
         {
             // Sentinel role — admins bypass per-company grants entirely.
@@ -1490,6 +1509,12 @@
                 {
                     var userRec = await UserManagement.GetByEmailAsync(_userEmail);
                     _canManageTabs = string.Equals(userRec?.RoleName, RoleRecord.SystemSupportName, StringComparison.OrdinalIgnoreCase);
+                    // Same fetch — capture the batch-authoring permission
+                    // so BatchQuickAccess can surface "+ New batch" even
+                    // for users who don't see the Report Library button
+                    // (Viewers with no shares). Admins implicitly have
+                    // authoring via HasAnyAdminAccess.
+                    _canCreateBatches = userRec?.CanCreateBatches == true;
                 }
                 catch (Exception ex)
                 {

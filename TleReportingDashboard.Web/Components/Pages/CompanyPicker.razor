@@ -83,11 +83,20 @@
                              OnDismissed="HandleGreetingDismissed" />
         }
         <MudStack Spacing="4">
-            <MudStack Spacing="1">
-                <MudText Typo="Typo.h4" Style="font-weight: 600; color: #202124;">Select a company</MudText>
-                <MudText Typo="Typo.body2" Color="Color.Secondary">
-                    Choose a company to open its dashboard.
-                </MudText>
+            <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+                <MudStack Spacing="1">
+                    <MudText Typo="Typo.h4" Style="font-weight: 600; color: #202124;">Select a company</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                        Choose a company to open its dashboard.
+                    </MudText>
+                </MudStack>
+                @* Batches dropdown — same control rendered in every
+                   header surface. Self-hides when the user has nothing
+                   to run, so non-batch users see no clutter. *@
+                <BatchQuickAccess UserEmail="@_userEmail"
+                                  UserId="@(_userId ?? string.Empty)"
+                                  HasAnyAdminAccess="@_hasAnyAdminAccess"
+                                  CanCreateBatches="@_canCreateBatches" />
             </MudStack>
 
             @* Uniform logo card grid. Admin-defined display_order drives the
@@ -209,6 +218,14 @@
     // via the legacy RPT_admins seed). Drives the "you do not have access
     // to this site" vs "no access yet" wording on the empty state.
     private bool _isRegistered = true;
+    // Any admin authority (Global admin OR Administrator role OR admin-
+    // section role). Fed to BatchQuickAccess so admins see every batch
+    // in the header dropdown; non-admins see only their grants.
+    private bool _hasAnyAdminAccess;
+    // Per-user batch-authoring permission. Surfaces "+ New batch" in the
+    // header dropdown so authors who can't reach the Report Library
+    // (Viewers without shares) still have a way to create a batch.
+    private bool _canCreateBatches;
 
     protected override async Task OnInitializedAsync()
     {
@@ -241,6 +258,7 @@
             // mental model as `is_admin` historically had; just generalized
             // to anyone whose role grants admin access.
             var hasAdminAccess = await AdminAccess.HasAnyAdminAccessAsync(_userEmail);
+            _hasAnyAdminAccess = isAdmin || hasAdminAccess;
 
             if (isAdmin || hasAdminAccess)
             {
@@ -255,6 +273,7 @@
                 // provisioned users who haven't signed in yet.
                 var userRow = await UserManagement.GetByEmailAsync(_userEmail);
                 _isRegistered = userRow is not null;
+                _canCreateBatches = userRow?.CanCreateBatches == true;
 
                 var access = await UserManagement.GetCompanyAccessAsync(_userEmail);
                 var allowedIds = access.Select(a => a.CompanyId).ToHashSet();

@@ -229,6 +229,18 @@ public class MockDataService : ISchemaService, IQueryService, IReportService, IS
         }
     }
 
+    public Task<List<SavedReport>> GetVisibleToUserAsync(string userId)
+    {
+        // Dev-mode stand-in: no admin / shares tracking in memory, so
+        // return everything. Live ReportDbService applies the actual
+        // three-tier visibility rule against RPT_admins + RPT_users +
+        // RPT_report_shares.
+        lock (_reportLock)
+        {
+            return Task.FromResult(_savedReports.ToList());
+        }
+    }
+
     public Task<SavedReport?> GetReportByIdAsync(Guid id)
     {
         lock (_reportLock)

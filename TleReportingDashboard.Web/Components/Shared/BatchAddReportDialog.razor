@@ -1,0 +1,129 @@
+@inject ICompanyRegistry CompanyRegistry
+
+@* Multi-select picker for adding reports to a batch. Lists every report
+   in the system (admin-only flow) with search-by-name + filter-by-company
+   so admins authoring cross-company batches can scan large libraries.
+   Excludes reports already in the batch. Returns the picked list on OK. *@
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Outlined.Add" />
+            <MudText Typo="Typo.h6">Add Reports</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Style="min-width: 600px;">
+            <MudStack Row Spacing="2">
+                <MudTextField @bind-Value="_search" Label="Search" Variant="Variant.Outlined"
+                              Margin="Margin.Dense" Style="flex: 1;"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search"
+                              Immediate DebounceInterval="200" />
+                <MudSelect T="Guid?" @bind-Value="_companyFilter" Label="Company"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Dense Clearable
+                           Style="max-width: 220px;">
+                    <MudSelectItem T="Guid?" Value="@((Guid?)null)">All companies</MudSelectItem>
+                    @foreach (var c in _companies)
+                    {
+                        <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+
+            <MudTable T="SavedReport" Items="Filtered" MultiSelection="true"
+                      @bind-SelectedItems="_selected"
+                      Dense Hover Striped FixedHeader Height="380px">
+                <HeaderContent>
+                    <MudTh Style="width: 50%;">Name</MudTh>
+                    <MudTh Style="width: 30%;">Company</MudTh>
+                    <MudTh Style="width: 20%;">Owner</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        @* DisplayLabel pattern: InternalName takes priority
+                           when set so admins can disambiguate same-named
+                           reports authored by different users. The user-
+                           facing Name shows as a smaller subtitle when it
+                           differs — so the admin authoring the batch sees
+                           both the internal taxonomy AND what end users
+                           see in the library. *@
+                        @{
+                            var displayLabel = string.IsNullOrWhiteSpace(context.InternalName)
+                                ? context.Name
+                                : context.InternalName!;
+                            var showSubtitle = !string.IsNullOrWhiteSpace(context.InternalName)
+                                && !string.Equals(context.InternalName, context.Name, StringComparison.OrdinalIgnoreCase);
+                        }
+                        <MudText Typo="Typo.body2">@displayLabel</MudText>
+                        @if (showSubtitle)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Name</MudText>
+                        }
+                    </MudTd>
+                    <MudTd>@(_companyById.TryGetValue(context.CompanyId, out var cn) ? cn : "—")</MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.OwnerEmail</MudText>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-2">
+                        No reports match the current filters.
+                    </MudText>
+                </NoRecordsContent>
+            </MudTable>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                @_selected.Count selected
+            </MudText>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => MudDialog?.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@(_selected.Count == 0)">
+            Add @_selected.Count
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public List<SavedReport> AvailableReports { get; set; } = new();
+    [Parameter] public HashSet<Guid> AlreadyPickedReportIds { get; set; } = new();
+
+    private string _search = string.Empty;
+    private Guid? _companyFilter;
+    private HashSet<SavedReport> _selected = new();
+    private List<CompanySummary> _companies = new();
+    private Dictionary<Guid, string> _companyById = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _companies = await CompanyRegistry.GetActiveAsync();
+        _companyById = _companies.ToDictionary(c => c.Id, c => c.Name);
+    }
+
+    // Internal name when set, user-facing name otherwise. Match the rest
+    // of the app's "DisplayLabel" convention so search/sort behave like
+    // the Library lists, and disambiguation works across same-named
+    // reports authored by different users.
+    private static string DisplayLabel(SavedReport r) =>
+        string.IsNullOrWhiteSpace(r.InternalName) ? r.Name : r.InternalName!;
+
+    private IEnumerable<SavedReport> Filtered
+    {
+        get
+        {
+            IEnumerable<SavedReport> pool = AvailableReports
+                .Where(r => !AlreadyPickedReportIds.Contains(r.Id));
+            if (_companyFilter is Guid cid) pool = pool.Where(r => r.CompanyId == cid);
+            if (!string.IsNullOrWhiteSpace(_search))
+                pool = pool.Where(r =>
+                    r.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                    || (r.InternalName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (r.OwnerEmail?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false));
+            return pool.OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private void Ok() => MudDialog?.Close(DialogResult.Ok(_selected.ToList()));
+}

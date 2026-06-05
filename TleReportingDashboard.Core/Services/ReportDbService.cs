@@ -272,10 +272,54 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
             async () =>
             {
                 await using var conn = await OpenConnectionAsync();
+                // Two arms in one query:
+                //   1. shares targeted at this specific user
+                //   2. shares of type 'everyone' — dynamic, no per-user
+                //      materialization, so users added LATER automatically
+                //      inherit access on their first lookup.
+                // DISTINCT collapses the (rare) case where a user is BOTH
+                // explicitly shared AND covered by the everyone wildcard.
                 await using var cmd = new SqlCommand(
-                    @"SELECT r.* FROM EMPOWER.RPT_saved_reports r
+                    @"SELECT DISTINCT r.* FROM EMPOWER.RPT_saved_reports r
                       INNER JOIN EMPOWER.RPT_report_shares s ON r.id = s.report_id
-                      WHERE s.shared_with_id = @UserId ORDER BY r.name", conn);
+                      WHERE s.shared_with_id = @UserId
+                         OR s.shared_with_type = 'everyone'
+                      ORDER BY r.name", conn);
+                cmd.Parameters.Add(new SqlParameter("@UserId", userId));
+                return await ReadReportsAsync(cmd);
+            },
+            bypass: _editorMode.IsActive);
+
+    public Task<List<SavedReport>> GetVisibleToUserAsync(string userId) =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Reports", "VisibleTo", userId),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                // Three OR-arms = three visibility tiers:
+                //   * owner_id matches the user (own reports)
+                //   * EXISTS a share row targeting this user OR type='everyone'
+                //   * owner_email is in either admin track:
+                //       - RPT_admins (Global admin)
+                //       - RPT_users.is_admin (Administrator role)
+                //     so admin-authored reports are visible to everyone
+                //     without requiring an explicit share.
+                // DISTINCT collapses the case where a user is BOTH the owner
+                // AND explicitly shared, or where an admin's report is also
+                // wildcard-shared. Sort by name to match the other report
+                // list endpoints (caller-side sort still possible).
+                await using var cmd = new SqlCommand(
+                    @"SELECT DISTINCT r.* FROM EMPOWER.RPT_saved_reports r
+                      WHERE r.owner_id = @UserId
+                         OR EXISTS (
+                              SELECT 1 FROM EMPOWER.RPT_report_shares s
+                               WHERE s.report_id = r.id
+                                 AND (s.shared_with_id = @UserId OR s.shared_with_type = 'everyone'))
+                         OR r.owner_email IN (
+                              SELECT email FROM EMPOWER.RPT_admins WHERE scope = 'global')
+                         OR r.owner_email IN (
+                              SELECT email FROM EMPOWER.RPT_users WHERE is_admin = 1)
+                      ORDER BY r.name", conn);
                 cmd.Parameters.Add(new SqlParameter("@UserId", userId));
                 return await ReadReportsAsync(cmd);
             },

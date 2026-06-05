@@ -65,6 +65,30 @@
                 </MudButton>
             </MudStack>
 
+            @* "Share with everyone" — single share row keyed by
+               SharedWithType='everyone'. Backend (GetSharedWithMeAsync +
+               MasterDashboardService UNION arm) treats it as a wildcard,
+               so users added LATER inherit access automatically — no
+               per-user materialization, no backfill job. Hidden while an
+               Everyone share already exists for this report (the existing
+               row appears in the list below). Permission picker reuses
+               _newSharePermission so the user can choose viewer/editor
+               before clicking. *@
+            @if (!_hasEveryoneShare)
+            {
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@Icons.Material.Outlined.Public" Style="color: #5F6368;" />
+                    <MudText Typo="Typo.body2" Style="flex: 1;">
+                        Share with <strong>everyone</strong> — current and future users.
+                    </MudText>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                               OnClick="ShareWithEveryone"
+                               Disabled="@_isSaving">
+                        Share with everyone
+                    </MudButton>
+                </MudStack>
+            }
+
             <MudDivider />
 
             @if (_isLoadingShares)
@@ -79,21 +103,31 @@
                 <MudList T="ReportShare" Dense>
                     @foreach (var share in _shares)
                     {
+                        var shareLocal = share;
+                        var isEveryone = string.Equals(share.SharedWithType, "everyone", StringComparison.OrdinalIgnoreCase);
                         <MudListItem T="ReportShare">
                             <MudStack Row AlignItems="AlignItems.Center"
                                        Justify="Justify.SpaceBetween" Style="width: 100%;">
-                                <MudStack Spacing="0">
-                                    <MudText Typo="Typo.body2">@share.SharedWithId</MudText>
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                        @share.SharedWithType
-                                        &mdash;
-                                        @(share.Permission == "editor" ? "Can edit" : "View only")
-                                    </MudText>
+                                <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
+                                    @if (isEveryone)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Outlined.Public" Size="Size.Small" Color="Color.Primary" />
+                                    }
+                                    <MudStack Spacing="0">
+                                        <MudText Typo="Typo.body2" Style="@(isEveryone ? "font-weight: 600;" : "")">
+                                            @(isEveryone ? "Everyone" : share.SharedWithId)
+                                        </MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @(isEveryone ? "All current and future users" : share.SharedWithType)
+                                            &mdash;
+                                            @(share.Permission == "editor" ? "Can edit" : "View only")
+                                        </MudText>
+                                    </MudStack>
                                 </MudStack>
-                                <MudIconButton Icon="@Icons.Material.Outlined.PersonRemove"
+                                <MudIconButton Icon="@(isEveryone ? Icons.Material.Outlined.PublicOff : Icons.Material.Outlined.PersonRemove)"
                                                Size="Size.Small" Color="Color.Error"
-                                               OnClick="() => RevokeShare(share)"
-                                               title="Revoke access" />
+                                               OnClick="() => RevokeShare(shareLocal)"
+                                               title="@(isEveryone ? "Stop sharing with everyone" : "Revoke access")" />
                             </MudStack>
                         </MudListItem>
                     }
@@ -223,6 +257,52 @@
             .OrderBy(u => u.DisplayName ?? u.Email, StringComparer.OrdinalIgnoreCase)
             .Take(50)
             .AsEnumerable());
+    }
+
+    // True when this report already has a share of type 'everyone'. Used
+    // to hide the "Share with everyone" affordance (only one Everyone
+    // share per report makes sense) and to drive de-dup elsewhere.
+    private bool _hasEveryoneShare =>
+        _shares.Any(s => string.Equals(s.SharedWithType, "everyone", StringComparison.OrdinalIgnoreCase));
+
+    // One-click share with every current and future user. SharedWithId is
+    // the sentinel "everyone" because the column is NOT NULL; the actual
+    // wildcard semantics live in the SharedWithType discriminator (see
+    // GetSharedWithMeAsync). Permission defaults to whatever's selected
+    // in the per-user picker's dropdown — admins typically want viewer
+    // for broad shares; toggling editor before clicking gives them that.
+    private async Task ShareWithEveryone()
+    {
+        if (_hasEveryoneShare) return; // defensive — UI already hides the button
+        _isSaving = true;
+        try
+        {
+            var share = new ReportShare
+            {
+                Id = Guid.NewGuid(),
+                ReportId = ReportId,
+                SharedWithId = "everyone",
+                SharedWithType = "everyone",
+                Permission = _newSharePermission,
+                SharedById = CurrentUserId,
+                CreatedAt = DateTime.UtcNow
+            };
+            var saved = await SharingService.ShareReportAsync(share);
+            _shares.Add(saved);
+            // No per-recipient notification — the audience is "every user",
+            // and a broadcast to every active mailbox is too noisy for what
+            // is effectively a permission change. Users see the new report
+            // the next time they hit the Library / Master Dashboard.
+            Snackbar.Add("Shared with everyone.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(FriendlyError.FromException(ex, Logger, "sharing with everyone"), Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
     }
 
     private async Task AddShare()

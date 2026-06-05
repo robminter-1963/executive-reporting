@@ -1,0 +1,459 @@
+@inject IBatchService BatchSvc
+@inject IReportService ReportService
+@inject ISharingService SharingService
+@inject IUserManagementService UserManagement
+@inject IAdminAccessService AdminAccess
+@inject ICompanyRegistry CompanyRegistry
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject ILogger<BatchEditDialog> Logger
+
+@* Admin authoring surface for a report batch. Three sections in one dialog:
+     • Name + description (header)
+     • Items — the reports included, ordered (sort_order persisted)
+     • Access — emails of users granted to run this batch
+   Saves the whole shape on OK: batch row + items (replace all) + grants
+   (diff against load). Cancel discards everything if nothing's persisted
+   yet (new batch) or rolls back the in-memory edits (existing batch). *@
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Outlined.PlaylistPlay" />
+            <MudText Typo="Typo.h6">@(IsNew ? "New Batch" : "Edit Batch")</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Style="min-width: 720px;">
+            <MudTextField @bind-Value="_name" Label="Name"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          HelperText="Shown to users in their Batches list." />
+            <MudTextField @bind-Value="_description" Label="Description (optional)"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2" />
+
+            @* Items panel — list of reports in the batch, with add/remove
+               + reorder. Reports across companies are allowed; the company
+               column makes that visible. The picker (Add) shows ALL
+               reports in the system since this is admin-only. *@
+            <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Reports (@_items.Count)</MudText>
+                    @* Button stays enabled even when _allReports is empty
+                       — the picker dialog renders an explicit "no reports
+                       match" empty state, which is more informative than
+                       a silently-disabled button. Loading failures (auth
+                       glitch, DB hiccup) get caught and logged in
+                       OnInitializedAsync; previously they left this
+                       button greyed out with no clue why. *@
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Outlined.Add" OnClick="OpenAddItemDialog">
+                        Add Report
+                    </MudButton>
+                </MudStack>
+                @if (_items.Any())
+                {
+                    <MudTable T="BatchItem" Items="_items" Dense Hover Striped FixedHeader Height="240px">
+                        <HeaderContent>
+                            <MudTh Style="width: 40%;">Report</MudTh>
+                            <MudTh Style="width: 25%;">Company</MudTh>
+                            <MudTh Style="width: 25%;">Sheet Name</MudTh>
+                            <MudTh Style="width: 110px; text-align: right;">Order</MudTh>
+                            <MudTh Style="width: 80px;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate Context="row">
+                            @{ var rowLocal = row; }
+                            <MudTd>
+                                <MudText Typo="Typo.body2">@(row.ReportName ?? "(unknown)")</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@row.ReportOwnerEmail</MudText>
+                            </MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.body2">@(row.CompanyName ?? "—")</MudText>
+                            </MudTd>
+                            <MudTd>
+                                <MudTextField T="string" Value="@row.SheetName"
+                                              ValueChanged="@((string v) => row.SheetName = string.IsNullOrWhiteSpace(v) ? null : v)"
+                                              Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                              Placeholder="@(SheetPreview(row))"
+                                              HelperText="@(string.IsNullOrWhiteSpace(row.CompanyCode) ? null : $"Final label: {SheetPreview(row)}")" />
+                            </MudTd>
+                            <MudTd Style="text-align: right;">
+                                <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.ArrowUpward" Size="Size.Small"
+                                                   Color="Color.Default" title="Move up"
+                                                   Disabled="@(_items.IndexOf(rowLocal) == 0)"
+                                                   OnClick="@(() => MoveItem(rowLocal, -1))" />
+                                    <MudIconButton Icon="@Icons.Material.Outlined.ArrowDownward" Size="Size.Small"
+                                                   Color="Color.Default" title="Move down"
+                                                   Disabled="@(_items.IndexOf(rowLocal) == _items.Count - 1)"
+                                                   OnClick="@(() => MoveItem(rowLocal, 1))" />
+                                </MudStack>
+                            </MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                               Color="Color.Error" title="Remove from batch"
+                                               OnClick="@(() => _items.Remove(rowLocal))" />
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-2">
+                        No reports in this batch yet. Add at least one to enable Save.
+                    </MudText>
+                }
+            </MudPaper>
+
+            @* Access panel — emails granted to Run this batch. Admins
+               always implicitly have access (CanRunAsync short-circuits),
+               so listing them here is unnecessary. Picker sources from
+               RPT_users via UserManagement so admins can't fat-finger an
+               email that doesn't have access to the website. *@
+            <MudPaper Elevation="0" Class="pa-2" Style="border: 1px solid #E8EAED; border-radius: 4px;">
+                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                    <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">Granted users (@_access.Count)</MudText>
+                </MudStack>
+                <MudStack Row AlignItems="AlignItems.End" Spacing="2" Class="mb-2">
+                    <MudAutocomplete T="UserRecord" @bind-Value="_userToGrant"
+                                     Label="Grant access to"
+                                     SearchFunc="SearchUsers"
+                                     ToStringFunc="@(u => u is null ? string.Empty : FormatUser(u))"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense" Dense
+                                     Style="flex: 1;"
+                                     Placeholder="Start typing a name or email..."
+                                     CoerceText="true" ResetValueOnEmptyText="true"
+                                     Clearable />
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               OnClick="GrantAccess"
+                               Disabled="@(_userToGrant is null)">
+                        Grant
+                    </MudButton>
+                </MudStack>
+                @if (_access.Any())
+                {
+                    <MudList T="string" Dense>
+                        @foreach (var grant in _access)
+                        {
+                            var grantLocal = grant;
+                            <MudListItem T="string">
+                                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width: 100%;">
+                                    <MudText Typo="Typo.body2">@grant</MudText>
+                                    <MudIconButton Icon="@Icons.Material.Outlined.PersonRemove" Size="Size.Small"
+                                                   Color="Color.Error" title="Revoke access"
+                                                   OnClick="@(() => _access.Remove(grantLocal))" />
+                                </MudStack>
+                            </MudListItem>
+                        }
+                    </MudList>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-2">
+                        No users granted yet. Admins can always run any batch; grant non-admin users here.
+                    </MudText>
+                }
+            </MudPaper>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok"
+                   Disabled="@(_saving || string.IsNullOrWhiteSpace(_name) || _items.Count == 0)">
+            @(_saving ? "Saving..." : (IsNew ? "Create" : "Save"))
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public BatchRecord? ExistingBatch { get; set; }
+    [Parameter] public string CurrentUserEmail { get; set; } = string.Empty;
+    // Entra OID — required to load the user's owned reports (which
+    // ReportService.GetReportsAsync keys on the OID, not email). Empty
+    // means "no user context" → no reports loaded for non-admins.
+    [Parameter] public string CurrentUserId { get; set; } = string.Empty;
+    // Admin authority. When true, the report picker loads every report
+    // in the system. When false, the picker shows only the user's owned
+    // reports ∪ reports shared with them — enforcing "if a user hasn't
+    // shared their report, nobody else sees it" across the batch flow.
+    [Parameter] public bool HasAnyAdminAccess { get; set; }
+
+    private bool IsNew => ExistingBatch is null;
+
+    private string _name = string.Empty;
+    private string? _description;
+    private List<BatchItem> _items = new();
+    private HashSet<string> _access = new(StringComparer.OrdinalIgnoreCase);
+    private bool _saving;
+
+    private List<SavedReport> _allReports = new();
+    private List<UserRecord> _users = new();
+    private UserRecord? _userToGrant;
+    // CompanyId → CompanySummary for code+name lookups when newly-added
+    // items don't yet have CompanyCode/Name populated by the service.
+    private Dictionary<Guid, CompanySummary> _companiesById = new();
+    // Authoritative admin status — set in OnInitializedAsync from the
+    // parameter OR via IAdminAccessService self-check. Drives the
+    // report-load path here AND the lazy retry on Add Report click.
+    private bool _resolvedHasAdminAccess;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (ExistingBatch is not null)
+        {
+            _name = ExistingBatch.Name;
+            _description = ExistingBatch.Description;
+            _items = ExistingBatch.Items.Select(i => new BatchItem
+            {
+                Id = i.Id,
+                BatchId = i.BatchId,
+                ReportId = i.ReportId,
+                SortOrder = i.SortOrder,
+                SheetName = i.SheetName,
+                ReportName = i.ReportName,
+                ReportOwnerEmail = i.ReportOwnerEmail,
+                CompanyId = i.CompanyId,
+                CompanyName = i.CompanyName,
+                CompanyCode = i.CompanyCode
+            }).ToList();
+            _access = new(ExistingBatch.Access.Select(a => a.UserEmail), StringComparer.OrdinalIgnoreCase);
+        }
+
+        // Load the full report roster + user roster up-front so the Add
+        // dialogs are instant. Failures degrade to empty lists — the
+        // editor still saves, just without picker options.
+        // Admin-aware report load. Admins see every report (admin-curated
+        // batches frequently span owners). Non-admin authors see only
+        // reports they own + reports shared with them — so an unshared
+        // report belonging to another user can't leak through the picker.
+        //
+        // Self-verify admin status against IAdminAccessService rather
+        // than trusting the HasAnyAdminAccess parameter alone — if a
+        // caller forgot to pass it (or it's not yet computed by the time
+        // this dialog opens), the admin-path load was silently skipped
+        // and the admin got an empty picker. The parameter is still
+        // honored as a hint when true (avoids the round-trip); when
+        // false we re-check before falling through to the narrower
+        // owned + shared load.
+        bool effectiveAdmin = HasAnyAdminAccess;
+        if (!effectiveAdmin && !string.IsNullOrWhiteSpace(CurrentUserEmail))
+        {
+            try
+            {
+                effectiveAdmin = await AdminAccess.HasAnyAdminAccessAsync(CurrentUserEmail);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Admin self-check failed in batch editor; falling back to non-admin path.");
+            }
+        }
+        _resolvedHasAdminAccess = effectiveAdmin;
+
+        try
+        {
+            if (effectiveAdmin)
+            {
+                _allReports = await ReportService.GetAllReportsAsync();
+            }
+            else if (!string.IsNullOrWhiteSpace(CurrentUserId))
+            {
+                // Visibility rule: admin-owned reports are implicitly
+                // visible to everyone; user-owned reports require an
+                // explicit share. GetVisibleToUserAsync encodes that
+                // in one round-trip so the picker shows the same set
+                // the user would see anywhere else in the app.
+                _allReports = await ReportService.GetVisibleToUserAsync(CurrentUserId);
+            }
+            else
+            {
+                _allReports = new();
+            }
+        }
+        catch (Exception ex) { Logger.LogWarning(ex, "Failed to load reports for batch editor."); }
+        try { _users = await UserManagement.GetAllAsync(); }
+        catch (Exception ex) { Logger.LogWarning(ex, "Failed to load users for batch editor."); }
+        try
+        {
+            var list = await CompanyRegistry.GetActiveAsync();
+            _companiesById = list.ToDictionary(c => c.Id);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load companies for batch editor.");
+        }
+    }
+
+    private static string FormatUser(UserRecord u) =>
+        string.IsNullOrWhiteSpace(u.DisplayName) ? u.Email : $"{u.DisplayName} ({u.Email})";
+
+    private static string TruncateForSheet(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "Sheet";
+        return name.Length > 31 ? name[..31] : name;
+    }
+
+    // Mirror of BatchService.ExecuteAsync's sheet-name composition so the
+    // admin can see exactly what the worksheet tab will read as in the
+    // final workbook. Company code prefix wraps the override (or the
+    // default report-name fallback). Truncated to Excel's 31-char limit
+    // — final de-dup across sheets happens at export time.
+    private static string SheetPreview(BatchItem item)
+    {
+        var baseLabel = !string.IsNullOrWhiteSpace(item.SheetName)
+            ? item.SheetName!
+            : item.ReportName ?? "Sheet";
+        var full = string.IsNullOrWhiteSpace(item.CompanyCode)
+            ? baseLabel
+            : $"{item.CompanyCode} - {baseLabel}";
+        return full.Length > 31 ? full[..31] : full;
+    }
+
+    private Task<IEnumerable<UserRecord>> SearchUsers(string? value, CancellationToken ct)
+    {
+        var pool = _users.Where(u => u.IsActive && !string.IsNullOrWhiteSpace(u.Email)
+                                     && !_access.Contains(u.Email));
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            pool = pool.Where(u =>
+                (u.Email?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (u.DisplayName?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+        return Task.FromResult(pool
+            .OrderBy(u => u.DisplayName ?? u.Email, StringComparer.OrdinalIgnoreCase)
+            .Take(50).AsEnumerable());
+    }
+
+    private async Task OpenAddItemDialog()
+    {
+        // Lazy retry: if the initial OnInitializedAsync load failed (or
+        // hadn't finished by the time the user opened this dialog), give
+        // it another chance now. Silent-fail still degrades to an empty
+        // picker showing "no reports match" rather than blocking the
+        // workflow — admins can close + reopen.
+        if (_allReports.Count == 0)
+        {
+            try
+            {
+                if (_resolvedHasAdminAccess)
+                {
+                    _allReports = await ReportService.GetAllReportsAsync();
+                }
+                else if (!string.IsNullOrWhiteSpace(CurrentUserId))
+                {
+                    _allReports = await ReportService.GetVisibleToUserAsync(CurrentUserId);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Lazy report-list reload failed on Add Report click.");
+            }
+        }
+
+        var parameters = new DialogParameters<BatchAddReportDialog>
+        {
+            { x => x.AvailableReports, _allReports },
+            { x => x.AlreadyPickedReportIds, _items.Select(i => i.ReportId).ToHashSet() }
+        };
+        var dialog = await DialogService.ShowAsync<BatchAddReportDialog>(
+            "Add Report to Batch", parameters, DialogPresets.Locked(MaxWidth.Medium));
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not List<SavedReport> picks) return;
+        foreach (var r in picks)
+        {
+            var companyId = r.CompanyId == Guid.Empty ? (Guid?)null : r.CompanyId;
+            string? companyName = null;
+            string? companyCode = null;
+            if (companyId is Guid cid && _companiesById.TryGetValue(cid, out var company))
+            {
+                companyName = company.Name;
+                companyCode = company.Code;
+            }
+            // DisplayLabel: InternalName wins when set so the editor's
+            // row + the worksheet label both use the admin-curated name.
+            // Matches BatchService.GetByIdAsync's join-time projection.
+            var label = string.IsNullOrWhiteSpace(r.InternalName) ? r.Name : r.InternalName!;
+            _items.Add(new BatchItem
+            {
+                ReportId = r.Id,
+                ReportName = label,
+                ReportOwnerEmail = r.OwnerEmail,
+                CompanyId = companyId,
+                CompanyName = companyName,
+                CompanyCode = companyCode,
+                SortOrder = _items.Count
+            });
+        }
+    }
+
+    private void GrantAccess()
+    {
+        if (_userToGrant?.Email is { } e && !string.IsNullOrWhiteSpace(e))
+        {
+            _access.Add(e);
+            _userToGrant = null;
+        }
+    }
+
+    private void MoveItem(BatchItem item, int delta)
+    {
+        var idx = _items.IndexOf(item);
+        var target = idx + delta;
+        if (idx < 0 || target < 0 || target >= _items.Count) return;
+        _items.RemoveAt(idx);
+        _items.Insert(target, item);
+    }
+
+    private async Task Ok()
+    {
+        if (_saving) return;
+        _saving = true;
+        try
+        {
+            BatchRecord saved;
+            if (IsNew)
+            {
+                saved = await BatchSvc.CreateAsync(new BatchRecord
+                {
+                    Name = _name.Trim(),
+                    Description = string.IsNullOrWhiteSpace(_description) ? null : _description.Trim()
+                }, CurrentUserEmail);
+            }
+            else
+            {
+                saved = await BatchSvc.UpdateAsync(new BatchRecord
+                {
+                    Id = ExistingBatch!.Id,
+                    Name = _name.Trim(),
+                    Description = string.IsNullOrWhiteSpace(_description) ? null : _description.Trim()
+                }, CurrentUserEmail);
+            }
+
+            // Replace-all on items — simpler than tracking adds/updates/
+            // deletes; matches the editor's "save = current state" UX.
+            await BatchSvc.SetItemsAsync(saved.Id, _items);
+
+            // Access diff: grant adds, revoke removes. Idempotent grants
+            // so re-saving an unchanged grant is a silent no-op.
+            var existingAccess = ExistingBatch?.Access.Select(a => a.UserEmail).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                                 ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var toGrant = _access.Except(existingAccess, StringComparer.OrdinalIgnoreCase).ToList();
+            var toRevoke = existingAccess.Except(_access, StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var e in toGrant) await BatchSvc.GrantAccessAsync(saved.Id, e, CurrentUserEmail);
+            foreach (var e in toRevoke) await BatchSvc.RevokeAccessAsync(saved.Id, e);
+
+            Snackbar.Add(IsNew ? $"Batch \"{saved.Name}\" created." : $"Batch \"{saved.Name}\" saved.", Severity.Success);
+            MudDialog?.Close(DialogResult.Ok(saved));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Batch save failed.");
+            Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void Cancel() => MudDialog?.Cancel();
+}

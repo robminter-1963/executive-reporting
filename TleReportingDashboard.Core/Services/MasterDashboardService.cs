@@ -724,7 +724,7 @@ public class MasterDashboardService : IMasterDashboardService
                             SELECT r.id, r.name, r.internal_name, r.owner_id, r.owner_email, r.filters, r.column_state, r.updated_at
                             FROM EMPOWER.RPT_saved_reports r
                             INNER JOIN EMPOWER.RPT_report_shares s ON s.report_id = r.id
-                            WHERE s.shared_with_id = @UserId
+                            WHERE (s.shared_with_id = @UserId OR s.shared_with_type = 'everyone')
                               AND r.company_id = @CompanyId
                               AND (r.column_state LIKE '%""ShowOnMaster"":true%'
                                    OR r.column_state LIKE '%""ShowOnMaster"": true%')

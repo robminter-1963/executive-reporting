@@ -60,6 +60,11 @@ public interface IUserManagementService
     // gets re-set by Master Dashboard URL navigations.
     Task SetPrefersCompanyPickerAsync(string email, bool prefers, CancellationToken ct = default);
 
+    // Per-user batch-authoring permission. When TRUE, the user can
+    // create / edit / delete / grant-access on batches they own. Admins
+    // gate this via the user editor.
+    Task SetCanCreateBatchesAsync(string email, bool can, CancellationToken ct = default);
+
     // ── Company access ──
     Task<List<UserCompanyAccess>> GetCompanyAccessAsync(string email, CancellationToken ct = default);
 
@@ -179,6 +184,13 @@ public sealed record UserRecord(
     // browser session restore even though last_visited_company_id gets
     // re-set on every Master Dashboard load.
     public bool PrefersCompanyPicker { get; init; }
+
+    // Per-user authoring permission for report batches. When TRUE, the
+    // user can create / edit / delete / grant-access on batches they
+    // OWN (created_by = their email). Admins always have full CRUD
+    // regardless of this flag. Users with neither this flag nor any
+    // access grants see no Batches tab at all.
+    public bool CanCreateBatches { get; init; }
 }
 
 // Per-(user, company) role grant. Non-admin users need at least one of these

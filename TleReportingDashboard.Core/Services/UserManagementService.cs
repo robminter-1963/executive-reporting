@@ -51,7 +51,8 @@ public sealed class UserManagementService : IUserManagementService
         SELECT u.email, u.user_id, u.display_name, u.is_admin, u.is_active,
                u.last_visited_company_id, u.created_at, u.created_by, u.updated_at,
                u.role_id, r.name AS role_name, u.prefers_company_picker,
-               r.admin_sections AS role_admin_sections
+               r.admin_sections AS role_admin_sections,
+               u.can_create_batches
           FROM EMPOWER.RPT_users u
      LEFT JOIN EMPOWER.RPT_roles r ON r.id = u.role_id";
 
@@ -364,6 +365,24 @@ public sealed class UserManagementService : IUserManagementService
         await cmd.ExecuteNonQueryAsync(ct);
         _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "ByEmail", email));
         _cache.Invalidate("UserManagementService:All");
+    }
+
+    public async Task SetCanCreateBatchesAsync(string email, bool can, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(email)) return;
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(@"
+            UPDATE EMPOWER.RPT_users
+               SET can_create_batches = @can,
+                   updated_at         = SYSUTCDATETIME()
+             WHERE email = @email;", conn);
+        cmd.Parameters.Add(new SqlParameter("@email", System.Data.SqlDbType.NVarChar, 256) { Value = email });
+        cmd.Parameters.Add(new SqlParameter("@can", System.Data.SqlDbType.Bit) { Value = can });
+        await cmd.ExecuteNonQueryAsync(ct);
+        _cache.Invalidate(ConfigDbCache.Key("UserManagementService", "ByEmail", email));
+        _cache.Invalidate("UserManagementService:All");
+        _logger.LogInformation("User batch-authoring permission set: {Email} can={Can}", email, can);
     }
 
     public async Task SetPrefersCompanyPickerAsync(string email, bool prefers, CancellationToken ct = default)
@@ -750,7 +769,8 @@ public sealed class UserManagementService : IUserManagementService
         RoleId   = r.IsDBNull(9)  ? null : r.GetGuid(9),
         RoleName = r.IsDBNull(10) ? null : r.GetString(10),
         PrefersCompanyPicker = r.GetBoolean(11),
-        RoleAdminSections = r.IsDBNull(12) ? null : ParseAdminSectionsJson(r.GetString(12))
+        RoleAdminSections = r.IsDBNull(12) ? null : ParseAdminSectionsJson(r.GetString(12)),
+        CanCreateBatches = r.GetBoolean(13)
     };
 
     // Mirror of RoleService.ParseSectionsJson — kept here so UserRecord

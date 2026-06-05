@@ -13,7 +13,43 @@ public class ExportService : IExportService
     public byte[] ExportToExcel(QueryResponse data, string reportName)
     {
         using var workbook = new XLWorkbook();
-        var sheetName = reportName.Length > 31 ? reportName[..31] : reportName;
+        FillWorksheet(workbook, ClampSheetName(reportName), data);
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        return stream.ToArray();
+    }
+
+    public byte[] ExportToMultiSheetExcel(IReadOnlyList<MultiSheetExcelInput> sheets)
+    {
+        using var workbook = new XLWorkbook();
+        if (sheets is null || sheets.Count == 0)
+        {
+            // Always produce an openable workbook — empty batch shouldn't
+            // hand the user a zero-byte download that Excel refuses.
+            workbook.Worksheets.Add("(empty)");
+        }
+        else
+        {
+            // Sheet names must be unique within a workbook AND <=31 chars.
+            // De-dup with a numeric suffix when names collide post-clamp.
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var sheet in sheets)
+            {
+                var name = UniqueSheetName(ClampSheetName(sheet.SheetName), usedNames);
+                usedNames.Add(name);
+                FillWorksheet(workbook, name, sheet.Data);
+            }
+        }
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        return stream.ToArray();
+    }
+
+    // Extracted from ExportToExcel so the multi-sheet path can share the
+    // same column-formatting + typed-cell-value logic. Adds one named
+    // worksheet to the supplied workbook and fills it with data.
+    private static void FillWorksheet(XLWorkbook workbook, string sheetName, QueryResponse data)
+    {
         var worksheet = workbook.Worksheets.Add(sheetName);
 
         // Column headers (row 1)
@@ -25,7 +61,7 @@ public class ExportService : IExportService
             cell.Style.Font.Bold = true;
         }
 
-        // Data rows (starting at row 3)
+        // Data rows (starting at row 2)
         for (var rowIdx = 0; rowIdx < data.Rows.Count; rowIdx++)
         {
             var row = data.Rows[rowIdx];
@@ -86,10 +122,38 @@ public class ExportService : IExportService
 
         // Auto-size columns
         worksheet.Columns().AdjustToContents();
+    }
 
-        using var stream = new MemoryStream();
-        workbook.SaveAs(stream);
-        return stream.ToArray();
+    // Excel sheet names are capped at 31 chars and can't contain certain
+    // characters (: \ / ? * [ ]). Strip the invalid ones, trim/clamp,
+    // then fall back to a safe default if the result is empty.
+    private static string ClampSheetName(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "Sheet";
+        var invalid = new[] { ':', '\\', '/', '?', '*', '[', ']' };
+        var cleaned = new StringBuilder(raw.Length);
+        foreach (var c in raw)
+            cleaned.Append(invalid.Contains(c) ? ' ' : c);
+        var s = cleaned.ToString().Trim();
+        if (s.Length == 0) return "Sheet";
+        return s.Length > 31 ? s[..31] : s;
+    }
+
+    // Append " (2)", " (3)", ... when a name collides with one already
+    // used in the workbook. Re-clamp to 31 chars by trimming the base
+    // before adding the suffix.
+    private static string UniqueSheetName(string baseName, HashSet<string> used)
+    {
+        if (!used.Contains(baseName)) return baseName;
+        for (var i = 2; i < 1000; i++)
+        {
+            var suffix = $" ({i})";
+            var trimLen = Math.Max(0, 31 - suffix.Length);
+            var candidate = baseName.Length > trimLen ? baseName[..trimLen] + suffix : baseName + suffix;
+            if (!used.Contains(candidate)) return candidate;
+        }
+        // Fallback — almost impossible to hit (1000 collisions); use GUID.
+        return Guid.NewGuid().ToString("N")[..8];
     }
 
     public byte[] ExportToPdf(QueryResponse data, string reportName)

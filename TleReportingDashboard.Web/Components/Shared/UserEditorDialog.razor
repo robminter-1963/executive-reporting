@@ -99,6 +99,16 @@
             {
                 <MudSwitch T="bool" @bind-Value="_isActive" Label="Active" Color="Color.Success" />
             }
+            @* Per-user batch-authoring permission. Persisted separately
+               from the role (and from the Active flag) so an admin can
+               flip it on / off without touching role assignments. Hidden
+               on create — admins flip it later from Edit. *@
+            @if (!IsNew)
+            {
+                <MudSwitch T="bool" @bind-Value="_canCreateBatches"
+                           Label="Can create report batches"
+                           Color="Color.Primary" />
+            }
         </MudStack>
     </DialogContent>
     <DialogActions>
@@ -132,6 +142,7 @@
     private string _displayName = string.Empty;
     private Guid? _roleId;
     private bool _isActive = true;
+    private bool _canCreateBatches;
     private List<RoleRecord> _roles = new();
     private List<AssignableTeam> _assignableTeams = new();
     private HashSet<string> _selectedTeamKeys = new();
@@ -146,6 +157,7 @@
         string DisplayName,
         Guid? RoleId,
         bool IsActive,
+        bool CanCreateBatches,
         IReadOnlyList<string> TeamKeys);
     private FormSnapshot _initialSnapshot = default!;
 
@@ -165,6 +177,7 @@
             _displayName = Existing.DisplayName ?? string.Empty;
             _roleId      = Existing.RoleId;
             _isActive    = Existing.IsActive;
+            _canCreateBatches = Existing.CanCreateBatches;
 
             // Team picker lookup data. Loaded eagerly so switching the role
             // scope to 'team' doesn't delay the dropdown; both round-trips
@@ -178,7 +191,7 @@
         }
 
         _initialSnapshot = new FormSnapshot(
-            _email, _displayName, _roleId, _isActive,
+            _email, _displayName, _roleId, _isActive, _canCreateBatches,
             _selectedTeamKeys.OrderBy(k => k, StringComparer.Ordinal).ToList());
     }
 
@@ -191,6 +204,7 @@
             if (!string.Equals(Norm(_displayName), Norm(s.DisplayName), StringComparison.Ordinal)) return true;
             if (_roleId != s.RoleId) return true;
             if (_isActive != s.IsActive) return true;
+            if (_canCreateBatches != s.CanCreateBatches) return true;
 
             var nowKeys = _selectedTeamKeys.OrderBy(k => k, StringComparer.Ordinal).ToList();
             if (nowKeys.Count != s.TeamKeys.Count) return true;
@@ -264,6 +278,14 @@
                         string.IsNullOrWhiteSpace(_displayName) ? null : _displayName.Trim(),
                         _roleId,
                         _isActive);
+
+                    // Per-user batch-authoring permission is stored on its
+                    // own column with its own setter — kept separate from
+                    // the role/active path so role changes don't accidentally
+                    // flip authoring access. Persists only when the value
+                    // actually changed; cheap UPDATE either way.
+                    if (Existing!.CanCreateBatches != _canCreateBatches)
+                        await UserManagement.SetCanCreateBatchesAsync(_email, _canCreateBatches);
 
                     // Persist team assignments only when the selector was visible
                     // — i.e. current scope is 'team'. Rows stay dormant across

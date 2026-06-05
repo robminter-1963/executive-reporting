@@ -6,6 +6,8 @@
 @inject IScheduleService ScheduleService
 @inject IUserPreferenceService PreferenceService
 @inject IFavoriteService FavoriteSvc
+@inject IBatchService BatchSvc
+@inject IJSRuntime JS
 @inject UserPreferenceState PreferenceState
 @inject IAdminService AdminService
 @inject IAdminAccessService AdminAccess
@@ -964,6 +966,102 @@
             }
         </MudTabPanel>
         }
+
+        @* ── Tab: Batches ── Collections of reports packaged into a
+           single multi-sheet Excel workbook. Three caller tiers:
+             • Admins (any signal) — see every batch, edit/delete any.
+             • Authors (RPT_users.can_create_batches) — see their own
+               batches + ones granted to them, edit/delete only owned.
+             • Granted users — see only batches granted to them; run-only.
+           Hidden entirely when the user has nothing to do — no admin
+           authority, no authoring permission, and no grants. *@
+        @{
+            var _canAuthorBatches = _hasAnyAdminAccess || _canCreateBatches;
+        }
+        @if (_canAuthorBatches || _myBatches.Count > 0)
+        {
+        <MudTabPanel Text="Batches" Icon="@Icons.Material.Outlined.PlaylistPlay">
+            <MudStack Spacing="2" Class="pa-2">
+                @if (_canAuthorBatches)
+                {
+                    <MudStack Row Spacing="2" AlignItems="AlignItems.Center">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Add"
+                                   OnClick="OpenCreateBatchDialog">
+                            New Batch
+                        </MudButton>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @(_hasAnyAdminAccess
+                                ? "Admin authoring — every batch in the system."
+                                : "You can author batches and grant access to other users.")
+                        </MudText>
+                    </MudStack>
+                }
+                @if (_myBatches.Any())
+                {
+                    <MudTable T="BatchRecord" Items="_myBatches" Dense Hover Striped FixedHeader>
+                        <HeaderContent>
+                            <MudTh Style="width: 28%;">Name</MudTh>
+                            <MudTh Style="width: 32%;">Description</MudTh>
+                            <MudTh Style="width: 14%;">Owner</MudTh>
+                            <MudTh Style="width: 10%;">Updated</MudTh>
+                            <MudTh Style="width: 16%; text-align: right;">Actions</MudTh>
+                        </HeaderContent>
+                        <RowTemplate Context="batch">
+                            @{
+                                var batchLocal = batch;
+                                var ownedByMe = string.Equals(batch.CreatedBy, _userEmail, StringComparison.OrdinalIgnoreCase);
+                                var canEdit = _hasAnyAdminAccess || ownedByMe;
+                            }
+                            <MudTd>
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">@batch.Name</MudText>
+                            </MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@batch.Description</MudText>
+                            </MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.caption" Color="@(ownedByMe ? Color.Primary : Color.Secondary)">
+                                    @(ownedByMe ? "You" : batch.CreatedBy)
+                                </MudText>
+                            </MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.caption">@batch.UpdatedAt.ToLocalTime().ToString("M/d/yyyy")</MudText>
+                            </MudTd>
+                            <MudTd Style="text-align: right;">
+                                <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                    @if (_runningBatchId == batchLocal.Id)
+                                    {
+                                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Style="margin: 6px;" />
+                                    }
+                                    else
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Outlined.PlayArrow" Size="Size.Small"
+                                                       Color="Color.Primary" title="Run batch"
+                                                       OnClick="@(() => RunBatch(batchLocal))" />
+                                    }
+                                    @if (canEdit)
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                                       Color="Color.Default" title="Edit batch"
+                                                       OnClick="@(() => OpenEditBatchDialog(batchLocal))" />
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                                       Color="Color.Error" title="Delete batch"
+                                                       OnClick="@(() => ConfirmDeleteBatch(batchLocal))" />
+                                    }
+                                </MudStack>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+                else if (!_isLoading)
+                {
+                    <EmptyState Icon="@Icons.Material.Outlined.PlaylistPlay"
+                                Heading="@(_canAuthorBatches ? "No batches yet" : "No batches granted")"
+                                Body="@(_canAuthorBatches ? "Click New Batch to author a multi-report Excel export. Grant access to specific users from the editor." : "An admin or batch owner can grant you access from the batch editor's Access section.")" />
+                }
+            </MudStack>
+        </MudTabPanel>
+        }
     </MudTabs>
 </MudContainer>
 
@@ -986,6 +1084,11 @@
     // "edit any user's report" affordance so company-scoped admin roles
     // can also clean up / fix reports across users.
     private bool _hasAnyAdminAccess;
+    // Per-user batch-authoring permission (RPT_users.can_create_batches).
+    // True = user sees the "New Batch" button + can Edit/Delete batches
+    // they own. False = run-only on batches granted to them. Admins
+    // implicitly act as if this is true regardless of the column.
+    private bool _canCreateBatches;
 
     private List<SavedReport> _myReports = new();
     // Reports owned by OTHER users. Populated only for global admins via
@@ -1011,6 +1114,13 @@
     // once per page mount; mutated locally on toggle so the icon flips
     // without a round-trip-then-reload.
     private HashSet<Guid> _favoriteIds = new();
+
+    // Batches tab state. _myBatches holds either every batch (admins) or
+    // only the user's granted batches (non-admins). _runningBatchId
+    // gates the per-row spinner during a sync run. Loaded once on
+    // OnInitialized alongside the rest of the library data.
+    private List<BatchRecord> _myBatches = new();
+    private Guid? _runningBatchId;
     private Dictionary<Guid, List<string>> _dashboardTabsByReport = new();
     private Dictionary<Guid, DateTime> _nextRunByReport = new();
     private Dictionary<Guid, string> _connectionNamesById = new();
@@ -1289,6 +1399,11 @@
                 || earlyHasAdminAccess
                 || adminUserRecord?.IsAdmin == true
                 || adminUserRecord?.RoleAdminSections is { Count: > 0 };
+            // Per-user batch-authoring permission. Read off the same
+            // UserRecord we already fetched. Admins implicitly have it
+            // regardless of the flag — _hasAnyAdminAccess subsumes the
+            // gate in the UI checks below.
+            _canCreateBatches = adminUserRecord?.CanCreateBatches == true;
 
             // Priority: explicit ?tab= in URL wins (e.g. returning from builder with tab context),
             // otherwise restore the last tab the user was on this session.
@@ -1341,7 +1456,17 @@
                 ? MasterService.GetPlacedReportTabsAsync(pinCid)
                 : Task.FromResult(new Dictionary<Guid, List<string>>());
 
-            await Task.WhenAll(myReportsTask, otherUsersTask, sharedTask, schedulesTask, allSchedulesTask, companiesTask, placedTask);
+            // Batches: admins see all; authors + granted users see the
+            // union of owned + granted via GetForUserAsync. Empty list
+            // when the user has neither admin nor any grants — the tab
+            // hides in that case.
+            var batchesTask = _hasAnyAdminAccess
+                ? BatchSvc.GetAllAsync()
+                : (string.IsNullOrEmpty(_userEmail)
+                    ? Task.FromResult(new List<BatchRecord>())
+                    : BatchSvc.GetForUserAsync(_userEmail));
+
+            await Task.WhenAll(myReportsTask, otherUsersTask, sharedTask, schedulesTask, allSchedulesTask, companiesTask, placedTask, batchesTask);
 
             _companies = await companiesTask;
 
@@ -1419,6 +1544,7 @@
                 .ToList();
             _sharedWithMe = await sharedTask;
             _dashboardTabsByReport = await placedTask;
+            _myBatches = await batchesTask;
 
             var schedules = await schedulesTask;
             _scheduledReportIds = schedules.Where(s => s.IsActive).Select(s => s.ReportId).ToHashSet();
@@ -1860,6 +1986,138 @@
         {
             _myReports.Add(saved);
             Snackbar.Add($"Cloned to \"{saved.Name}\".", Severity.Success);
+        }
+    }
+
+    // ── Batches ──
+
+    private async Task OpenCreateBatchDialog()
+    {
+        var parameters = new DialogParameters<BatchEditDialog>
+        {
+            { x => x.ExistingBatch, null },
+            { x => x.CurrentUserEmail, _userEmail },
+            { x => x.CurrentUserId, _userId },
+            { x => x.HasAnyAdminAccess, _hasAnyAdminAccess }
+        };
+        var dialog = await DialogService.ShowAsync<BatchEditDialog>(
+            "New Batch", parameters, DialogPresets.Locked(MaxWidth.Large));
+        var result = await dialog.Result;
+        if (result is null || result.Canceled || result.Data is not BatchRecord created) return;
+        await RefreshBatches();
+    }
+
+    private async Task OpenEditBatchDialog(BatchRecord batch)
+    {
+        // Re-fetch the hydrated batch (items + access) — the list view
+        // only loads header rows for cost. The editor needs the full
+        // shape to render its items + access sections.
+        BatchRecord? full;
+        try { full = await BatchSvc.GetByIdAsync(batch.Id); }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load batch {Id} for edit.", batch.Id);
+            Snackbar.Add($"Couldn't load batch: {ex.Message}", Severity.Error);
+            return;
+        }
+        if (full is null)
+        {
+            Snackbar.Add("Batch not found — it may have been deleted.", Severity.Warning);
+            await RefreshBatches();
+            return;
+        }
+        var parameters = new DialogParameters<BatchEditDialog>
+        {
+            { x => x.ExistingBatch, full },
+            { x => x.CurrentUserEmail, _userEmail },
+            { x => x.CurrentUserId, _userId },
+            { x => x.HasAnyAdminAccess, _hasAnyAdminAccess }
+        };
+        var dialog = await DialogService.ShowAsync<BatchEditDialog>(
+            "Edit Batch", parameters, DialogPresets.Locked(MaxWidth.Large));
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        await RefreshBatches();
+    }
+
+    private async Task ConfirmDeleteBatch(BatchRecord batch)
+    {
+        var ok = await DialogService.ShowMessageBoxAsync(
+            "Delete Batch",
+            $"Are you sure you want to delete \"{batch.Name}\"? Users granted access will lose it.",
+            yesText: "Delete", cancelText: "Cancel");
+        if (ok != true) return;
+        try
+        {
+            await BatchSvc.DeleteAsync(batch.Id);
+            _myBatches.Remove(batch);
+            Snackbar.Add($"Batch \"{batch.Name}\" deleted.", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to delete batch {Id}.", batch.Id);
+            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RunBatch(BatchRecord batch)
+    {
+        if (_runningBatchId is not null) return; // serialise — one batch at a time
+        _runningBatchId = batch.Id;
+        StateHasChanged();
+
+        // Persistent "running" notification (default 2s auto-dismiss is
+        // shorter than most batches finish). Cleared in finally so the
+        // success / failure snackbar isn't competing for the same slot.
+        var notification = Snackbar.Add(
+            $"Running \"{batch.Name}\"… your download will start when ready.",
+            Severity.Info,
+            config =>
+            {
+                config.RequireInteraction = true;
+                config.ShowCloseIcon = false;
+            });
+
+        try
+        {
+            var (bytes, fileName) = await BatchSvc.ExecuteAsync(batch.Id, _userEmail, _hasAnyAdminAccess);
+            // Stream the file to the browser via JS interop. Same pattern
+            // used elsewhere for exports — encode as base64 + invoke the
+            // shared downloadFile helper.
+            var base64 = Convert.ToBase64String(bytes);
+            await JS.InvokeVoidAsync("downloadFile", fileName, base64,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            Snackbar.Add($"Downloaded \"{fileName}\" ({bytes.Length / 1024:N0} KB).", Severity.Success);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Snackbar.Add("You don't have permission to run this batch.", Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Batch run failed for {Id}.", batch.Id);
+            Snackbar.Add($"Batch run failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            if (notification is not null)
+                Snackbar.Remove(notification);
+            _runningBatchId = null;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshBatches()
+    {
+        try
+        {
+            _myBatches = _hasAnyAdminAccess
+                ? await BatchSvc.GetAllAsync()
+                : await BatchSvc.GetForUserAsync(_userEmail);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to refresh batches.");
         }
     }
 

@@ -161,10 +161,7 @@
             if (string.IsNullOrWhiteSpace(_searchText)) return domains;
             return domains.Where(d => d.Fields.Any(f =>
                 (!TemplateLocked || SelectedFieldIds.Contains(f.Id, StringComparer.OrdinalIgnoreCase)) &&
-                (f.Label.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
-                 f.Id.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
-                 (!string.IsNullOrEmpty(f.Description) &&
-                  f.Description.Contains(_searchText, StringComparison.OrdinalIgnoreCase)))));
+                MatchesSearch(f, _searchText)));
         }
     }
 
@@ -176,13 +173,31 @@
             fields = fields.Where(f => SelectedFieldIds.Contains(f.Id, StringComparer.OrdinalIgnoreCase));
 
         if (!string.IsNullOrWhiteSpace(_searchText))
-            fields = fields.Where(f =>
-                f.Label.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
-                f.Id.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
-                (!string.IsNullOrEmpty(f.Description) &&
-                 f.Description.Contains(_searchText, StringComparison.OrdinalIgnoreCase)));
+            fields = fields.Where(f => MatchesSearch(f, _searchText));
 
         return fields.OrderBy(f => f.Label, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Single matcher used by both the domain-level and field-level
+    // filters so the two stay in sync. Matches against Label / Id /
+    // Description (the historical search axes) plus any admin-authored
+    // SearchAliases tokens — the alias list is comma-separated, each
+    // token is matched as a substring of the search query (so typing
+    // "fico" finds a field whose aliases include "fico, credit").
+    private static bool MatchesSearch(FieldDefinition f, string query)
+    {
+        if (f.Label.Contains(query, StringComparison.OrdinalIgnoreCase)) return true;
+        if (f.Id.Contains(query, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!string.IsNullOrEmpty(f.Description)
+            && f.Description.Contains(query, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!string.IsNullOrWhiteSpace(f.SearchAliases))
+        {
+            foreach (var alias in f.SearchAliases.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (alias.Contains(query, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
     }
 
     private static string GetFieldStyle(bool isSelected) =>

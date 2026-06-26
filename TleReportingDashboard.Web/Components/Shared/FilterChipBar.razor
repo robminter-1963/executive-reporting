@@ -1,0 +1,240 @@
+@using MudBlazor
+@using TleReportingDashboard.Web.Models
+
+@*  Interactive filter chip strip rendered above the Report Viewer's
+    result grid. Replaces the read-only chip row that ReportViewer
+    previously built into _appliedFilters: each chip now has an X to
+    remove, and relative-date chips expose a built-in dropdown so a
+    user can switch "Last Month" → "This Quarter" without opening the
+    Advanced Filter dialog.
+
+    Scope (v1):
+      * Renders top-level Clauses from the root FilterGroup.
+      * X removes the clause and bubbles the new tree via FiltersChanged.
+      * For Op = Relative, a preset dropdown is the primary affordance.
+      * Nested sub-groups render as a single "+N grouped" chip — clicking
+        opens the Advanced Filter dialog (signaled via OpenAdvanced).
+      * For non-relative clauses, the chip is read-only display + X. Full
+        click-to-edit popovers per field type are a v2 follow-up — users
+        can still tweak values through the Advanced Filter dialog.
+*@
+
+@if (HasAnyChip)
+{
+    <MudStack Row Spacing="1" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+        @if (Filters is not null)
+        {
+            @foreach (var (item, idx) in Filters.Items.Select((it, i) => (it, i)))
+            {
+                @if (item.Clause is not null)
+                {
+                    var clause = item.Clause;
+                    var label = ResolveLabel(clause.FieldId);
+                    var (opLabel, valueLabel) = FormatClause(clause);
+                    var isRelative = string.Equals(clause.Op, FilterOperators.Relative, StringComparison.OrdinalIgnoreCase);
+
+                    @if (isRelative)
+                    {
+                        @* Relative-date chip — dropdown anchor is the
+                           chip itself. Clicking it opens the preset
+                           list; X removes the clause entirely. *@
+                        <MudMenu AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Dense
+                                 ActivationEvent="@MouseEvent.LeftClick">
+                            <ActivatorContent>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
+                                         Icon="@Icons.Material.Outlined.Schedule"
+                                         OnClose="@(() => RemoveClauseAt(idx))"
+                                         CloseIcon="@Icons.Material.Outlined.Close"
+                                         title="Switch date preset">
+                                    @label @opLabel <strong>@valueLabel</strong>
+                                </MudChip>
+                            </ActivatorContent>
+                            <ChildContent>
+                                @foreach (var preset in DatePresetOptions)
+                                {
+                                    var presetKey = preset.Key;
+                                    var presetLabel = preset.Label;
+                                    var isActive = clause.Values.Count > 0
+                                        && string.Equals(clause.Values[0], presetKey, StringComparison.OrdinalIgnoreCase);
+                                    <MudMenuItem OnClick="@(() => SwitchPreset(idx, presetKey))"
+                                                 Icon="@(isActive ? Icons.Material.Outlined.Check : null)">
+                                        @presetLabel
+                                    </MudMenuItem>
+                                }
+                            </ChildContent>
+                        </MudMenu>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info"
+                                 OnClose="@(() => RemoveClauseAt(idx))"
+                                 CloseIcon="@Icons.Material.Outlined.Close"
+                                 OnClick="@(() => OpenAdvanced.InvokeAsync())"
+                                 title="Click to edit in Advanced Filter">
+                            @label @opLabel <strong>@valueLabel</strong>
+                        </MudChip>
+                    }
+                }
+                else if (item.Group is not null)
+                {
+                    @* Nested sub-group — a single placeholder chip so
+                       users see the filter has more structure than the
+                       flat strip can express. Click opens the Advanced
+                       Filter dialog where the full tree is editable. *@
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                             Icon="@Icons.Material.Outlined.AccountTree"
+                             OnClick="@(() => OpenAdvanced.InvokeAsync())"
+                             title="Grouped filter — open Advanced Filter to edit">
+                        @CountClauses(item.Group) grouped
+                    </MudChip>
+                }
+            }
+        }
+        @if (LegacyChips is not null)
+        {
+            @foreach (var chip in LegacyChips)
+            {
+                @* Legacy header-filter chips (simple key/value, no
+                   operator metadata). Read-only — these reflect the
+                   built-in filters baked into the report layout and
+                   aren't user-removable from the Viewer. *@
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                    @chip
+                </MudChip>
+            }
+        }
+    </MudStack>
+}
+
+@code {
+    // Editable advanced-filter tree. Two-way bound so X-to-remove and
+    // preset-switching can mutate the tree and bubble the new state
+    // back to the page via FiltersChanged.
+    [Parameter] public FilterGroup? Filters { get; set; }
+    [Parameter] public EventCallback<FilterGroup?> FiltersChanged { get; set; }
+
+    // FieldId → Label lookup so chips render human-readable labels
+    // instead of raw schema ids. Falls back to the raw id when missing.
+    [Parameter] public Dictionary<string, string>? FieldLabelsById { get; set; }
+
+    // Legacy header-filter strings (the prior _appliedFilters list).
+    // Rendered as read-only chips at the end of the strip — kept for
+    // back-compat with reports that still use the simple filter dict.
+    [Parameter] public IReadOnlyList<string>? LegacyChips { get; set; }
+
+    // Bubbled when the user clicks a non-removable chip (sub-group) or
+    // a non-relative clause's body — page handler opens the existing
+    // Advanced Filter dialog so the user can do the deeper edit there.
+    [Parameter] public EventCallback OpenAdvanced { get; set; }
+
+    private bool HasAnyChip =>
+        (Filters?.Items?.Any() ?? false)
+        || (LegacyChips?.Any() ?? false);
+
+    private string ResolveLabel(string fieldId)
+    {
+        if (FieldLabelsById is not null
+            && FieldLabelsById.TryGetValue(fieldId, out var label)
+            && !string.IsNullOrWhiteSpace(label))
+        {
+            return label;
+        }
+        return fieldId;
+    }
+
+    // Renders the operator + value pair as a "is X" / "between X and Y"
+    // / "= X" string. Mirrors how the Advanced Filter dialog labels its
+    // own rows; the chip stays compact by dropping long operator names
+    // where the meaning is obvious from context (e.g., "=" for equals).
+    private (string OpLabel, string ValueLabel) FormatClause(FilterClause c)
+    {
+        var op = c.Op?.ToLowerInvariant() ?? string.Empty;
+        var vals = c.Values ?? new List<string>();
+        var v0 = vals.Count > 0 ? vals[0] : string.Empty;
+        var v1 = vals.Count > 1 ? vals[1] : string.Empty;
+
+        return op switch
+        {
+            FilterOperators.Equals       => ("=",  v0),
+            FilterOperators.NotEquals    => ("≠",  v0),
+            FilterOperators.Lt           => ("<",  v0),
+            FilterOperators.Lte          => ("≤",  v0),
+            FilterOperators.Gt           => (">",  v0),
+            FilterOperators.Gte          => ("≥",  v0),
+            FilterOperators.Before       => ("before",      v0),
+            FilterOperators.After        => ("after",       v0),
+            FilterOperators.OnOrBefore   => ("on or before", v0),
+            FilterOperators.OnOrAfter    => ("on or after",  v0),
+            FilterOperators.Between      => ("between", string.IsNullOrEmpty(v1) ? v0 : $"{v0} – {v1}"),
+            FilterOperators.Relative     => ("is", PresetDisplay(v0)),
+            FilterOperators.Contains     => ("contains",    v0),
+            FilterOperators.StartsWith   => ("starts with", v0),
+            FilterOperators.EndsWith     => ("ends with",   v0),
+            FilterOperators.InList       => ("in",     vals.Count > 3 ? $"{vals.Count} values" : string.Join(", ", vals)),
+            FilterOperators.NotInList    => ("not in", vals.Count > 3 ? $"{vals.Count} values" : string.Join(", ", vals)),
+            FilterOperators.IsNull       => ("is", "blank"),
+            FilterOperators.IsNotNull    => ("is", "not blank"),
+            FilterOperators.IsTrue       => ("is", "yes"),
+            FilterOperators.IsFalse      => ("is", "no"),
+            _                            => (c.Op ?? "", v0)
+        };
+    }
+
+    private static string PresetDisplay(string presetKey) =>
+        DatePresetOptions.FirstOrDefault(p =>
+            string.Equals(p.Key, presetKey, StringComparison.OrdinalIgnoreCase)).Label
+        ?? presetKey;
+
+    // Plain code recursion — sub-groups can nest arbitrarily but for
+    // the chip-bar label we just want a count of leaf clauses so the
+    // user sees "5 grouped" rather than "1 grouped" for a deep tree.
+    private static int CountClauses(FilterGroup group)
+    {
+        var count = 0;
+        foreach (var it in group.Items)
+        {
+            if (it.Clause is not null) count++;
+            else if (it.Group is not null) count += CountClauses(it.Group);
+        }
+        return count;
+    }
+
+    private async Task RemoveClauseAt(int index)
+    {
+        if (Filters is null) return;
+        if (index < 0 || index >= Filters.Items.Count) return;
+        Filters.Items.RemoveAt(index);
+        await FiltersChanged.InvokeAsync(Filters);
+    }
+
+    private async Task SwitchPreset(int clauseIndex, string presetKey)
+    {
+        if (Filters is null) return;
+        if (clauseIndex < 0 || clauseIndex >= Filters.Items.Count) return;
+        var item = Filters.Items[clauseIndex];
+        if (item.Clause is null) return;
+        item.Clause.Values = new List<string> { presetKey };
+        await FiltersChanged.InvokeAsync(Filters);
+    }
+
+    // Preset list shown in the relative-date chip's dropdown menu.
+    // Order matches what a human would scan: today / yesterday →
+    // weeks → months → quarters → year. Keep in sync with
+    // RelativeDatePresets in FilterClause.cs.
+    private static readonly (string Key, string Label)[] DatePresetOptions =
+    {
+        (RelativeDatePresets.Today,       "Today"),
+        (RelativeDatePresets.Yesterday,   "Yesterday"),
+        (RelativeDatePresets.ThisWeek,    "This Week"),
+        (RelativeDatePresets.LastWeek,    "Last Week"),
+        (RelativeDatePresets.ThisMonth,   "This Month"),
+        (RelativeDatePresets.LastMonth,   "Last Month"),
+        (RelativeDatePresets.ThisQuarter, "This Quarter"),
+        (RelativeDatePresets.LastQuarter, "Last Quarter"),
+        (RelativeDatePresets.Ytd,         "Year-to-date"),
+        (RelativeDatePresets.LastYear,    "Last Year"),
+        (RelativeDatePresets.Last7Days,   "Last 7 Days"),
+        (RelativeDatePresets.Last30Days,  "Last 30 Days"),
+        (RelativeDatePresets.Last90Days,  "Last 90 Days"),
+    };
+}

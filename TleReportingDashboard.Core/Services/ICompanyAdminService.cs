@@ -28,7 +28,46 @@ public interface ICompanyAdminService
     // in the list. Any rows not in the list keep their current order (they
     // sort after the provided ones by name).
     Task UpdateDisplayOrderAsync(IReadOnlyList<Guid> orderedIds, CancellationToken ct = default);
+
+    // Pre-flight count of dependent rows that would be destroyed by a
+    // DeleteAsync call. Drives the confirmation dialog so admins see the
+    // blast radius before clicking through. Counts are cheap (COUNT(*)
+    // on indexed columns); the actual cascade re-walks the tables.
+    Task<CompanyDeleteImpact> GetDeleteImpactAsync(Guid id, CancellationToken ct = default);
+
+    // Hard-delete a company and everything that belongs to it. Walks the
+    // tables that have NO ACTION FKs to RPT_companies (saved_reports,
+    // shares, schedules, grid_templates, master_dashboard_tabs/tiles,
+    // schema_config) in dependency order inside a transaction, then
+    // deletes the company row — the remaining children (user_companies,
+    // company_connections + their cascades, admins, kpis, library_sections,
+    // personal_tiles, schema_config_history, user_preferences) drop via FK
+    // CASCADE. Audit-logged with the impact summary captured pre-delete.
+    // Irreversible — callers MUST confirm with the user first.
+    Task DeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default);
 }
+
+// Pre-delete blast-radius summary. Each count is rows that would be
+// destroyed (or cascaded) if DeleteAsync were called for the company.
+// Zero counts are kept (renders cleanly as "0 reports" in the confirm
+// dialog and surfaces what the admin can verify in the audit log).
+public sealed record CompanyDeleteImpact(
+    Guid CompanyId,
+    string CompanyName,
+    int Connections,
+    int SavedReports,
+    int ReportShares,
+    int ReportSchedules,
+    int GridTemplates,
+    int DashboardTabs,
+    int DashboardTiles,
+    int LibrarySections,
+    int Kpis,
+    int UserGrants,
+    int Admins,
+    int PersonalPins,
+    int SchemaConfigs,
+    int SchemaConfigHistoryRows);
 
 // Full-shape row for the admin UI. Distinct from CompanySummary (which
 // hides inactive rows). Logo bytes come along on read so the admin tab

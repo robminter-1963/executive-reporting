@@ -163,6 +163,15 @@
                                            Color="Color.Default" Size="Size.Small"
                                            OnClick="@(() => ToggleHidden(context))" />
                         </MudTooltip>
+                        @* Hard delete — destroys the company and every
+                           row that belongs to it (reports, schedules,
+                           tiles, schema, etc.). Confirmation dialog
+                           previews the impact counts first. *@
+                        <MudTooltip Text="Delete company (irreversible)">
+                            <MudIconButton Icon="@Icons.Material.Outlined.DeleteForever"
+                                           Color="Color.Error" Size="Size.Small"
+                                           OnClick="@(() => ConfirmDelete(context))" />
+                        </MudTooltip>
                     </MudTd>
                 }
             </RowTemplate>
@@ -429,6 +438,67 @@
         if (await Snackbar.RunAsync(Logger, $"{verb} company",
                 () => CompanyAdminSvc.SetActiveAsync(c.Id, target)))
         {
+            await ReloadAsync();
+        }
+    }
+
+    // Confirm + hard-delete. Pre-flight reads the impact counts so the
+    // confirmation dialog can preview the blast radius. Single-tx
+    // cascade runs server-side; we just reload after.
+    private async Task ConfirmDelete(CompanyRecord c)
+    {
+        CompanyDeleteImpact impact;
+        try
+        {
+            impact = await CompanyAdminSvc.GetDeleteImpactAsync(c.Id);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to compute delete-impact for company {Id}.", c.Id);
+            Snackbar.Add($"Couldn't load delete impact: {ex.Message}", Severity.Error);
+            return;
+        }
+
+        // Format the summary as HTML so the bullet list and bold counts
+        // render cleanly inside MudMessageBox.MarkupMessage. Counts of
+        // zero are omitted from the bullet list so the dialog stays
+        // focused on what's actually getting destroyed.
+        var rows = new List<string>();
+        void Row(string label, int count) { if (count > 0) rows.Add($"<li><strong>{count:N0}</strong> {label}</li>"); }
+        Row("connection(s)",          impact.Connections);
+        Row("saved report(s)",        impact.SavedReports);
+        Row("report share(s)",        impact.ReportShares);
+        Row("report schedule(s)",     impact.ReportSchedules);
+        Row("grid template(s)",       impact.GridTemplates);
+        Row("dashboard tab(s)",       impact.DashboardTabs);
+        Row("dashboard tile(s)",      impact.DashboardTiles);
+        Row("library section(s)",    impact.LibrarySections);
+        Row("KPI card(s)",            impact.Kpis);
+        Row("personal pin(s)",        impact.PersonalPins);
+        Row("schema config(s)",       impact.SchemaConfigs);
+        Row("schema history row(s)",  impact.SchemaConfigHistoryRows);
+        Row("per-user company grant(s)", impact.UserGrants);
+        Row("admin grant(s)",         impact.Admins);
+        var body = rows.Count > 0
+            ? $"<p>This will permanently delete <strong>{System.Net.WebUtility.HtmlEncode(impact.CompanyName)}</strong> and:</p><ul>{string.Join("", rows)}</ul><p>This action <strong>cannot be undone</strong>.</p>"
+            : $"<p>This will permanently delete <strong>{System.Net.WebUtility.HtmlEncode(impact.CompanyName)}</strong>.</p><p>No dependent data — quick delete.</p><p>This action <strong>cannot be undone</strong>.</p>";
+
+        var ok = await DialogService.ShowMessageBoxAsync(new MessageBoxOptions
+        {
+            Title = "Delete company",
+            MarkupMessage = new MarkupString(body),
+            YesText = "Delete",
+            CancelText = "Cancel"
+        });
+        if (ok != true) return;
+
+        // null deletedBy → audit logger falls back to HttpContext-resolved
+        // actor, matching the convention every other mutation in this
+        // service uses.
+        if (await Snackbar.RunAsync(Logger, "deleting company",
+                () => CompanyAdminSvc.DeleteAsync(c.Id, deletedBy: null)))
+        {
+            Snackbar.Add($"'{c.Name}' deleted.", Severity.Success);
             await ReloadAsync();
         }
     }

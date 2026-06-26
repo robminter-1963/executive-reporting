@@ -57,7 +57,9 @@
                                 var align = GetCellAlign(col.DataType);
                                 <td class="mud-table-cell"
                                     style="@($"width: {w}px; min-width: {minWidth}px; max-width: {w}px; {align}")"
-                                    title="@FormatValue(row, col)">
+                                    title="@FormatValue(row, col)"
+                                    @oncontextmenu="@(e => ShowCellContextMenu(e, col, row))"
+                                    @oncontextmenu:preventDefault="EnableContextMenu">
                                     <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {w}px;")">@FormatValue(row, col)</span>
                                 </td>
                             }
@@ -137,7 +139,9 @@ else
                                         CellStyle="@($"width: {w}px; min-width: {minWidth}px; max-width: {w}px; overflow: hidden; text-overflow: ellipsis; {align}")">
                             <CellTemplate>
                                 <span style="@($"display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: {w}px;")"
-                                      title="@FormatValue(context.Item, col)">@FormatValue(context.Item, col)</span>
+                                      title="@FormatValue(context.Item, col)"
+                                      @oncontextmenu="@(e => ShowCellContextMenu(e, c, context.Item))"
+                                      @oncontextmenu:preventDefault="EnableContextMenu">@FormatValue(context.Item, col)</span>
                             </CellTemplate>
                         </TemplateColumn>
                     }
@@ -189,6 +193,42 @@ else
 }
         </div>
     </MudStack>
+
+    @* Cell context menu — single instance shared by every data cell.
+       PositionAtCursor anchors the menu at the click coordinates;
+       OpenMenuAsync(MouseEventArgs) is called from ShowCellContextMenu
+       after the cached state is staged. ActivatorContent is an
+       invisible placeholder because we don't want a separate button
+       to open this — only the right-click handler. *@
+    @if (EnableContextMenu)
+    {
+        <MudMenu @ref="_cellContextMenu" PositionAtCursor="true" Dense>
+            <ActivatorContent>
+                <span style="display: none;"></span>
+            </ActivatorContent>
+            <ChildContent>
+                @if (_ctxFieldId is not null)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="px-3 pt-1" Style="display: block;">
+                        @_ctxColumnLabel
+                    </MudText>
+                }
+                <MudMenuItem Icon="@Icons.Material.Outlined.FilterAlt"
+                             OnClick="@(() => InvokeCellAction("filter"))">
+                    Filter to <strong>@TrimForMenu(_ctxValueDisplay)</strong>
+                </MudMenuItem>
+                <MudMenuItem Icon="@Icons.Material.Outlined.Block"
+                             OnClick="@(() => InvokeCellAction("exclude"))">
+                    Exclude <strong>@TrimForMenu(_ctxValueDisplay)</strong>
+                </MudMenuItem>
+                <MudDivider />
+                <MudMenuItem Icon="@Icons.Material.Outlined.ContentCopy"
+                             OnClick="@(() => InvokeCellAction("copy"))">
+                    Copy value
+                </MudMenuItem>
+            </ChildContent>
+        </MudMenu>
+    }
 
     <style>
         /* Ensure the grid never overflows its parent — the inner table-container
@@ -418,6 +458,28 @@ else
     // was saved with the report.
     [Parameter] public bool DisableUserSort { get; set; }
 
+    // When true, right-clicking a data cell opens a context menu with
+    // "Filter to this value" / "Exclude this value" / "Copy value"
+    // entries. Off by default so the menu doesn't surprise users on
+    // surfaces (DetailViewer, dashboard tiles) where the parent
+    // hasn't wired the OnCellAction callback. Calc columns + the
+    // filler column are intentionally excluded — filtering on a
+    // computed value doesn't round-trip cleanly to a WHERE clause.
+    [Parameter] public bool EnableContextMenu { get; set; }
+
+    // Fired when the user picks a context-menu option on a data cell.
+    // Parent decides what to do: ReportViewer translates "filter" /
+    // "exclude" into a new FilterClause and re-runs; "copy" writes the
+    // raw value to the clipboard.
+    [Parameter] public EventCallback<CellAction> OnCellAction { get; set; }
+
+    // Right-click context — opaque to the parent except for the kind
+    // string ("filter" | "exclude" | "copy"). FieldId is the schema
+    // id (suitable for a FilterClause); Label is the admin-authored
+    // header (for snackbar messages); Value is the raw cell value
+    // (the parent decides how to stringify it for filter binding).
+    public sealed record CellAction(string Kind, string FieldId, string Label, object? Value);
+
     // Resolves the visible header label for a column. Override (from a
     // grid template's CustomColumnLabels) wins; default is the column's
     // own Label. Empty / whitespace overrides are treated as "no override"
@@ -437,6 +499,52 @@ else
     private int _pageSize = 100;
     private int _readOnlyPage = 1;
     private bool _initialPageSizeApplied;
+
+    // ── Context-menu state ──
+    // Captured when the user right-clicks a data cell; consumed by the
+    // shared MudMenu rendered once at the end of the markup so the
+    // three menu items can resolve the active cell without re-binding
+    // a lambda per row (which would allocate per re-render).
+    private MudMenu? _cellContextMenu;
+    private string? _ctxFieldId;
+    private string _ctxColumnLabel = string.Empty;
+    private object? _ctxValue;
+    private string _ctxValueDisplay = string.Empty;
+
+    // Right-click handler — caches the cell's id/label/value and pops
+    // the context menu at the cursor. The menu picks its action off
+    // the cached state; the lambda hands the raw row + col so the
+    // formatter can produce a readable preview for the "Filter to ___"
+    // menu label without the parent having to compute it.
+    private async Task ShowCellContextMenu(MouseEventArgs e, ColumnMeta col, Dictionary<string, object?> row)
+    {
+        if (!EnableContextMenu) return;
+        _ctxFieldId = col.FieldId;
+        _ctxColumnLabel = ResolveColumnLabel(col.FieldId, col.Label);
+        _ctxValue = row.TryGetValue(col.FieldId, out var v) ? v : null;
+        _ctxValueDisplay = FormatValue(row, col);
+        StateHasChanged();
+        if (_cellContextMenu is not null)
+            await _cellContextMenu.OpenMenuAsync(e);
+    }
+
+    private async Task InvokeCellAction(string kind)
+    {
+        if (_ctxFieldId is null) return;
+        await OnCellAction.InvokeAsync(
+            new CellAction(kind, _ctxFieldId, _ctxColumnLabel, _ctxValue));
+    }
+
+    // Clamps the cell-value preview shown in the menu labels. Long
+    // values (e.g., a 200-char description) would blow out the menu
+    // width; ~32 chars keeps the menu compact while still letting the
+    // user verify which value they're about to filter on.
+    private static string TrimForMenu(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "(blank)";
+        const int max = 32;
+        return s.Length <= max ? s : s[..max] + "…";
+    }
     private MudDataGrid<Dictionary<string, object?>>? _mudGrid;
     private bool _initialSortApplied;
     private bool _widthsLoaded;

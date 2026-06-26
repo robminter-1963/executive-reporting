@@ -335,6 +335,30 @@ public class MockDataService : ISchemaService, IQueryService, IReportService, IS
         }
     }
 
+    public Task<List<SavedReport>> GetTemplatesAsync()
+    {
+        lock (_reportLock)
+        {
+            var templates = _savedReports
+                .Where(r => r.IsTemplate)
+                .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return Task.FromResult(templates);
+        }
+    }
+
+    public Task SetIsTemplateAsync(Guid id, bool isTemplate)
+    {
+        lock (_reportLock)
+        {
+            var report = _savedReports.FirstOrDefault(r => r.Id == id)
+                ?? throw new InvalidOperationException("Report not found.");
+            report.IsTemplate = isTemplate;
+            report.UpdatedAt = DateTime.UtcNow;
+            return Task.CompletedTask;
+        }
+    }
+
     public Task<List<ReportSchedule>> GetAllSchedulesAsync() =>
         Task.FromResult(new List<ReportSchedule>());
 

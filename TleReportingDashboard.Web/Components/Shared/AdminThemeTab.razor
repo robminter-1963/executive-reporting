@@ -59,6 +59,199 @@
     }
     else
     {
+        @* Live preview — renders mock chrome for every themed surface
+           using the in-memory _theme values, so swatch / font edits
+           reflect instantly before the admin commits Save. Borders use
+           the actual border-default token so even the framing changes
+           with the palette. *@
+        <MudPaper Elevation="0" Class="theme-preview-card"
+                  Style="@($"border: 1px solid {_theme.BorderDefault}; border-radius: 4px; padding: 12px;")">
+            <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="margin-bottom: 8px;">
+                <MudText Typo="Typo.subtitle2">Live preview</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Updates as you edit. Save to make these styles real.
+                </MudText>
+            </MudStack>
+
+            @* Outer page surface — wraps the chrome / dashboard / detail
+               mock-ups so the SurfacePage + TextPrimary tokens read in
+               context, not on a white card. BorderSubtle separates the
+               nested mock surfaces from this outer page band. *@
+            <div class="theme-preview-page"
+                 style="@($"background: {_theme.SurfacePage}; color: {_theme.TextPrimary}; border: 1px solid {_theme.BorderSubtle};")">
+
+                @* Top app bar — surface-toolbar bg + text-on-toolbar.
+                   Mirrors MainLayout's header chrome (logo on the left,
+                   nav actions on the right). *@
+                <div class="theme-preview-toolbar"
+                     style="@($"background: {_theme.SurfaceToolbar}; color: {_theme.TextOnToolbar}; border-bottom: 1px solid {_theme.BorderDefault};")">
+                    <div class="theme-preview-toolbar-left">
+                        <span class="theme-preview-logo"
+                              style="@($"background: {_theme.AccentPrimary};")">TLE</span>
+                        <span style="font-weight: 600;">Executive Reporting</span>
+                    </div>
+                    <div class="theme-preview-toolbar-right">
+                        <span class="theme-preview-toolbar-link">Dashboards</span>
+                        <span class="theme-preview-toolbar-link">Library</span>
+                        <span class="theme-preview-toolbar-link">Admin</span>
+                    </div>
+                </div>
+
+                @* Tab strip — surface-strip bg + text-secondary text.
+                   Mirrors the section-header / sub-tab strips used on
+                   the Admin and Report Editor pages. *@
+                <div class="theme-preview-strip"
+                     style="@($"background: {_theme.SurfaceStrip}; color: {_theme.TextSecondary}; border-bottom: 1px solid {_theme.BorderDefault};")">
+                    <span class="theme-preview-strip-tab theme-preview-strip-tab--active"
+                          style="@($"color: {_theme.AccentPrimary}; border-bottom-color: {_theme.AccentPrimary};")">Loans</span>
+                    <span class="theme-preview-strip-tab">Payments</span>
+                    <span class="theme-preview-strip-tab">Activity</span>
+                </div>
+
+                @* Two-column body — dashboard tile on the left, detail
+                   viewer on the right. Falls back to stacked on narrow
+                   widths via the .theme-preview-body grid rule below. *@
+                <div class="theme-preview-body">
+
+                    @* Master Dashboard tile mock — surface-card frame
+                       with header band, data grid (header / striped
+                       rows / hover / totals footer), and tile-chrome
+                       footer band. Text formatting flags drive the
+                       weight / style / decoration / family / size on
+                       each band. *@
+                    <div class="theme-preview-tile"
+                         style="@($"background: {_theme.SurfaceCard}; border: 1px solid {_theme.BorderDefault};")">
+                        <div class="theme-preview-tile-header"
+                             style="@BandStyle(_theme.DashboardHeaderBg, _theme.DashboardHeaderText,
+                                                _theme.DashboardHeaderBold, _theme.DashboardHeaderItalic, _theme.DashboardHeaderUnderline,
+                                                _theme.DashboardHeaderFontFamily, _theme.DashboardHeaderFontSize)">
+                            <span>Loans by Status</span>
+                            <span class="theme-preview-tile-header-meta"
+                                  style="@($"color: {_theme.TextMuted};")">⋮</span>
+                        </div>
+                        <table class="theme-preview-grid">
+                            <thead>
+                                <tr>
+                                    <th style="@BandStyle(_theme.DashboardGridHeaderBg, _theme.DashboardGridHeaderText,
+                                                          _theme.DashboardGridHeaderBold, _theme.DashboardGridHeaderItalic, _theme.DashboardGridHeaderUnderline,
+                                                          _theme.DashboardGridHeaderFontFamily, _theme.DashboardGridHeaderFontSize)">Status</th>
+                                    <th style="@BandStyle(_theme.DashboardGridHeaderBg, _theme.DashboardGridHeaderText,
+                                                          _theme.DashboardGridHeaderBold, _theme.DashboardGridHeaderItalic, _theme.DashboardGridHeaderUnderline,
+                                                          _theme.DashboardGridHeaderFontFamily, _theme.DashboardGridHeaderFontSize)">Count</th>
+                                    <th style="@BandStyle(_theme.DashboardGridHeaderBg, _theme.DashboardGridHeaderText,
+                                                          _theme.DashboardGridHeaderBold, _theme.DashboardGridHeaderItalic, _theme.DashboardGridHeaderUnderline,
+                                                          _theme.DashboardGridHeaderFontFamily, _theme.DashboardGridHeaderFontSize)">Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Funded</td><td>42</td><td>$1,234,567</td></tr>
+                                <tr style="@($"background: {_theme.TableRowStriped};")"><td>In review</td><td>17</td><td>$543,210</td></tr>
+                                <tr style="@($"background: {_theme.TableRowHover};")"><td>Pending</td><td>9</td><td>$210,000</td></tr>
+                            </tbody>
+                            <tfoot>
+                                <tr>
+                                    <td style="@BandStyle(_theme.DashboardGridFooterBg, _theme.DashboardGridFooterText,
+                                                          _theme.DashboardGridFooterBold, _theme.DashboardGridFooterItalic, _theme.DashboardGridFooterUnderline,
+                                                          _theme.DashboardGridFooterFontFamily, _theme.DashboardGridFooterFontSize)">Totals</td>
+                                    <td style="@BandStyle(_theme.DashboardGridFooterBg, _theme.DashboardGridFooterText,
+                                                          _theme.DashboardGridFooterBold, _theme.DashboardGridFooterItalic, _theme.DashboardGridFooterUnderline,
+                                                          _theme.DashboardGridFooterFontFamily, _theme.DashboardGridFooterFontSize)">68</td>
+                                    <td style="@BandStyle(_theme.DashboardGridFooterBg, _theme.DashboardGridFooterText,
+                                                          _theme.DashboardGridFooterBold, _theme.DashboardGridFooterItalic, _theme.DashboardGridFooterUnderline,
+                                                          _theme.DashboardGridFooterFontFamily, _theme.DashboardGridFooterFontSize)">$1,987,777</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                        <div class="theme-preview-tile-footer"
+                             style="@BandStyle(_theme.DashboardFooterBg, _theme.DashboardFooterText,
+                                                _theme.DashboardFooterBold, _theme.DashboardFooterItalic, _theme.DashboardFooterUnderline,
+                                                _theme.DashboardFooterFontFamily, _theme.DashboardFooterFontSize)">
+                            <span>3 rows</span>
+                            <span>Refreshed 2 min ago</span>
+                        </div>
+                    </div>
+
+                    @* Detail view mock — grouped data grid with header
+                       (table-header-bg, the generic grid header), then
+                       a group header band, detail rows, group footer
+                       (subtotal), and the sticky grand-total band. *@
+                    <div class="theme-preview-tile"
+                         style="@($"background: {_theme.SurfaceCard}; border: 1px solid {_theme.BorderDefault};")">
+                        <div class="theme-preview-tile-header"
+                             style="@BandStyle(_theme.DashboardHeaderBg, _theme.DashboardHeaderText,
+                                                _theme.DashboardHeaderBold, _theme.DashboardHeaderItalic, _theme.DashboardHeaderUnderline,
+                                                _theme.DashboardHeaderFontFamily, _theme.DashboardHeaderFontSize)">
+                            <span>Detail view — Loan Activity</span>
+                        </div>
+                        <table class="theme-preview-grid">
+                            <thead>
+                                <tr>
+                                    <th style="@($"background: {_theme.TableHeaderBg}; color: {_theme.TextPrimary};")">Borrower</th>
+                                    <th style="@($"background: {_theme.TableHeaderBg}; color: {_theme.TextPrimary};")">Count</th>
+                                    <th style="@($"background: {_theme.TableHeaderBg}; color: {_theme.TextPrimary};")">Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td colspan="3"
+                                        style="@BandStyle(_theme.DetailGroupHeaderBg, _theme.DetailGroupHeaderText,
+                                                          _theme.DetailGroupHeaderBold, _theme.DetailGroupHeaderItalic, _theme.DetailGroupHeaderUnderline,
+                                                          _theme.DetailGroupHeaderFontFamily, _theme.DetailGroupHeaderFontSize)">
+                                        Status = Funded
+                                    </td>
+                                </tr>
+                                <tr><td>Acme Co.</td><td>12</td><td>$345,000</td></tr>
+                                <tr style="@($"background: {_theme.TableRowStriped};")"><td>Beta LLC</td><td>8</td><td>$210,000</td></tr>
+                                <tr>
+                                    <td style="@BandStyle(_theme.DetailGroupFooterBg, _theme.DetailGroupFooterText,
+                                                          _theme.DetailGroupFooterBold, _theme.DetailGroupFooterItalic, _theme.DetailGroupFooterUnderline,
+                                                          _theme.DetailGroupFooterFontFamily, _theme.DetailGroupFooterFontSize)">Subtotal</td>
+                                    <td style="@BandStyle(_theme.DetailGroupFooterBg, _theme.DetailGroupFooterText,
+                                                          _theme.DetailGroupFooterBold, _theme.DetailGroupFooterItalic, _theme.DetailGroupFooterUnderline,
+                                                          _theme.DetailGroupFooterFontFamily, _theme.DetailGroupFooterFontSize)">20</td>
+                                    <td style="@BandStyle(_theme.DetailGroupFooterBg, _theme.DetailGroupFooterText,
+                                                          _theme.DetailGroupFooterBold, _theme.DetailGroupFooterItalic, _theme.DetailGroupFooterUnderline,
+                                                          _theme.DetailGroupFooterFontFamily, _theme.DetailGroupFooterFontSize)">$555,000</td>
+                                </tr>
+                            </tbody>
+                            <tfoot>
+                                <tr>
+                                    <td style="@BandStyle(_theme.DetailGrandTotalBg, _theme.DetailGrandTotalText,
+                                                          _theme.DetailGrandTotalBold, _theme.DetailGrandTotalItalic, _theme.DetailGrandTotalUnderline,
+                                                          _theme.DetailGrandTotalFontFamily, _theme.DetailGrandTotalFontSize)">Grand total</td>
+                                    <td style="@BandStyle(_theme.DetailGrandTotalBg, _theme.DetailGrandTotalText,
+                                                          _theme.DetailGrandTotalBold, _theme.DetailGrandTotalItalic, _theme.DetailGrandTotalUnderline,
+                                                          _theme.DetailGrandTotalFontFamily, _theme.DetailGrandTotalFontSize)">68</td>
+                                    <td style="@BandStyle(_theme.DetailGrandTotalBg, _theme.DetailGrandTotalText,
+                                                          _theme.DetailGrandTotalBold, _theme.DetailGrandTotalItalic, _theme.DetailGrandTotalUnderline,
+                                                          _theme.DetailGrandTotalFontFamily, _theme.DetailGrandTotalFontSize)">$1,987,777</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+
+                @* Accents + text samples row — the four accent buttons
+                   render as filled chips so admins see what Primary /
+                   Success / Warning / Error look like against the page
+                   surface, and three text samples show Primary /
+                   Secondary / Muted side-by-side. *@
+                <div class="theme-preview-footer-row">
+                    <div class="theme-preview-accents">
+                        <span class="theme-preview-chip" style="@($"background: {_theme.AccentPrimary}; color: #fff;")">Primary</span>
+                        <span class="theme-preview-chip" style="@($"background: {_theme.AccentSuccess}; color: #fff;")">Success</span>
+                        <span class="theme-preview-chip" style="@($"background: {_theme.AccentWarning}; color: #fff;")">Warning</span>
+                        <span class="theme-preview-chip" style="@($"background: {_theme.AccentError}; color: #fff;")">Error</span>
+                    </div>
+                    <div class="theme-preview-texts">
+                        <span style="@($"color: {_theme.TextPrimary};")">Primary text</span>
+                        <span style="@($"color: {_theme.TextSecondary};")">Secondary text</span>
+                        <span style="@($"color: {_theme.TextMuted};")">Muted text</span>
+                    </div>
+                </div>
+            </div>
+        </MudPaper>
+
         @* Group the 14 tokens visually so the admin understands what
            each one paints. Each group is its own MudPaper card with a
            heading + a flex row of swatches. *@
@@ -277,6 +470,132 @@
         outline: 2px solid #1A73E8;
         outline-offset: 2px;
     }
+
+    /* ── Live preview block ──
+       Mock UI sitting at the top of the editor. Everything inside is
+       a thin DOM analog of the real surfaces — top app bar, strip,
+       dashboard tile chrome + grid, detail group/total bands, accents
+       and text samples. All visual values come from inline styles
+       bound to _theme, so editing a swatch repaints instantly without
+       a save. CSS here is layout-only (sizes, spacing, borders); no
+       color values, no font-family, no font-size — those are the
+       admin's domain. */
+    .theme-preview-card { background: #FFFFFF; }
+    .theme-preview-page {
+        border-radius: 4px;
+        overflow: hidden;
+        margin-top: 4px;
+    }
+    .theme-preview-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 14px;
+        font-size: 0.9rem;
+    }
+    .theme-preview-toolbar-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .theme-preview-logo {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 4px;
+        color: #fff;
+        font-weight: 700;
+        font-size: 0.7rem;
+        letter-spacing: 0.5px;
+    }
+    .theme-preview-toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-size: 0.85rem;
+    }
+    .theme-preview-toolbar-link {
+        cursor: default;
+        opacity: 0.85;
+    }
+    .theme-preview-strip {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 6px 14px;
+        font-size: 0.8rem;
+    }
+    .theme-preview-strip-tab {
+        padding: 4px 2px;
+        border-bottom: 2px solid transparent;
+    }
+    .theme-preview-strip-tab--active { font-weight: 600; }
+    .theme-preview-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 12px;
+        padding: 12px;
+    }
+    @@media (max-width: 900px) {
+        .theme-preview-body { grid-template-columns: minmax(0, 1fr); }
+    }
+    .theme-preview-tile {
+        border-radius: 4px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    .theme-preview-tile-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        font-size: 0.9rem;
+    }
+    .theme-preview-tile-header-meta { font-size: 1.1rem; line-height: 1; }
+    .theme-preview-tile-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 12px;
+        font-size: 0.75rem;
+    }
+    .theme-preview-grid {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.8rem;
+    }
+    .theme-preview-grid th,
+    .theme-preview-grid td {
+        padding: 6px 10px;
+        text-align: left;
+    }
+    .theme-preview-grid td { border-top: 1px solid rgba(0,0,0,0.04); }
+    .theme-preview-footer-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 14px 12px;
+        flex-wrap: wrap;
+    }
+    .theme-preview-accents { display: flex; gap: 8px; flex-wrap: wrap; }
+    .theme-preview-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .theme-preview-texts {
+        display: flex;
+        gap: 16px;
+        font-size: 0.85rem;
+        flex-wrap: wrap;
+    }
 </style>
 
 @code {
@@ -342,6 +661,26 @@
         await LoadThemeForScopeAsync();
         _loading = false;
         StateHasChanged();
+    }
+
+    // Inline-style builder for the live preview's themable bands.
+    // Combines the bg/text color pair with the four formatting flags
+    // (bold / italic / underline + font family + font size) so each
+    // mock band reads exactly like AppTheme.ToCssBlock() would render
+    // it at runtime. Empty family / size collapse to "inherit" — same
+    // semantic as the CSS-variable path.
+    private string BandStyle(string bg, string text,
+                              bool bold, bool italic, bool underline,
+                              string family, string size)
+    {
+        var weight = bold ? "700" : "400";
+        var style  = italic ? "italic" : "normal";
+        var deco   = underline ? "underline" : "none";
+        var fam    = string.IsNullOrWhiteSpace(family) ? "inherit" : family;
+        var sz     = string.IsNullOrWhiteSpace(size)   ? "inherit" : size;
+        return $"background: {bg}; color: {text};"
+             + $" font-weight: {weight}; font-style: {style}; text-decoration: {deco};"
+             + $" font-family: {fam}; font-size: {sz};";
     }
 
     // RenderFragment helper for the per-band text formatting block —

@@ -302,7 +302,24 @@ public static class AdvancedFilterSqlEmitter
 
     private static string BuildRelativeDateClause(string lhs, string preset, FilterableField field, bool isPostgres)
     {
-        string todayExpr, firstOfMonth, firstOfYear, firstOfLastYear, firstOfLastMonth;
+        // Cached date anchors. Each variable holds an expression — not a
+        // value — so the SQL is evaluated at query time on the database
+        // and the user's "today" line never drifts mid-session.
+        //   * firstOfWeek      — Monday of the current week (ISO weekstart)
+        //   * firstOfLastWeek  — Monday of the prior week
+        //   * firstOfMonth     — 1st of the current calendar month
+        //   * firstOfNextMonth — 1st of the following calendar month
+        //   * firstOfLastMonth — 1st of the prior calendar month
+        //   * firstOfQuarter      — 1st day of the current calendar quarter (Jan/Apr/Jul/Oct)
+        //   * firstOfNextQuarter  — 1st day of the next quarter
+        //   * firstOfLastQuarter  — 1st day of the prior quarter
+        //   * firstOfYear / firstOfLastYear — Jan 1 anchors
+        string todayExpr;
+        string firstOfWeek, firstOfLastWeek;
+        string firstOfMonth, firstOfNextMonth, firstOfLastMonth;
+        string firstOfQuarter, firstOfNextQuarter, firstOfLastQuarter;
+        string firstOfYear, firstOfLastYear;
+
         if (isPostgres)
         {
             // "Today" always follows the connection's DisplayTimezone, NOT
@@ -316,10 +333,18 @@ public static class AdvancedFilterSqlEmitter
             todayExpr = !string.IsNullOrWhiteSpace(field.DisplayTimezone)
                 ? $"(NOW() AT TIME ZONE '{field.DisplayTimezone!.Replace("'", "''")}')::date"
                 : "CURRENT_DATE";
-            firstOfMonth     = $"date_trunc('month', {todayExpr})::date";
-            firstOfYear      = $"date_trunc('year',  {todayExpr})::date";
-            firstOfLastYear  = $"(date_trunc('year',  {todayExpr}) - INTERVAL '1 year')::date";
-            firstOfLastMonth = $"(date_trunc('month', {todayExpr}) - INTERVAL '1 month')::date";
+            // date_trunc('week', ...) returns Monday on Postgres — matches
+            // the ISO weekstart we want for ThisWeek / LastWeek.
+            firstOfWeek        = $"date_trunc('week', {todayExpr})::date";
+            firstOfLastWeek    = $"(date_trunc('week', {todayExpr}) - INTERVAL '1 week')::date";
+            firstOfMonth       = $"date_trunc('month', {todayExpr})::date";
+            firstOfNextMonth   = $"(date_trunc('month', {todayExpr}) + INTERVAL '1 month')::date";
+            firstOfLastMonth   = $"(date_trunc('month', {todayExpr}) - INTERVAL '1 month')::date";
+            firstOfQuarter     = $"date_trunc('quarter', {todayExpr})::date";
+            firstOfNextQuarter = $"(date_trunc('quarter', {todayExpr}) + INTERVAL '3 month')::date";
+            firstOfLastQuarter = $"(date_trunc('quarter', {todayExpr}) - INTERVAL '3 month')::date";
+            firstOfYear        = $"date_trunc('year',  {todayExpr})::date";
+            firstOfLastYear    = $"(date_trunc('year',  {todayExpr}) - INTERVAL '1 year')::date";
         }
         else
         {
@@ -329,10 +354,23 @@ public static class AdvancedFilterSqlEmitter
             // is intentionally ignored on this path — applying a UTC→local
             // shift would corrupt comparisons against locally-stored data.
             todayExpr        = "CAST(GETDATE() AS DATE)";
+            // Monday-anchored week start on SQL Server. SQL Server's
+            // DATEPART(weekday, ...) is sensitive to DATEFIRST; we
+            // compute the Monday offset arithmetically so the result
+            // is independent of session DATEFIRST. ((WEEKDAY+6)%7) maps
+            // Sunday=0..Saturday=6 → Mon-distance 6,0,1,2,3,4,5.
+            firstOfWeek      = $"DATEADD(day, -((DATEDIFF(day, '19000101', {todayExpr}) + 0) % 7), {todayExpr})";
+            firstOfLastWeek  = $"DATEADD(day, -7, {firstOfWeek})";
             firstOfMonth     = $"DATEFROMPARTS(YEAR({todayExpr}), MONTH({todayExpr}), 1)";
+            firstOfNextMonth = $"DATEADD(month, 1, {firstOfMonth})";
+            firstOfLastMonth = $"DATEADD(month, -1, {firstOfMonth})";
+            // Quarter start = month 1, 4, 7, or 10 of the current year.
+            // ((month - 1) / 3) * 3 + 1 → 1,1,1,4,4,4,7,7,7,10,10,10
+            firstOfQuarter     = $"DATEFROMPARTS(YEAR({todayExpr}), (((MONTH({todayExpr}) - 1) / 3) * 3) + 1, 1)";
+            firstOfNextQuarter = $"DATEADD(month, 3, {firstOfQuarter})";
+            firstOfLastQuarter = $"DATEADD(month, -3, {firstOfQuarter})";
             firstOfYear      = $"DATEFROMPARTS(YEAR({todayExpr}), 1, 1)";
             firstOfLastYear  = $"DATEFROMPARTS(YEAR({todayExpr}) - 1, 1, 1)";
-            firstOfLastMonth = $"DATEADD(month, -1, DATEFROMPARTS(YEAR({todayExpr}), MONTH({todayExpr}), 1))";
         }
 
         string daysAgo(int n) => isPostgres ? $"{todayExpr} - {n}" : $"DATEADD(day, -{n}, {todayExpr})";
@@ -343,9 +381,15 @@ public static class AdvancedFilterSqlEmitter
             RelativeDatePresets.Yesterday   => $"{lhs} = {daysAgo(1)}",
             RelativeDatePresets.Last7Days   => $"{lhs} >= {daysAgo(7)} AND {lhs} <= {todayExpr}",
             RelativeDatePresets.Last30Days  => $"{lhs} >= {daysAgo(30)} AND {lhs} <= {todayExpr}",
+            RelativeDatePresets.Last90Days  => $"{lhs} >= {daysAgo(90)} AND {lhs} <= {todayExpr}",
+            RelativeDatePresets.ThisWeek    => $"{lhs} >= {firstOfWeek} AND {lhs} <= {todayExpr}",
+            RelativeDatePresets.LastWeek    => $"{lhs} >= {firstOfLastWeek} AND {lhs} < {firstOfWeek}",
             RelativeDatePresets.Mtd         => $"{lhs} >= {firstOfMonth} AND {lhs} <= {todayExpr}",
-            RelativeDatePresets.Ytd         => $"{lhs} >= {firstOfYear} AND {lhs} <= {todayExpr}",
+            RelativeDatePresets.ThisMonth   => $"{lhs} >= {firstOfMonth} AND {lhs} < {firstOfNextMonth}",
             RelativeDatePresets.LastMonth   => $"{lhs} >= {firstOfLastMonth} AND {lhs} < {firstOfMonth}",
+            RelativeDatePresets.ThisQuarter => $"{lhs} >= {firstOfQuarter} AND {lhs} < {firstOfNextQuarter}",
+            RelativeDatePresets.LastQuarter => $"{lhs} >= {firstOfLastQuarter} AND {lhs} < {firstOfQuarter}",
+            RelativeDatePresets.Ytd         => $"{lhs} >= {firstOfYear} AND {lhs} <= {todayExpr}",
             RelativeDatePresets.LastYear    => $"{lhs} >= {firstOfLastYear} AND {lhs} < {firstOfYear}",
             _                               => $"{lhs} = {daysAgo(1)}"
         };

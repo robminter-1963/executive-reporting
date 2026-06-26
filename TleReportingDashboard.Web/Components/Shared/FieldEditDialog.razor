@@ -27,6 +27,18 @@
                 <MudTextField @bind-Value="_edited.Description" Label="Description" Variant="Variant.Outlined"
                               Margin="Margin.Dense" Lines="2" />
             </MudItem>
+            <MudItem xs="12">
+                @* Synonyms — comma-separated keywords that match this
+                   field in the picker's search. Lets admins add the
+                   terms users actually type (e.g. "fico, credit" on
+                   a "Credit Score" field, "balance, owed, payoff"
+                   on "Principal Balance") so search finds the field
+                   regardless of label wording. *@
+                <MudTextField @bind-Value="_edited.SearchAliases" Label="Search aliases (synonyms)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Placeholder="comma-separated, e.g. fico, credit, score"
+                              HelperText="Match this field in the picker search even when the label doesn't contain the user's word. Optional." />
+            </MudItem>
             <MudItem xs="12" sm="6">
                 <MudSelect T="string" Value="_edited.Domain" ValueChanged="v => _edited.Domain = v"
                            Label="Field Section" Variant="Variant.Outlined" Margin="Margin.Dense" Dense
@@ -485,6 +497,7 @@
                 Id = Field.Id,
                 Label = Field.Label,
                 Description = Field.Description,
+                SearchAliases = Field.SearchAliases,
                 Domain = Field.Domain,
                 DataType = Field.DataType,
                 FieldType = Field.FieldType,
@@ -533,6 +546,7 @@
             _edited.Id,
             _edited.Label,
             _edited.Description,
+            _edited.SearchAliases,
             _edited.Domain,
             _edited.DataType,
             _edited.FieldType,

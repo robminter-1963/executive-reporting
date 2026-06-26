@@ -76,6 +76,16 @@
                 <MudTooltip Text="Back to Report Library">
                     <MudIconButton Icon="@Icons.Material.Outlined.Home" OnClick="NavigateBackToLibrary" />
                 </MudTooltip>
+                @* One-way bail-out to Simple mode. Doesn't carry the
+                   current draft over — Quick Report is a fresh start,
+                   not a parallel edit surface. Discoverable for users
+                   who land here via a stale link or muscle memory and
+                   want the lighter UI. *@
+                <MudTooltip Text="Switch to simple mode (fresh report)">
+                    <MudIconButton Icon="@Icons.Material.Outlined.AutoAwesome"
+                                   Color="Color.Default"
+                                   OnClick="@(() => Navigation.NavigateTo("/quick"))" />
+                </MudTooltip>
                 @if (_editingName)
                 {
                     <MudTextField @bind-Value="_loadedReportName" Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -834,6 +844,7 @@
                                    TableCalcColumns="_currentConfig.TableCalculatedColumns"
                                    InitialHiddenColumns="_currentConfig.HiddenColumns"
                                    ColumnLabelOverrides="_templateColumnLabels"
+                                   CanSubmitForDashboard="@_canSubmitForDashboard"
                                    OnExtraFieldRequired="HandleExtraFieldRequired" />
                 </MudTabPanel>
             </MudTabs>
@@ -962,6 +973,13 @@
     // "edit any user's report" save path so company-scoped admin roles
     // can also save changes on someone else's report.
     private bool _hasAnyAdminAccess;
+    // True when the user has at least one company grant with a role
+    // other than Viewer (Editor / Scheduler / Admin). Drives the
+    // DashboardView's CanSubmitForDashboard parameter so viewer-only
+    // users can author/save reports but can't flag them for inclusion
+    // on the Master Dashboard. Admins (global or admin-section) always
+    // see the flag — _hasAnyAdminAccess subsumes the Editor+ gate.
+    private bool _canSubmitForDashboard = true;
 
     // ── Schema & data ──
     private List<DomainGroup> _domains = new();
@@ -1236,18 +1254,25 @@
                 var allowed = access.Select(a => a.CompanyId).ToHashSet();
                 _companies = _companies.Where(c => allowed.Contains(c.Id)).ToList();
 
-                // Viewer-only users can't author reports — bounce
-                // them back to the Library. Library hides the "New
-                // Report" button for them, but a direct nav to
-                // /builder (typed URL, bookmarked link, stale tab)
-                // would otherwise land them on an editor they can't
-                // actually save. Fail-closed at the page boundary.
-                if (access.Count == 0
-                    || access.All(a => string.Equals(a.Role, UserRoles.Viewer, StringComparison.OrdinalIgnoreCase)))
+                // Zero-access bounce only — users with no company access
+                // at all shouldn't reach the builder. Viewer-role users
+                // ARE allowed in: every authenticated user can author
+                // their own reports. The Editor+ gate now lives on the
+                // "Show on Master Dashboard" affordance, not on the
+                // builder entry itself.
+                if (access.Count == 0)
                 {
                     Navigation.NavigateTo("/reports", replace: true);
                     return;
                 }
+                // Compute the Editor+ flag for the dashboard-submission
+                // gate. True when ANY company grant has a non-Viewer
+                // role — admins already get the flag via the default
+                // _canSubmitForDashboard = true, but we still set this
+                // path so a former admin who lost their flag (but kept
+                // a Viewer grant somewhere) doesn't get the toggle.
+                _canSubmitForDashboard = access.Any(a =>
+                    !string.Equals(a.Role, UserRoles.Viewer, StringComparison.OrdinalIgnoreCase));
             }
 
             // Per-company connection fetches are independent — fan them
@@ -3373,6 +3398,19 @@
                 }
             }
             catch { }
+        }
+
+        // Editor+ gate for the ShowOnMaster submission flag. When the
+        // signed-in user can't submit (Viewer-only role), force the
+        // key out of the persisted state so a previously-flagged
+        // report saved by this user lands as unflagged. Defensive
+        // belt-and-suspenders with the UI checkbox hide — covers the
+        // edge case where an Editor authored the flag, then got
+        // demoted to Viewer and re-saves the report. Doesn't affect
+        // Editor+ saves (key stays per the user's checkbox value).
+        if (!_canSubmitForDashboard)
+        {
+            state.Remove("ShowOnMaster");
         }
 
         // Column widths

@@ -87,6 +87,16 @@ public sealed class FieldDefinition
     /// </summary>
     public string? FilterColumn { get; init; }
 
+    /// <summary>
+    /// Comma-separated search aliases / synonyms that match this field
+    /// in the field picker's search box, in addition to its Label / Id
+    /// / Description. Lets admins add the words users actually type for
+    /// a field whose label doesn't contain them — e.g. "balance, owed,
+    /// payoff" on a "Principal Balance" field, or "fico, score, credit"
+    /// on a "Credit Score" field. Null / blank = no aliases.
+    /// </summary>
+    public string? SearchAliases { get; init; }
+
     public int? MaxLength { get; init; }
     /// <summary>
     /// Optional column min-width hint (px) applied in the report grid. When

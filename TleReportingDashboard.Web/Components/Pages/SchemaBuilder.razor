@@ -1645,6 +1645,7 @@
                     Id = field.Id,
                     Label = field.Label,
                     Description = field.Description,
+                    SearchAliases = field.SearchAliases,
                     Domain = field.Domain,
                     DataType = field.DataType,
                     FieldType = field.FieldType,
@@ -2651,6 +2652,11 @@
             ["FieldType"] = f.FieldType
         };
 
+        // Synonyms / search aliases — omit when blank so the JSON
+        // stays clean for fields without custom aliases.
+        if (!string.IsNullOrWhiteSpace(f.SearchAliases))
+            result["SearchAliases"] = f.SearchAliases;
+
         if (f.MaxLength.HasValue) result["MaxLength"] = f.MaxLength.Value;
         if (f.MinWidth.HasValue) result["MinWidth"] = f.MinWidth.Value;
 
@@ -2842,6 +2848,10 @@
         public string Label { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
         public string Domain { get; set; } = string.Empty;
+        // Comma-separated synonyms / search aliases that match the field
+        // in the picker's search box. See FieldDefinition.SearchAliases
+        // for the full rationale. Empty by default; admins author per field.
+        public string? SearchAliases { get; set; }
         public string DataType { get; set; } = "text";
         public string FieldType { get; set; } = "Dimension";
         public int? MaxLength { get; set; }

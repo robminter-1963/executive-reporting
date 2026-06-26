@@ -35,6 +35,11 @@ public class FieldDefinition
     // fields without needing a separate constraint lookup against the
     // target DB.
     public bool IsUnique { get; set; }
+    // Mirrors Configuration.FieldDefinition.SearchAliases. Surfaced
+    // so the field picker's search can match admin-authored synonyms
+    // in addition to Label / Id / Description. Comma-separated; null
+    // / blank = no aliases.
+    public string? SearchAliases { get; set; }
 }
 
 public class DomainGroup

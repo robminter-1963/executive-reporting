@@ -43,4 +43,10 @@ public class SavedReport
     public DateTime? LastRunAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    // Admin-flagged starter template. Templates surface in the Report
+    // Library's "Templates" tab for every user (no share row needed) and
+    // the "Use this template" action clones the row into the user's own
+    // My Reports as an editable starting point. Defaults to false so
+    // every existing report stays a normal report.
+    public bool IsTemplate { get; set; }
 }

@@ -183,21 +183,17 @@
                                   HasAnyAdminAccess="@_hasAnyAdminAccess"
                                   CanCreateBatches="@_canCreateBatches" />
 
-                @* Report Library shortcut. Visible to every role
-                   except viewers with no shared reports — those would
-                   land on an empty Library and have nothing to do
-                   there, so the link disappears once their last share
-                   is revoked. Editors / Schedulers / admins always
-                   see the button; the Library handles their role-aware
-                   tab/affordance gating internally. *@
-                @if (_userRoleForCompany != UserRoles.Viewer || _hasAnyShares)
-                {
-                    <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
-                               StartIcon="@Icons.Material.Outlined.LibraryBooks"
-                               OnClick="@(() => Navigation.NavigateTo("/reports"))">
-                        @(_userRoleForCompany == UserRoles.Viewer ? "Shared Reports" : "Report Library")
-                    </MudButton>
-                }
+                @* Report Library shortcut. Every authenticated user
+                   can reach the Library now — viewers can author
+                   their own reports, so the page is useful to them
+                   too. The Library's My Reports tab handles the
+                   empty state for users who haven't created
+                   anything yet. *@
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                           StartIcon="@Icons.Material.Outlined.LibraryBooks"
+                           OnClick="@(() => Navigation.NavigateTo("/reports"))">
+                    Report Library
+                </MudButton>
                 @* Per-user tab visibility manager. Gated to Admin / System Support
                    roles only — those users can curate any user's hidden-tab list
                    inside the dialog. Non-admins see the canonical tab strip and

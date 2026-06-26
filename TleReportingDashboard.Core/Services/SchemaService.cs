@@ -438,7 +438,8 @@ public partial class SchemaService : ISchemaService
                         SqlExpression = f.SqlExpression,
                         SourceTable = f.SourceTable,
                         SourceColumn = f.SourceColumn,
-                        IsUnique = f.IsUnique
+                        IsUnique = f.IsUnique,
+                        SearchAliases = f.SearchAliases
                     })
                     .ToList()
             })

@@ -91,11 +91,11 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         // the freshly-saved report. Bit the Clone path before this fix.
         await using var cmd = new SqlCommand(
             @"INSERT INTO EMPOWER.RPT_saved_reports
-              (id, name, internal_name, category, library_section_id, owner_id, owner_email, field_ids, filters, aggregations, column_state, grid_template_id, connection_id, company_id, primary_table, last_run_at, created_at, updated_at)
+              (id, name, internal_name, category, library_section_id, owner_id, owner_email, field_ids, filters, aggregations, column_state, grid_template_id, connection_id, company_id, primary_table, last_run_at, created_at, updated_at, is_template)
               OUTPUT INSERTED.company_id
               VALUES (@Id, @Name, @InternalName, @Category, @LibrarySectionId, @OwnerId, @OwnerEmail, @FieldIds, @Filters, @Aggregations, @ColumnState, @GridTemplateId, @ConnectionId,
                       (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
-                      @PrimaryTable, @LastRunAt, @CreatedAt, @UpdatedAt)", conn);
+                      @PrimaryTable, @LastRunAt, @CreatedAt, @UpdatedAt, @IsTemplate)", conn);
         AddReportParams(cmd, report);
         var insertedCompanyIdRaw = await cmd.ExecuteScalarAsync();
         if (insertedCompanyIdRaw is Guid insertedCompanyId)
@@ -133,7 +133,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
               column_state = @ColumnState, grid_template_id = @GridTemplateId, connection_id = @ConnectionId,
               company_id = (SELECT company_id FROM EMPOWER.RPT_company_connections WHERE id = @ConnectionId),
               primary_table = @PrimaryTable,
-              last_run_at = @LastRunAt, updated_at = @UpdatedAt
+              last_run_at = @LastRunAt, updated_at = @UpdatedAt, is_template = @IsTemplate
               WHERE id = @Id{whereOwner}", conn);
         AddReportParams(cmd, report);
         var rows = await cmd.ExecuteNonQueryAsync();
@@ -184,6 +184,54 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
             _logger.LogDebug(ex, "category column not present yet — returning empty list.");
         }
         return result;
+    }
+
+    public Task<List<SavedReport>> GetTemplatesAsync() =>
+        _cache.GetOrAddAsync(
+            ConfigDbCache.Key("ReportDbService", "Reports", "Templates"),
+            async () =>
+            {
+                await using var conn = await OpenConnectionAsync();
+                // Filtered-index-friendly: WHERE is_template = 1 matches
+                // the partial index from the migration so the scan stays
+                // cheap as the table grows.
+                await using var cmd = new SqlCommand(
+                    "SELECT * FROM EMPOWER.RPT_saved_reports WHERE is_template = 1 ORDER BY name", conn);
+                try
+                {
+                    return await ReadReportsAsync(cmd);
+                }
+                catch (SqlException ex) when (ex.Number == 207) // Invalid column name
+                {
+                    // Pre-migration env — the is_template column doesn't
+                    // exist yet. Return empty so the Templates tab shows
+                    // its empty-state instead of erroring out.
+                    _logger.LogDebug(ex, "is_template column not present yet — returning empty list.");
+                    return new List<SavedReport>();
+                }
+            },
+            bypass: _editorMode.IsActive);
+
+    public async Task SetIsTemplateAsync(Guid id, bool isTemplate)
+    {
+        // Lightweight single-column update. Skips the full UpdateReportAsync
+        // path so we don't have to re-bind every JSON blob (FieldIds /
+        // Filters / Aggregations) for what is conceptually a single-flag
+        // toggle. updated_at bumps so consumers that key off it (caches,
+        // last-modified UI) see the change.
+        await using var conn = await OpenConnectionAsync();
+        await using var cmd = new SqlCommand(
+            @"UPDATE EMPOWER.RPT_saved_reports
+                 SET is_template = @IsTemplate, updated_at = @UpdatedAt
+               WHERE id = @Id", conn);
+        cmd.Parameters.Add(new SqlParameter("@Id", id));
+        cmd.Parameters.Add(new SqlParameter("@IsTemplate", isTemplate));
+        cmd.Parameters.Add(new SqlParameter("@UpdatedAt", DateTime.UtcNow));
+        var rows = await cmd.ExecuteNonQueryAsync();
+        if (rows == 0) throw new InvalidOperationException("Report not found.");
+        _cache.Invalidate("ReportDbService:Reports:");
+        _cache.Invalidate("ReportDbService:Shares:");
+        _logger.LogInformation("Report {Id} is_template = {Flag}", id, isTemplate);
     }
 
     public async Task DeleteReportAsync(Guid id, string userId)
@@ -600,7 +648,12 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
                 PrimaryTable = reader.OptString("primary_table"),
                 LastRunAt = reader.IsDBNull(reader.GetOrdinal("last_run_at")) ? null : reader.GetDateTime(reader.GetOrdinal("last_run_at")),
                 CreatedAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
-                UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
+                UpdatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at")),
+                // Defensive — envs that haven't applied the 2026-06-08
+                // is_template migration return null here and the row reads
+                // as a non-template, preserving every existing report's
+                // behavior until the column lands.
+                IsTemplate = reader.OptBool("is_template") ?? false
             });
         }
         return reports;
@@ -694,6 +747,7 @@ public class ReportDbService : IReportService, ISharingService, IScheduleService
         cmd.Parameters.Add(new SqlParameter("@LastRunAt", (object?)r.LastRunAt ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@CreatedAt", r.CreatedAt));
         cmd.Parameters.Add(new SqlParameter("@UpdatedAt", r.UpdatedAt));
+        cmd.Parameters.Add(new SqlParameter("@IsTemplate", r.IsTemplate));
     }
 
     // Maps the lowercase string persisted by AddScheduleParams back to

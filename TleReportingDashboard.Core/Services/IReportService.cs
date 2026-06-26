@@ -45,4 +45,15 @@ public interface IReportService
     // free-text input. Returns reports across every owner / company since
     // categories are global (admins curate them as a shared taxonomy).
     Task<List<string>> GetDistinctCategoriesAsync();
+    // All reports flagged is_template = 1, sorted by name. Unscoped by
+    // owner / share / company — templates are admin-curated starting
+    // points implicitly visible to every user. Callers (the Library's
+    // Templates tab) filter by the page's current company scope before
+    // rendering. Empty list on pre-migration databases (column missing).
+    Task<List<SavedReport>> GetTemplatesAsync();
+    // Toggle the is_template flag on a single report. Admin-only path —
+    // callers MUST verify IsAdmin before invoking; the service does not
+    // re-check. Cache invalidation matches UpdateReportAsync so the
+    // Library's My Reports / Templates tabs both refresh.
+    Task SetIsTemplateAsync(Guid id, bool isTemplate);
 }

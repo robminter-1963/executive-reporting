@@ -104,14 +104,26 @@ public sealed class FilterGroup
 
 // Relative-date preset keys for the `relative` operator. Values[0] on the
 // FilterClause carries one of these strings.
+//
+// Weeks start on Monday for ThisWeek / LastWeek — the ISO 8601 / EU
+// convention. Quarters are calendar quarters (Q1 = Jan–Mar). Adding new
+// presets is back-compat: the SQL emitter's switch has a `_` default
+// that resolves to Yesterday, so an unknown key on an old build won't
+// crash, just degrades to yesterday.
 public static class RelativeDatePresets
 {
     public const string Today       = "today";
     public const string Yesterday   = "yesterday";
     public const string Last7Days   = "last_7_days";
     public const string Last30Days  = "last_30_days";
-    public const string Mtd         = "mtd";
-    public const string Ytd         = "ytd";
+    public const string Last90Days  = "last_90_days";
+    public const string ThisWeek    = "this_week";
+    public const string LastWeek    = "last_week";
+    public const string Mtd         = "mtd";          // month-to-date
+    public const string ThisMonth   = "this_month";   // full calendar month
     public const string LastMonth   = "last_month";
+    public const string ThisQuarter = "this_quarter";
+    public const string LastQuarter = "last_quarter";
+    public const string Ytd         = "ytd";
     public const string LastYear    = "last_year";
 }

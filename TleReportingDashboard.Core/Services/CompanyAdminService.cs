@@ -299,6 +299,170 @@ public sealed class CompanyAdminService : ICompanyAdminService
             after: new { IsHidden = isHidden });
     }
 
+    // Pre-flight count of dependent rows. Counts are cheap (COUNT(*) on
+    // indexed company_id columns) so the admin sees the blast radius
+    // BEFORE clicking Delete. The actual cascade re-walks the tables; if
+    // a row gets added between this read and the delete it just goes
+    // along for the ride. Tables already cascading via FK from companies
+    // (user_companies, company_connections + their further cascades,
+    // admins, kpis, library_sections, personal_tiles) are counted here
+    // for transparency.
+    public async Task<CompanyDeleteImpact> GetDeleteImpactAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        string companyName = string.Empty;
+        await using (var nameCmd = new SqlCommand(
+            "SELECT name FROM EMPOWER.RPT_companies WHERE id = @id", conn))
+        {
+            nameCmd.Parameters.Add(new SqlParameter("@id", id));
+            var nameRaw = await nameCmd.ExecuteScalarAsync(ct);
+            if (nameRaw is null) throw new KeyNotFoundException($"Company {id} not found.");
+            companyName = nameRaw as string ?? string.Empty;
+        }
+
+        // One round-trip with a single batch query — cheaper than 14
+        // individual COUNTs.
+        const string sql = @"
+            SELECT
+              (SELECT COUNT(*) FROM EMPOWER.RPT_company_connections WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_saved_reports       WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_report_shares       WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_report_schedules    WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_grid_templates      WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_master_dashboard_tabs  WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_master_dashboard_tiles WHERE company_id = @id OR source_company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_library_sections    WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_company_kpis        WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_user_companies      WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_admins              WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_master_dashboard_personal_tiles WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_schema_config       WHERE company_id = @id),
+              (SELECT COUNT(*) FROM EMPOWER.RPT_schema_config_history WHERE company_id = @id);";
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@id", id));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            throw new InvalidOperationException("Impact query returned no rows.");
+
+        return new CompanyDeleteImpact(
+            CompanyId: id,
+            CompanyName: companyName,
+            Connections: reader.GetInt32(0),
+            SavedReports: reader.GetInt32(1),
+            ReportShares: reader.GetInt32(2),
+            ReportSchedules: reader.GetInt32(3),
+            GridTemplates: reader.GetInt32(4),
+            DashboardTabs: reader.GetInt32(5),
+            DashboardTiles: reader.GetInt32(6),
+            LibrarySections: reader.GetInt32(7),
+            Kpis: reader.GetInt32(8),
+            UserGrants: reader.GetInt32(9),
+            Admins: reader.GetInt32(10),
+            PersonalPins: reader.GetInt32(11),
+            SchemaConfigs: reader.GetInt32(12),
+            SchemaConfigHistoryRows: reader.GetInt32(13));
+    }
+
+    // Hard-delete a company and everything that belongs to it. Walks the
+    // tables that have NO ACTION FKs to RPT_companies in dependency order
+    // inside a single transaction, then drops the company row. Remaining
+    // children (user_companies, company_connections + their further
+    // cascades, admins, kpis, library_sections, personal_tiles,
+    // user_preferences, schema_config_history) cascade via FK.
+    public async Task DeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default)
+    {
+        // Snapshot the impact BEFORE we mutate so the audit log captures
+        // what was destroyed. Throws KeyNotFoundException if the company
+        // doesn't exist, which is the right signal to the caller.
+        var impact = await GetDeleteImpactAsync(id, ct);
+
+        await using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync(ct);
+        try
+        {
+            // Order matters here because of FK dependencies in BOTH
+            // directions. Reports cascade shares + schedules + batch_items
+            // via report_id, so we don't need to delete those rows
+            // explicitly — but we DO need to delete the report rows
+            // themselves before the company row because saved_reports →
+            // companies is NO ACTION (FK blocks the delete otherwise).
+            //
+            // Similarly: tabs → sections cascade is via tab_id, so deleting
+            // tabs takes sections with them. Tiles have a second FK
+            // (source_company_id) — delete by both columns.
+            await ExecAsync(conn, tx, ct,
+                "DELETE FROM EMPOWER.RPT_master_dashboard_tiles WHERE company_id = @id OR source_company_id = @id", id);
+            await ExecAsync(conn, tx, ct,
+                "DELETE FROM EMPOWER.RPT_master_dashboard_tabs WHERE company_id = @id", id);
+            await ExecAsync(conn, tx, ct,
+                "DELETE FROM EMPOWER.RPT_report_schedules WHERE company_id = @id", id);
+            await ExecAsync(conn, tx, ct,
+                "DELETE FROM EMPOWER.RPT_report_shares WHERE company_id = @id", id);
+            await ExecAsync(conn, tx, ct,
+                "DELETE FROM EMPOWER.RPT_saved_reports WHERE company_id = @id", id);
+            await ExecAsync(conn, tx, ct,
+                "DELETE FROM EMPOWER.RPT_grid_templates WHERE company_id = @id", id);
+            await ExecAsync(conn, tx, ct,
+                "DELETE FROM EMPOWER.RPT_schema_config WHERE company_id = @id", id);
+            // Finally the company itself. Remaining children (user_companies,
+            // company_connections + downstream teams/sources/custom_tables,
+            // admins, kpis, library_sections, personal_tiles, user_preferences,
+            // schema_config_history) drop via FK CASCADE.
+            await using (var cmd = new SqlCommand(
+                "DELETE FROM EMPOWER.RPT_companies WHERE id = @id", conn, tx))
+            {
+                cmd.Parameters.Add(new SqlParameter("@id", id));
+                var rows = await cmd.ExecuteNonQueryAsync(ct);
+                if (rows == 0)
+                    throw new KeyNotFoundException($"Company {id} disappeared mid-delete.");
+            }
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
+
+        // Cache invalidations. Cast wide — almost every per-company
+        // service has a cache entry keyed (or prefixed) by company id;
+        // an explicit invalidate prevents stale reads after the hard
+        // delete. Master Dashboard tiles cache is keyed per (user,
+        // company); blasting the whole prefix is cheap.
+        _registry.Invalidate();
+        _cache.Invalidate("CompanyAdminService:");
+        _cache.Invalidate("ReportDbService:");
+        _cache.Invalidate("SchemaService:");
+        _cache.Invalidate("MasterDashboardService:");
+        _cache.Invalidate("ScheduleService:");
+        _cache.Invalidate("ThemeService:");
+
+        _logger.LogWarning(
+            "Company deleted: {Id} '{Name}' by {User} (impact: {Reports} reports, {Tabs} tabs, {Tiles} tiles, {Connections} connections, {Schemas} schemas)",
+            id, impact.CompanyName, deletedBy ?? "unknown",
+            impact.SavedReports, impact.DashboardTabs, impact.DashboardTiles,
+            impact.Connections, impact.SchemaConfigs);
+
+        await _audit.LogAsync(
+            actorEmail: deletedBy,
+            action: AuditActions.Delete,
+            resourceType: AuditResources.Company,
+            resourceId: id.ToString(),
+            resourceLabel: impact.CompanyName,
+            before: impact,
+            after: null);
+    }
+
+    private static async Task ExecAsync(SqlConnection conn, SqlTransaction tx, CancellationToken ct, string sql, Guid id)
+    {
+        await using var cmd = new SqlCommand(sql, conn, tx);
+        cmd.Parameters.Add(new SqlParameter("@id", id));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task UploadLogoAsync(Guid id, byte[] bytes, string contentType, CancellationToken ct = default)
     {
         if (bytes is null || bytes.Length == 0)

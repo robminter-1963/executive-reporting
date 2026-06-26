@@ -113,15 +113,29 @@
             }
             @* Admin moved to the MainLayout user menu — reachable from any
                page, not just here. *@
-            @* Authoring affordance — hidden for viewer-only users, who
-               can run shared reports but never create or edit their own. *@
-            @if (!_isViewerOnly)
-            {
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Outlined.Add"
-                           OnClick="@(() => Navigation.NavigateTo("/builder"))">
-                    New Report
-                </MudButton>
-            }
+            @* Authoring affordance — every authenticated user can
+               create their own reports. The Editor+ gate now lives
+               on the "Show on Master Dashboard" submission affordance
+               (in the builder's dashboard config), not on report
+               creation itself. *@
+            @* Split affordance — primary action lands in Simple mode
+               (/quick) for end users; the dropdown carries the
+               advanced builder for admins / power users who want
+               the full Tables/Joins/Lookups surface. *@
+            <MudMenu Variant="Variant.Filled" Color="Color.Primary"
+                     StartIcon="@Icons.Material.Outlined.Add"
+                     Label="New Report"
+                     AnchorOrigin="Origin.BottomRight"
+                     TransformOrigin="Origin.TopRight">
+                <MudMenuItem Icon="@Icons.Material.Outlined.AutoAwesome"
+                             OnClick="@(() => Navigation.NavigateTo("/quick"))">
+                    Quick report (simple)
+                </MudMenuItem>
+                <MudMenuItem Icon="@Icons.Material.Outlined.Tune"
+                             OnClick="@(() => Navigation.NavigateTo("/builder"))">
+                    Advanced builder
+                </MudMenuItem>
+            </MudMenu>
         </MudStack>
     </MudStack>
 </MudPaper>
@@ -187,12 +201,9 @@
              Class="pa-2">
 
         @* ── Tab 1: My Reports ──
-           Authoring tab — hidden for viewer-only users. They never own
-           reports (Viewer role can't create them) so the table would
-           always be empty AND the action buttons in this tab include
-           Edit / Share / Schedule which are inappropriate for the role. *@
-        @if (!_isViewerOnly)
-        {
+           Authoring tab — visible to every authenticated user. Viewers
+           can now save their own reports (the Editor+ gate moved to
+           the "Show on Master Dashboard" submission affordance). *@
         <MudTabPanel Text="My Reports" Icon="@Icons.Material.Outlined.Folder">
             @* Section management toolbar — only meaningful when a single
                company is in scope (sections are per-company). The Create
@@ -245,9 +256,10 @@
                             @* Per-section actions (rename / remove). Only shown for
                                admin-defined sections — the synthetic (Uncategorized)
                                bucket has no row in RPT_library_sections to mutate.
-                               Hidden from viewer-only roles. stopPropagation keeps
-                               clicks inside the menu from collapsing/expanding the
-                               section. *@
+                               Gated on _isViewerOnly because section curation is an
+                               Editor+ action (mirrors the Show-on-Master-Dashboard
+                               gate). stopPropagation keeps clicks inside the menu
+                               from collapsing/expanding the section. *@
                             @if (!_isViewerOnly && !string.Equals(sectionName, UncategorizedSectionLabel, StringComparison.Ordinal))
                             {
                                 var sectionIdLookup = _librarySections.FirstOrDefault(s => string.Equals(s.Name, sectionName, StringComparison.OrdinalIgnoreCase))?.Id;
@@ -318,6 +330,21 @@
                                              Icon="@Icons.Material.Outlined.Category">
                                         @context.Category
                                     </MudChip>
+                                }
+                                @if (context.IsTemplate)
+                                {
+                                    @* Template chip — flags reports admins have
+                                       published as starting points. Primary color
+                                       so it reads as a curated/featured signal
+                                       distinct from the neutral Category chip. *@
+                                    <MudTooltip Text="Published as a starter template. Users see this on the Templates tab and can clone it with one click."
+                                                Placement="Placement.Top">
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                 Style="height: 18px; font-size: 0.65rem;"
+                                                 Icon="@Icons.Material.Outlined.Bookmark">
+                                            Template
+                                        </MudChip>
+                                    </MudTooltip>
                                 }
                                 @if (context.GridTemplateId.HasValue)
                                 {
@@ -416,6 +443,20 @@
                                 <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small"
                                                Color="Color.Default" title="Clone"
                                                OnClick="() => CloneReport(context)" />
+                                @if (_hasAnyAdminAccess)
+                                {
+                                    @* Admin-only — toggle is_template on this
+                                       report. Filled bookmark = currently a
+                                       template; outline = not. ToggleTemplate
+                                       updates _templates in place so the chip
+                                       above and the Templates tab repaint
+                                       without a full reload. *@
+                                    <MudIconButton Icon="@(context.IsTemplate ? Icons.Material.Outlined.Bookmark : Icons.Material.Outlined.BookmarkBorder)"
+                                                   Size="Size.Small"
+                                                   Color="@(context.IsTemplate ? Color.Primary : Color.Default)"
+                                                   title="@(context.IsTemplate ? "Remove from templates" : "Mark as template")"
+                                                   OnClick="() => ToggleTemplate(context, !context.IsTemplate)" />
+                                }
                                 @if (ownedByMe)
                                 {
                                     <MudIconButton Icon="@Icons.Material.Outlined.Share" Size="Size.Small"
@@ -441,13 +482,12 @@
             {
                 <EmptyState Icon="@Icons.Material.Outlined.NoteAdd"
                             Heading="You haven't created any reports yet"
-                            Body="Reports turn raw connection data into something readable. Pick fields, filters, and sorting in the builder and save the result here."
+                            Body="Reports turn raw connection data into something readable. Pick a subject, the columns you want, and a date range — your first report only takes a minute."
                             CtaLabel="Create your first report"
-                            CtaIcon="@Icons.Material.Outlined.Add"
-                            OnCtaClick="@(() => Navigation.NavigateTo("/builder"))" />
+                            CtaIcon="@Icons.Material.Outlined.AutoAwesome"
+                            OnCtaClick="@(() => Navigation.NavigateTo("/quick"))" />
             }
         </MudTabPanel>
-        }
 
         @* ── Tab 2: Shared With Me ── *@
         <MudTabPanel Text="Shared With Me" Icon="@Icons.Material.Outlined.PeopleAlt">
@@ -543,16 +583,12 @@
                                                Color="Color.Primary" title="Run"
                                                OnClick="() => ViewReport(context.Id)" />
                                 @* Clone makes the cloning user the new
-                                   owner — that contradicts viewer-only
-                                   ("can't author"), so it's hidden for
-                                   that role. Run is the only action a
-                                   viewer-only user gets on shared rows. *@
-                                @if (!_isViewerOnly)
-                                {
-                                    <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small"
-                                                   Color="Color.Default" title="Clone"
-                                                   OnClick="() => CloneReport(context)" />
-                                }
+                                   owner. Every authenticated user can
+                                   clone now — the Editor+ gate moved
+                                   to the dashboard-submission flag. *@
+                                <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small"
+                                               Color="Color.Default" title="Clone"
+                                               OnClick="() => CloneReport(context)" />
                             </MudStack>
                         </MudTd>
                     </RowTemplate>
@@ -574,12 +610,106 @@
             }
         </MudTabPanel>
 
-        @* ── Tab 3: Recent ──
-           Source data is _myReports filtered by LastRunAt — a viewer-
-           only user owns nothing, so Recent would always render empty
-           for them. Hiding the tab keeps the tab strip honest. *@
-        @if (!_isViewerOnly)
-        {
+        @* ── Tab 3: Templates ──
+           Admin-curated starter reports. Visible to EVERY user (no
+           viewer-only gating, no share-row requirement) so new users
+           have something to clone-and-tweak instead of starting from
+           a blank report. Use This Template clones the row into My
+           Reports as "<Template> (mine)" and opens the editor on the
+           clone. Admins also see "Edit" + an "Unmark template" icon
+           so the curation surface lives next to the consumption one. *@
+        <MudTabPanel Text="Templates" Icon="@Icons.Material.Outlined.Bookmarks">
+            @if (FilteredTemplates.Any())
+            {
+                <MudTable Items="@FilteredTemplates" Hover Striped Dense FixedHeader
+                          T="SavedReport" Elevation="0" Style="border: 1px solid #DADCE0;"
+                          Height="100%"
+                          RowsPerPage="_libraryPageSize" RowsPerPageChanged="OnPageSizeChanged"
+                          CurrentPage="@CurrentPageFor(TemplatesTab)"
+                          CurrentPageChanged="@(p => SetCurrentPageFor(TemplatesTab, p))">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Connection</MudTh>
+                        <MudTh>Curated by</MudTh>
+                        <MudTh>Fields</MudTh>
+                        <MudTh Style="text-align: right;">Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">
+                            <span id="@($"report-row-{context.Id}")" style="display: none;"></span>
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-wrap: wrap;">
+                                <MudIcon Icon="@Icons.Material.Outlined.Bookmark" Size="Size.Small" Color="Color.Primary" />
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                    @(string.IsNullOrWhiteSpace(context.InternalName) ? context.Name : context.InternalName)
+                                </MudText>
+                                @if (!string.IsNullOrWhiteSpace(context.Category))
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
+                                             Style="height: 18px; font-size: 0.65rem;"
+                                             Icon="@Icons.Material.Outlined.Category">
+                                        @context.Category
+                                    </MudChip>
+                                }
+                            </MudStack>
+                        </MudTd>
+                        <MudTd DataLabel="Connection">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@GetConnectionName(context.ConnectionId)</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Curated by">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">@context.OwnerEmail</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Fields">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                @ParseFieldCount(context.FieldIds) fields
+                            </MudChip>
+                        </MudTd>
+                        <MudTd DataLabel="Actions" Style="text-align: right;">
+                            <MudStack Row Spacing="0" Style="display: inline-flex !important;">
+                                @* Primary action — clones into the user's
+                                   own reports and opens the editor on the
+                                   clone. Available to every user; cloning
+                                   produces a personal copy the user owns. *@
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                           StartIcon="@Icons.Material.Outlined.AddBox"
+                                           OnClick="() => UseTemplate(context)">
+                                    Use this template
+                                </MudButton>
+                                @if (_hasAnyAdminAccess)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                                                   Color="Color.Default" title="Edit template (admin)"
+                                                   OnClick="() => EditReport(context.Id)" />
+                                    <MudIconButton Icon="@Icons.Material.Outlined.BookmarkRemove" Size="Size.Small"
+                                                   Color="Color.Default" title="Remove from templates"
+                                                   OnClick="() => ToggleTemplate(context, isTemplate: false)" />
+                                }
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4">
+                            No templates match your search.
+                        </MudText>
+                    </NoRecordsContent>
+                    <PagerContent>
+                        <MudTablePager PageSizeOptions="new[] { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }" />
+                    </PagerContent>
+                </MudTable>
+            }
+            else if (!_isLoading)
+            {
+                <EmptyState Icon="@Icons.Material.Outlined.Bookmarks"
+                            Heading="No templates yet"
+                            Body="@(_hasAnyAdminAccess
+                                ? "Templates are starting points for new reports. Mark any of your reports as a template from the My Reports tab — users will see it here with a one-click \"Use this template\" button."
+                                : "Templates are admin-curated starting points for new reports. Ask an admin to publish one and it'll show up here.")" />
+            }
+        </MudTabPanel>
+
+        @* ── Tab 4: Recent ──
+           Source data is _myReports filtered by LastRunAt. Visible to
+           every user — viewers can now author their own reports and
+           will have a meaningful Recent list once they've run anything. *@
         <MudTabPanel Text="Recent" Icon="@Icons.Material.Outlined.History">
             @if (FilteredRecent.Any())
             {
@@ -700,7 +830,6 @@
                             Body="Reports you've opened recently will appear here, so the ones you use most are always one click away." />
             }
         </MudTabPanel>
-        }
 
         @* ── Tab 4: Other Users' Reports (admin-only) ──
            Cross-user view, replaces the previous Admin-View toggle on
@@ -734,9 +863,10 @@
                             @* Per-section actions (rename / remove). Only shown for
                                admin-defined sections — the synthetic (Uncategorized)
                                bucket has no row in RPT_library_sections to mutate.
-                               Hidden from viewer-only roles. stopPropagation keeps
-                               clicks inside the menu from collapsing/expanding the
-                               section. *@
+                               Gated on _isViewerOnly because section curation is an
+                               Editor+ action (mirrors the Show-on-Master-Dashboard
+                               gate). stopPropagation keeps clicks inside the menu
+                               from collapsing/expanding the section. *@
                             @if (!_isViewerOnly && !string.Equals(sectionName, UncategorizedSectionLabel, StringComparison.Ordinal))
                             {
                                 var sectionIdLookup = _librarySections.FirstOrDefault(s => string.Equals(s.Name, sectionName, StringComparison.OrdinalIgnoreCase))?.Id;
@@ -794,6 +924,17 @@
                                                     @context.Category
                                                 </MudChip>
                                             }
+                                            @if (context.IsTemplate)
+                                            {
+                                                <MudTooltip Text="Published as a starter template. Users see this on the Templates tab and can clone it with one click."
+                                                            Placement="Placement.Top">
+                                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                             Style="height: 18px; font-size: 0.65rem;"
+                                                             Icon="@Icons.Material.Outlined.Bookmark">
+                                                        Template
+                                                    </MudChip>
+                                                </MudTooltip>
+                                            }
                                         </MudStack>
                                     </MudTd>
                                     <MudTd DataLabel="Owner">
@@ -832,6 +973,15 @@
                                             <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
                                                            Color="Color.Default" title="Edit (admin override)"
                                                            OnClick="() => EditReport(context.Id)" />
+                                            @* Admin-only — toggle is_template on this
+                                               cross-user report. Same affordance as on
+                                               My Reports so admins can curate templates
+                                               from any owner's report pool. *@
+                                            <MudIconButton Icon="@(context.IsTemplate ? Icons.Material.Outlined.Bookmark : Icons.Material.Outlined.BookmarkBorder)"
+                                                           Size="Size.Small"
+                                                           Color="@(context.IsTemplate ? Color.Primary : Color.Default)"
+                                                           title="@(context.IsTemplate ? "Remove from templates" : "Mark as template")"
+                                                           OnClick="() => ToggleTemplate(context, !context.IsTemplate)" />
                                             @* Admin override delete — same flow as the
                                                My Reports admin-delete path. ConfirmDelete
                                                surfaces the owner's email so the click
@@ -1091,6 +1241,11 @@
     private bool _canCreateBatches;
 
     private List<SavedReport> _myReports = new();
+    // Admin-curated starter reports — every row across every owner with
+    // is_template = 1. Visible to every user (no share-row requirement)
+    // via the Templates tab. Loaded once on OnInitialized; mutated in
+    // place when an admin toggles the flag via ToggleTemplate.
+    private List<SavedReport> _templates = new();
     // Reports owned by OTHER users. Populated only for global admins via
     // GetAllReportsAsync filtered to !owned-by-me. Surfaced on a dedicated
     // tab so My Reports stays a pure self-scoped view; admins use this
@@ -1156,18 +1311,23 @@
     // panel order so the saved page state still maps correctly.
     private const int MyReportsTab        = 0;
     private const int SharedReportsTab    = 1;
-    private const int RecentReportsTab    = 2;
+    // Admin-curated starter reports. Visible to every user — no
+    // viewer-only gating. Inserted between Shared With Me and Recent
+    // so new users discover it adjacent to the other "browse pool"
+    // tabs. Indices below shifted by 1 to make room.
+    private const int TemplatesTab        = 2;
+    private const int RecentReportsTab    = 3;
     // Admin-only tab — shows reports owned by other users. Hidden for
     // non-admins (MudTabs simply doesn't render the panel). The index is
     // stable: when the panel is hidden, MudTabs still uses sequential
     // ActivePanelIndex values for visible panels, so non-admins never
     // land on this index.
-    private const int OtherUsersReportsTab = 3;
+    private const int OtherUsersReportsTab = 4;
     // Admin-only — same gating as OtherUsersReportsTab. Shows every
     // report in the system that has at least one active schedule, in a
     // single flat MudTable (no per-section grouping; admins want a
     // global view of "what's currently set to fire").
-    private const int ScheduledReportsTab = 4;
+    private const int ScheduledReportsTab = 5;
 
     // Filtered + sorted other-users' reports for the admin tab. Mirrors
     // the FilteredMyReports pipeline (search → category → company →
@@ -1248,6 +1408,12 @@
                 .Where(r => r.LastRunAt.HasValue)))
             .OrderByDescending(r => r.LastRunAt)
             .Take(10));
+
+    // Templates pipeline mirrors FilteredMyReports — search, category,
+    // and company narrow the visible set. Sort by display label so the
+    // order matches the user-facing name.
+    private IEnumerable<SavedReport> FilteredTemplates =>
+        ApplySearch(ApplyCategory(ApplyCompany(_templates)).OrderBy(DisplayLabel, StringComparer.OrdinalIgnoreCase));
 
     // Category filter rules:
     //   null  → pass-through (no filter applied)
@@ -1407,7 +1573,7 @@
 
             // Priority: explicit ?tab= in URL wins (e.g. returning from builder with tab context),
             // otherwise restore the last tab the user was on this session.
-            if (InitialTab is int t && t >= 0 && t <= 3)
+            if (InitialTab is int t && t >= 0 && t <= 6)
             {
                 _activeTabIndex = t;
                 NavState.LastActiveTab = t;
@@ -1466,7 +1632,12 @@
                     ? Task.FromResult(new List<BatchRecord>())
                     : BatchSvc.GetForUserAsync(_userEmail));
 
-            await Task.WhenAll(myReportsTask, otherUsersTask, sharedTask, schedulesTask, allSchedulesTask, companiesTask, placedTask, batchesTask);
+            // Templates — unscoped fetch (every is_template = 1 row).
+            // Visible to every user; the Library's per-company filter
+            // narrows on render.
+            var templatesTask = ReportService.GetTemplatesAsync();
+
+            await Task.WhenAll(myReportsTask, otherUsersTask, sharedTask, schedulesTask, allSchedulesTask, companiesTask, placedTask, batchesTask, templatesTask);
 
             _companies = await companiesTask;
 
@@ -1537,6 +1708,7 @@
             }
 
             _myReports = await myReportsTask;
+            _templates = await templatesTask;
             // Strip my own reports out so the Other Users' tab stays a
             // pure cross-user view — no overlap with My Reports.
             _otherUserReports = (await otherUsersTask)
@@ -1972,7 +2144,7 @@
             FieldIds = source.FieldIds,
             Filters = source.Filters,
             Aggregations = source.Aggregations,
-            ColumnState = source.ColumnState,
+            ColumnState = StripShowOnMasterIfViewer(source.ColumnState),
             GridTemplateId = source.GridTemplateId,
             ConnectionId = source.ConnectionId,
             PrimaryTable = source.PrimaryTable,
@@ -1986,6 +2158,121 @@
         {
             _myReports.Add(saved);
             Snackbar.Add($"Cloned to \"{saved.Name}\".", Severity.Success);
+        }
+    }
+
+    // When a viewer-only user clones a report (or uses a template),
+    // strip the ShowOnMaster flag from the cloned ColumnState so the
+    // policy "Editor+ only can submit for Master Dashboard" holds end-
+    // to-end: viewers can't sneak a dashboard-eligible report into
+    // their library by cloning one. Editors and admins clone with the
+    // flag preserved (their copy stays submittable).
+    //
+    // Best-effort JSON manipulation: parse, drop the key, re-serialize.
+    // On parse failure, return the input unchanged — a malformed
+    // column_state is rare (it round-trips through System.Text.Json on
+    // save) and we'd rather lose the strip than corrupt the clone.
+    private string? StripShowOnMasterIfViewer(string? columnState)
+    {
+        if (!_isViewerOnly) return columnState;
+        if (string.IsNullOrWhiteSpace(columnState)) return columnState;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(columnState);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return columnState;
+            var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, "ShowOnMaster", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                dict[prop.Name] = System.Text.Json.JsonSerializer.Deserialize<object?>(prop.Value.GetRawText());
+            }
+            return System.Text.Json.JsonSerializer.Serialize(dict);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "StripShowOnMasterIfViewer parse failed — passing through unchanged.");
+            return columnState;
+        }
+    }
+
+    // ── Templates ──
+
+    // "Use this template" — clones the template into the user's own
+    // reports as "<Template> (mine)" and opens the editor on the
+    // clone, so the user lands on an editable starting point in one
+    // click. The clone is explicitly NOT a template itself (IsTemplate
+    // = false) so it doesn't reappear on the Templates tab and so the
+    // user's edits stay scoped to their own copy.
+    private async Task UseTemplate(SavedReport source)
+    {
+        var cloned = new SavedReport
+        {
+            Id = Guid.NewGuid(),
+            Name = $"{source.Name} (mine)",
+            InternalName = source.InternalName,
+            Category = source.Category,
+            LibrarySectionId = source.LibrarySectionId,
+            OwnerId = _userId,
+            OwnerEmail = _userEmail,
+            CompanyId = source.CompanyId,
+            FieldIds = source.FieldIds,
+            Filters = source.Filters,
+            Aggregations = source.Aggregations,
+            ColumnState = StripShowOnMasterIfViewer(source.ColumnState),
+            GridTemplateId = source.GridTemplateId,
+            ConnectionId = source.ConnectionId,
+            PrimaryTable = source.PrimaryTable,
+            LastRunAt = null,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            IsTemplate = false
+        };
+        var (ok, saved) = await Snackbar.RunAsync(Logger, "using template",
+            () => ReportService.SaveReportAsync(cloned));
+        if (ok && saved is not null)
+        {
+            _myReports.Add(saved);
+            // Land the user in the editor on their fresh copy so they
+            // can tweak immediately. EditReport already stamps
+            // NavState.LastSelectedReportId so the post-edit return
+            // scroll lands on the right row.
+            EditReport(saved.Id);
+        }
+    }
+
+    // Admin-only toggle for the is_template flag. Optimistic update —
+    // mutate the local lists first so the chip / tab repaints instantly,
+    // then persist. On failure we revert and surface a snackbar.
+    private async Task ToggleTemplate(SavedReport report, bool isTemplate)
+    {
+        var prev = report.IsTemplate;
+        if (prev == isTemplate) return;
+        report.IsTemplate = isTemplate;
+        if (isTemplate)
+        {
+            if (!_templates.Any(t => t.Id == report.Id)) _templates.Add(report);
+        }
+        else
+        {
+            _templates.RemoveAll(t => t.Id == report.Id);
+        }
+        try
+        {
+            await ReportService.SetIsTemplateAsync(report.Id, isTemplate);
+            Snackbar.Add(isTemplate
+                ? $"\"{DisplayLabel(report)}\" is now a template."
+                : $"\"{DisplayLabel(report)}\" is no longer a template.",
+                Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            report.IsTemplate = prev;
+            if (prev) { if (!_templates.Any(t => t.Id == report.Id)) _templates.Add(report); }
+            else      { _templates.RemoveAll(t => t.Id == report.Id); }
+            Snackbar.Add($"Couldn't update template flag: {ex.Message}", Severity.Warning);
+            Logger.LogWarning(ex, "ToggleTemplate failed for {ReportId}", report.Id);
         }
     }
 

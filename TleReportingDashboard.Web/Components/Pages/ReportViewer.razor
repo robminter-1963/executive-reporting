@@ -35,17 +35,17 @@
                                OnClick="NavigateBackAsync"
                                title="Back" />
                 <MudText Typo="Typo.h6" Style="font-weight: 600;">@(_reportName ?? "Report")</MudText>
-                @if (_appliedFilters.Any())
-                {
-                    <MudStack Row Spacing="1" Wrap="Wrap.Wrap">
-                        @foreach (var f in _appliedFilters)
-                        {
-                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info">
-                                @f
-                            </MudChip>
-                        }
-                    </MudStack>
-                }
+                @* Interactive filter chips — X removes a clause and
+                   re-runs the report; relative-date chips have a
+                   built-in dropdown so users can swap "Last Month" →
+                   "This Quarter" without leaving the page. Legacy
+                   header-filter strings (read-only) still render on
+                   the end for back-compat with simple-filter reports. *@
+                <FilterChipBar Filters="_advancedFilters"
+                               FiltersChanged="OnFiltersChangedFromChips"
+                               FieldLabelsById="_fieldLabelsById"
+                               LegacyChips="_appliedFilters"
+                               OpenAdvanced="OnOpenAdvancedFromChip" />
             </MudStack>
             <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
                 @if (_queryData is not null)
@@ -142,7 +142,9 @@
                                 CalcColumns="_tableCalcColumns"
                                 ColumnLabelOverrides="_templateColumnLabels"
                                 DisableUserSort="true"
-                                ReadOnly="true" />
+                                ReadOnly="true"
+                                EnableContextMenu="true"
+                                OnCellAction="OnGridCellAction" />
                 </MudTabPanel>
                 <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Outlined.Dashboard">
                     <DashboardView Data="_queryData" InitialConfig="_dashboardConfig"
@@ -634,6 +636,110 @@
         _errorParams = null;
         await RunReport();
     }
+
+    // ── Filter chip handlers ──
+    // FiltersChanged fires when the user removes a chip or swaps a
+    // relative-date preset. The mutation already happened in-place on
+    // _advancedFilters (the chip bar mutates the same FilterGroup we
+    // hand it); this handler just re-runs the query so the grid
+    // reflects the new filter set. In-memory only — the change does
+    // NOT persist back to the saved report. Persisting would require a
+    // Save affordance on the viewer; out of scope for this iteration.
+    private async Task OnFiltersChangedFromChips(FilterGroup? updated)
+    {
+        _advancedFilters = updated;
+        await RunReport();
+    }
+
+    // Click on a non-relative chip body — there's no inline edit
+    // popover yet, so we route the user to the Builder where the full
+    // AdvancedFilterGroup component is mounted. Same /builder/{id}
+    // route the Library uses; the builder hydrates the same filter
+    // tree we just left, so the user's mid-edit context is preserved.
+    private void OnOpenAdvancedFromChip()
+    {
+        Navigation.NavigateTo($"/builder/{ReportId}");
+    }
+
+    // Right-click cell action — translates the menu pick into either
+    // a new FilterClause appended to the in-memory _advancedFilters
+    // tree + re-run, or a clipboard copy (no re-run). In-memory only:
+    // the change does NOT persist back to the saved report, matching
+    // the chip-bar's edit semantics.
+    private async Task OnGridCellAction(ReportGrid.CellAction action)
+    {
+        switch (action.Kind)
+        {
+            case "filter":
+                AppendCellFilter(action.FieldId, action.Value, exclude: false);
+                Snackbar.Add($"Filtered {action.Label} to {FormatCellForMessage(action.Value)}.",
+                    Severity.Info);
+                await RunReport();
+                break;
+            case "exclude":
+                AppendCellFilter(action.FieldId, action.Value, exclude: true);
+                Snackbar.Add($"Excluded {action.Label} = {FormatCellForMessage(action.Value)}.",
+                    Severity.Info);
+                await RunReport();
+                break;
+            case "copy":
+                try
+                {
+                    await JS.InvokeVoidAsync("navigator.clipboard.writeText",
+                        FormatCellForMessage(action.Value));
+                    Snackbar.Add("Copied.", Severity.Success);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Clipboard write failed.");
+                    Snackbar.Add("Copy failed — clipboard access not available.", Severity.Warning);
+                }
+                break;
+        }
+    }
+
+    // Builds a FilterClause from the right-clicked cell and appends it
+    // to the root group. Equals when filter; NotEquals when exclude.
+    // Null cell value → IsNull / IsNotNull (no value list), since SQL
+    // null comparisons need IS [NOT] NULL not "= null". The user's
+    // existing tree is preserved — we just add a new AND clause.
+    private void AppendCellFilter(string fieldId, object? value, bool exclude)
+    {
+        _advancedFilters ??= new FilterGroup { Op = FilterGroupOps.And };
+        var clause = new FilterClause { FieldId = fieldId };
+        if (value is null || (value is string s && string.IsNullOrEmpty(s)))
+        {
+            clause.Op = exclude ? FilterOperators.IsNotNull : FilterOperators.IsNull;
+            clause.Values = new List<string>();
+        }
+        else
+        {
+            clause.Op = exclude ? FilterOperators.NotEquals : FilterOperators.Equals;
+            // Date values: bind as "yyyy-MM-dd" so the SQL emitter's
+            // DateTime.TryParse on the value lands on the date,
+            // independent of culture. Other types stringify with
+            // invariant culture so decimals/ints round-trip cleanly.
+            clause.Values = new List<string>
+            {
+                value switch
+                {
+                    DateTime dt => dt.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+                    IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+                    _ => value.ToString() ?? string.Empty
+                }
+            };
+        }
+        _advancedFilters.Items.Add(new FilterItem { Clause = clause });
+    }
+
+    private static string FormatCellForMessage(object? value) =>
+        value switch
+        {
+            null => "(blank)",
+            DateTime dt => dt.ToString("MMM d, yyyy"),
+            IFormattable f => f.ToString(null, System.Globalization.CultureInfo.CurrentCulture),
+            _ => value.ToString() ?? string.Empty
+        };
 
     private void BuildFilterChips()
     {

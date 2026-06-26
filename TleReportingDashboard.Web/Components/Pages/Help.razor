@@ -177,8 +177,27 @@
 <h4>Exporting from a tile</h4>
 <p>The download icon in each tile's header opens the same Export menu as the Detail Viewer (Excel <code>.xlsx</code> or CSV). The exported file contains the underlying detail rows (not the aggregated dashboard view), formatted with proper Excel currency and date types where applicable.</p>
 
+<h4>Header quick-access</h4>
+<ul>
+<li><strong>Reports dropdown</strong> — Every report you can access (your own + shared with you), sorted alphabetically. Click an item to open its detail view in a new browser tab.</li>
+<li><strong>Batches dropdown</strong> — Run any batch you can access. If you have batch-authoring permission you'll also see <strong>+ New batch</strong> at the top of the dropdown plus Edit/Delete icons on each row you own. See the Report Batches help section.</li>
+<li><strong>Refreshed [time]</strong> indicator — Next to the company logo. Shows when the active tab's tiles last completed loading. Updates after the slowest tile finishes (initial load, tab switch, or idle auto-refresh).</li>
+<li><strong>Report Library</strong> button — Jump to the full library.</li>
+</ul>
+
 <h4>Auto-refresh</h4>
 <p>If you sit on a dashboard for <strong>5 minutes with no activity</strong> (no mouse, keyboard, or scroll), the tiles silently re-fetch their data. This is paused while you're in edit mode so unsaved layout edits aren't disturbed.</p>
+
+<h4>Personal pins — &quot;Pin to my view&quot; + &quot;Edit My Pins&quot;</h4>
+<p>You can pin a report from the Library to your own copy of the dashboard <em>without</em> affecting other users' view. Click <strong>Pin to my view</strong> in the header, pick a report, and it lands as a tile only you see (marked with a pin icon).</p>
+<p>When you have at least one personal pin on the active tab, an <strong>Edit My Pins</strong> button appears next to it. While that mode is on:</p>
+<ul>
+<li>The blue resize triangle appears on your pinned tiles — drag to resize.</li>
+<li>Left / Center / Right alignment buttons appear in each pinned tile's header.</li>
+<li>Changes persist immediately as you make them (no Save Layout step — that's only for the admin-managed shared layout).</li>
+<li>Switching tabs auto-exits the mode.</li>
+</ul>
+<p>Shared/admin-curated tiles are untouchable from Edit My Pins — only your personal pins.</p>
 
 <h4>Edit mode</h4>
 <ol>
@@ -200,11 +219,14 @@
 <p><strong>Tip:</strong> Right-click a tile to see the SQL that produced its data. Useful for diagnosing unexpected numbers.</p>"),
 
         new("report-library", "Report Library", @"
-<p>The <strong>Report Library</strong> is where saved reports live. Three tabs:</p>
+<p>The <strong>Report Library</strong> is where saved reports live. Tabs visible to you depend on your access:</p>
 <ul>
-<li><strong>My Reports</strong> — Reports you own. Admins viewing in admin mode see this tab as ""All Reports"" and get every report in the system.</li>
-<li><strong>Shared With Me</strong> — Reports other users explicitly shared with you.</li>
+<li><strong>My Reports</strong> — Reports you own.</li>
+<li><strong>Shared With Me</strong> — Reports other users explicitly shared with you, plus any reports shared with <em>Everyone</em>.</li>
 <li><strong>Recent</strong> — Your 10 most-recently-run reports.</li>
+<li><strong>Other Users' Reports</strong> (admin only) — Every other user's report. Admins get Run, Edit, and Delete affordances per row. Edits preserve the original owner — admin edits don't change ownership.</li>
+<li><strong>Scheduled</strong> (admin only) — Every active recurring delivery in the system, cross-owner.</li>
+<li><strong>Batches</strong> — Visible to anyone who is an admin, has the &quot;Can create batches&quot; permission, OR has at least one batch granted to them. See the Report Batches section.</li>
 </ul>
 <p>Reports within each tab are sorted alphabetically. The page you're on within each tab is remembered — opening a report from page 3 and coming back lands you on page 3, not page 1.</p>
 
@@ -234,7 +256,7 @@
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>&#9654; Play</td><td style='padding:8px; border:1px solid #E8EAED;'>Open in the Viewer (read-only run).</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>&#9998; Edit</td><td style='padding:8px; border:1px solid #E8EAED;'>Open in the Builder.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>&#10064; Clone</td><td style='padding:8px; border:1px solid #E8EAED;'>Create a copy you own.</td></tr>
-<tr><td style='padding:8px; border:1px solid #E8EAED;'>&#8599; Share</td><td style='padding:8px; border:1px solid #E8EAED;'>Share with a specific user (sends them a notification).</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'>&#8599; Share</td><td style='padding:8px; border:1px solid #E8EAED;'>Pick a user from the onboarded roster (autocomplete by name or email) and grant Viewer or Editor access. Each share notifies the recipient.<br /><strong>&#127760; Share with everyone</strong> button at the top — one click grants every current AND future user access; new users automatically inherit it without a backfill.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>&#128197; Schedule</td><td style='padding:8px; border:1px solid #E8EAED;'>Set up recurring email exports.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'>&#128465; Delete</td><td style='padding:8px; border:1px solid #E8EAED;'>Owner-only.</td></tr>
 </table>
@@ -247,8 +269,8 @@
 </ul>
 <p>The synthetic <strong>(Uncategorized)</strong> bucket can't be renamed or removed — it's just the catch-all for reports with no section assigned. Section actions are hidden for viewer-only users.</p>
 
-<h4>Admin view toggle</h4>
-<p>Admins see an <strong>Admin view</strong> switch in the toolbar. When on, the My Reports tab broadens to <em>every user's</em> reports and adds an Owner column. Edit and Delete still require ownership; the toggle only affects what's listed.</p>"),
+<h4>Admin edits on other users' reports</h4>
+<p>Admins access cross-user reports via the dedicated <strong>Other Users' Reports</strong> tab. Each row has the same Run / Edit / Delete affordances admins get on their own reports. Editing preserves the original owner (the report still belongs to the user who created it — admin saves don't reassign ownership). Use this for cleanup, schema-rename fixes, and maintenance after someone leaves.</p>"),
 
         new("building-reports", "Building a Report", @"
 <h4>Quick start</h4>
@@ -446,6 +468,61 @@
 <h4>Filter changes</h4>
 <p>Multi-select filter dropdowns are debounced — picking 5 items in a list fires one query at the end instead of five.</p>"),
 
+        new("batches", "Report Batches", @"
+<p><strong>Report Batches</strong> are admin- or author-curated collections of reports that run together and produce a <strong>single multi-sheet Excel file</strong>. Use them when you need a packaged set of reports (e.g. ""End-of-month executive pack"") — potentially spanning multiple companies — delivered as one .xlsx instead of running and downloading each report individually.</p>
+
+<h4>Who can do what</h4>
+<table style='width:100%; border-collapse:collapse; margin:12px 0;'>
+<tr style='background:#F8F9FA;'><th style='text-align:left; padding:8px; border:1px solid #E8EAED;'>Tier</th><th style='text-align:left; padding:8px; border:1px solid #E8EAED;'>What they can do</th></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>Admin</strong> (any admin signal)</td><td style='padding:8px; border:1px solid #E8EAED;'>Full CRUD on every batch in the system. Runs any. Grants access to any user.</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>Author</strong> (RPT_users.can_create_batches)</td><td style='padding:8px; border:1px solid #E8EAED;'>Creates batches. Edits / deletes / grants access on batches they OWN. Runs their own + ones granted to them.</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>Granted user</strong></td><td style='padding:8px; border:1px solid #E8EAED;'>Runs batches granted to them. No create / edit / delete.</td></tr>
+</table>
+
+<h4>How to reach the Batches surface</h4>
+<ul>
+<li><strong>Batches dropdown</strong> — Appears in the header on the Company Picker, every Master Dashboard, and the Report Library. Lists every batch you can access. Self-hides when you have nothing to run and no authoring permission.</li>
+<li><strong>Report Library → Batches tab</strong> — Same list with admin/author affordances (New Batch, Owner column, Edit/Delete per row).</li>
+</ul>
+
+<h4>Creating a batch</h4>
+<ol>
+<li>Click <strong>+ New batch</strong> — either at the top of the Batches dropdown, or the button at the top of the Library's Batches tab.</li>
+<li>Fill in <strong>Name</strong> + optional Description.</li>
+<li>Click <strong>Add Report</strong>. The picker shows every report you can see (admins → all; authors → admin-curated reports + your own + reports shared with you). Search by name / internal name / owner email; filter by company. Multi-select — pick as many as you like.</li>
+<li>(Optional) Use the up/down arrows on each row to set the order — that's the order worksheets appear in the workbook.</li>
+<li>(Optional) Override a per-item <strong>Sheet Name</strong>. The actual worksheet tab will read as <code>{CompanyCode} - {SheetName}</code>; the preview under each field shows the final label.</li>
+<li>(Optional) Grant access to specific users in the <strong>Granted users</strong> section — autocomplete picker pulls from the onboarded user roster, so you can't fat-finger an email that isn't a real user.</li>
+<li>Click <strong>Create</strong> (or <strong>Save</strong> when editing).</li>
+</ol>
+
+<h4>Running a batch</h4>
+<ol>
+<li>Click the play (&#9654;) icon next to the batch in the dropdown or the Library tab.</li>
+<li>An info snackbar appears: <em>&quot;Running '{Batch Name}'… your download will start when ready.&quot;</em> Stays on-screen for the full run so you have feedback even when the dropdown closes.</li>
+<li>Each report queries its own connection in turn; results are packaged into a multi-sheet workbook.</li>
+<li>When done, the Excel file downloads automatically. The success snackbar replaces the running one.</li>
+</ol>
+
+<h4>What the output looks like</h4>
+<ul>
+<li>One worksheet per report.</li>
+<li>Worksheet tabs are labeled <code>{CompanyCode} - {ReportLabel}</code> — so a cross-company workbook reads as <code>tle - Loans Funded This Month</code> / <code>abc - Loans Funded This Month</code> at a glance.</li>
+<li>Internal Name wins over the user-facing Name as the report label, so admin-curated taxonomy controls how sheets are named.</li>
+<li>Excel cell formatting matches the regular per-report export: Currency, Date, Numeric columns get proper types.</li>
+<li>If a single report fails (broken filter, schema rename, etc.) the workbook still produces — that report's worksheet just contains an error message instead of data, and the rest of the batch is unaffected.</li>
+</ul>
+
+<h4>Granting access to a batch</h4>
+<p>Inside the batch editor, the <strong>Granted users</strong> section accepts emails one at a time from an autocomplete bound to the user roster. Granted users see the batch in their Batches dropdown / Library tab and can run it — but can't edit or delete it. Owners + admins always retain edit/delete on their own batches.</p>
+
+<h4>Limits and notes</h4>
+<ul>
+<li>Each report runs with its <em>saved</em> filters as-is — there are no batch-time overrides. If you need different filters for the same report in two contexts, save two copies of the report.</li>
+<li>Sync-only today: clicking Run downloads in the same browser session. For very large batches that risk an HTTP timeout, contact an admin — async email delivery is a planned addition.</li>
+</ul>
+"),
+
         new("notifications", "Notifications", @"
 <p>The bell icon next to the user menu shows in-app notifications. The badge counts unread items.</p>
 
@@ -484,7 +561,7 @@
 <tr style='background:#F8F9FA;'><th style='text-align:left; padding:8px; border:1px solid #E8EAED;'>Tab</th><th style='text-align:left; padding:8px; border:1px solid #E8EAED;'>What it does</th></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>Companies</strong></td><td style='padding:8px; border:1px solid #E8EAED;'>Add / edit companies, set logos, set the website URL the dashboard logo links to.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>DB Connections</strong></td><td style='padding:8px; border:1px solid #E8EAED;'>Per-company data-source connections (SQL Server, Postgres). Test each connection. Copy connections between companies.</td></tr>
-<tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>Users</strong></td><td style='padding:8px; border:1px solid #E8EAED;'>Add / edit users, assign roles, manage per-company access. Only Administrators can grant the Administrator role.</td></tr>
+<tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>Users</strong></td><td style='padding:8px; border:1px solid #E8EAED;'>Add / edit users, assign roles, manage per-company access. Only Administrators can grant the Administrator role. Each user has a <strong>Can create report batches</strong> toggle that lets non-admins author and grant access to their own batches (see Report Batches section).</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>Roles</strong></td><td style='padding:8px; border:1px solid #E8EAED;'>Define job-function roles. Administrator and System Support are built-in (can't be renamed or deleted). Other roles are custom; admins set their scope (All / Self / Team) and admin-section access.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>Team Builder</strong></td><td style='padding:8px; border:1px solid #E8EAED;'>Configure how teams are derived from a connection's data so team-scoped roles can filter rows correctly.</td></tr>
 <tr><td style='padding:8px; border:1px solid #E8EAED;'><strong>Schema History</strong></td><td style='padding:8px; border:1px solid #E8EAED;'>Audit trail of schema-config edits per connection, with rollback.</td></tr>
@@ -501,6 +578,24 @@
 
 <h4>System Support pattern</h4>
 <p>The System Support role is designed for support engineers who need cross-company visibility but shouldn't have full admin power. Typical configuration: tick Companies, DB Connections, Users on the Roles tab; leave Roles, Schema Builder, and Theme unchecked so they can't escalate or re-paint the app.</p>
+
+<h4>Schema Builder — Lookup Types</h4>
+<p>A <strong>Lookup Type</strong> is the value source for a field's filter chip picker. Each row carries:</p>
+<ul>
+<li>A <strong>SELECT SQL</strong> the system runs against the connection's data DB to populate the picker (e.g. <code>SELECT CODENUM, CODEDESC FROM EMPOWER.SET_CODESETS WHERE CODEINT=30</code>).</li>
+<li>A <strong>Value Column</strong> (what gets sent to the WHERE) and a <strong>Display Column</strong> (what users see in the picker).</li>
+<li>An optional <strong>Source Table Reference</strong> used by the implicit IN-append path on FilterPredicateSql.</li>
+</ul>
+<p>Bind a field to a Lookup Type via the <strong>Lookup Type</strong> dropdown in the Field editor. Cached per (connection, lookup type) for 30 minutes; saves to the schema invalidate the cache so picker values reflect schema edits on the next render.</p>
+
+<h4>Schema Builder — Filter Column on a field</h4>
+<p>When a field's display expression is on one column (e.g. <code>c_30.CODEDESC</code>) but you want filters to compare against another column on the same row (e.g. <code>c_30.CODEINT</code> integer codes), set the field's <strong>Filter column</strong>:</p>
+<ul>
+<li>The picker emits the Lookup Type's <strong>value column</strong> (codes), not the display column (descriptions).</li>
+<li>The WHERE becomes <code>{FilterColumn} IN (@p0, @p1, ...)</code> against the same row's alternate column — no extra join needed.</li>
+<li>Precedence: <strong>Filter column</strong> wins over <strong>Filter predicate SQL</strong> when both are set; the predicate path is the escape hatch for cases that need a joined lookup table.</li>
+</ul>
+<p><strong>Common gotcha:</strong> if you change a field's Filter column or its Lookup Type's Value column after saved reports already have filters set, those saved filter values may be stale text from the previous configuration. Re-pick the filter values on the affected reports and re-save.</p>
 
 <h4>Schema Builder — Table Aliases</h4>
 <p>The <strong>Table Aliases</strong> tab in Schema Builder defines the table/alias pairs used across the connection (Source Table on fields, Target Table on joins, Primary Table on reports). Two rules to be aware of:</p>

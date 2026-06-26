@@ -212,10 +212,25 @@
                 </MudStack>
             }
 
-            <MudStack Row AlignItems="AlignItems.Center" Class="mt-2">
-                <MudCheckBox T="bool" @bind-Value="_showOnMaster" Color="Color.Primary" Dense
-                             Label="Show on Master Dashboard" />
-            </MudStack>
+            @* "Show on Master Dashboard" is the submission affordance —
+               flagging the report makes it eligible for inclusion on
+               the Master Dashboard's Add Report picker, where admins
+               pin it to specific tabs. Gated to Editor+ users by
+               policy: viewers can save their own reports but can't
+               submit them for global dashboard inclusion. The existing
+               flag value (if any) is preserved on save when the
+               checkbox is hidden — _showOnMaster retains whatever the
+               original author set. *@
+            @if (CanSubmitForDashboard)
+            {
+                <MudStack Row AlignItems="AlignItems.Center" Class="mt-2">
+                    <MudCheckBox T="bool" @bind-Value="_showOnMaster" Color="Color.Primary" Dense
+                                 Label="Show on Master Dashboard" />
+                    <MudTooltip Text="When on, admins can pin this report to a Master Dashboard tab.">
+                        <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Color="Color.Default" />
+                    </MudTooltip>
+                </MudStack>
+            }
         </MudPaper>
         }
 
@@ -972,6 +987,17 @@
     [Parameter] public string? GridHeight { get; set; }
     [Parameter] public bool Compact { get; set; }
     [Parameter] public bool ReadOnly { get; set; }
+    // Gates the "Show on Master Dashboard" submission affordance.
+    // True for Editor+ users (and admins); false for Viewer-only
+    // users so they can author/save reports but can't flag them for
+    // inclusion on a Master Dashboard tab. When false, the existing
+    // ShowOnMaster flag on the report is preserved on save — viewers
+    // editing an Editor-authored report don't unintentionally drop
+    // its dashboard eligibility.
+    // Defaults to true so existing call sites (every Builder mount
+    // today) keep working without an explicit value; the Builder
+    // sets this explicitly to gate viewers.
+    [Parameter] public bool CanSubmitForDashboard { get; set; } = true;
     // When true, detail-view deep links include ?from=dashboard so the detail
     // page breadcrumb shows the user came from the Master Dashboard instead of
     // the Report Library.
